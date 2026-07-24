@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://hekesong_plot"]
+
+[ext_resource type="Script" path="res://scripts/plot.gd" id="1_plot"]
+
+[node name="Plot" type="Area2D"]
+script = ExtResource("1_plot")

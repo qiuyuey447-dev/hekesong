@@ -1,0 +1,17 @@
+{
+	"enabled": false,
+	"api_url": "http://127.0.0.1:8080/v1/chat",
+	"api_key": "",
+	"npc_id": "xiaoli",
+	"timeout_sec": 15.0,
+	"mock_delay_sec": 0.4,
+	"require_relationship_delta": true,
+	"intent_fallback_enabled": true,
+	"intent_classify_url": "",
+	"intent_timeout_sec": 8.0,
+	"_comment_enabled": "false=全程 NpcFallback；true 且 api_url 非空才连 API",
+	"_comment_api": "本地：py -3 tools/local_llm_server.py --port 8080",
+	"_comment_llm": "接 DeepSeek：set DEEPSEEK_API_KEY=sk-xxx 后加 --llm",
+	"_comment_intent": "intent_classify_url 空则复用 api_url；见 docs/api/npc_chat_api.md",
+	"_comment_deploy": "线上部署可复制到 user://npc_config.json 覆盖打包内配置"
+}

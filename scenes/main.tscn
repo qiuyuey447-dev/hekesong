@@ -1,0 +1,264 @@
+[gd_scene format=3 uid="uid://fvc6eji3v4vx"]
+
+[ext_resource type="Script" uid="uid://bgf0oaqrqrlbd" path="res://scripts/world/farm_world.gd" id="1_world"]
+[ext_resource type="Script" uid="uid://cr5oxxoj4vbnx" path="res://scripts/ui/main_ui.gd" id="2_ui"]
+[ext_resource type="PackedScene" uid="uid://dnqsj0ski83fc" path="res://scenes/farm_map.tscn" id="3_farm_map"]
+[ext_resource type="Script" path="res://scripts/ui/shop_panel.gd" id="3_shop"]
+[ext_resource type="Script" path="res://scripts/ui/feed_panel.gd" id="4_feed"]
+[ext_resource type="Script" path="res://scripts/ui/market_panel.gd" id="5_market"]
+[ext_resource type="Script" path="res://scripts/ui/memory_panel.gd" id="6_memory"]
+[ext_resource type="Script" path="res://scripts/ui/awakening_panel.gd" id="6_awakening"]
+[ext_resource type="Script" path="res://scripts/ui/week_wrap_panel.gd" id="6_week_wrap"]
+[ext_resource type="Script" path="res://scripts/ui/ending_panel.gd" id="6_ending"]
+[ext_resource type="Script" path="res://scripts/ui/story_choice_panel.gd" id="6_story_choice"]
+[ext_resource type="Script" path="res://scripts/ui/story_beat_panel.gd" id="6_story_beat"]
+[ext_resource type="Script" path="res://scripts/world/demo_script.gd" id="7_demo"]
+[ext_resource type="Script" path="res://scripts/world/atmosphere.gd" id="8_atmosphere"]
+
+[ext_resource type="Script" path="res://scripts/ui/name_prompt_panel.gd" id="6_name_prompt"]
+
+[node name="Main" type="Node2D" unique_id=3219023]
+
+[node name="World" type="Node2D" parent="." unique_id=633419729]
+script = ExtResource("1_world")
+
+[node name="FarmMap" parent="World" instance=ExtResource("3_farm_map")]
+
+[node name="DemoScript" type="Node" parent="World"]
+script = ExtResource("7_demo")
+
+[node name="Atmosphere" type="Node2D" parent="World"]
+script = ExtResource("8_atmosphere")
+
+[node name="CanvasModulate" type="CanvasModulate" parent="World/Atmosphere"]
+color = Color(1, 0.94, 0.86, 1)
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=834662775]
+layer = 10
+script = ExtResource("2_ui")
+
+[node name="HUD" type="PanelContainer" parent="UI" unique_id=1092147306]
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 620.0
+offset_bottom = 210.0
+
+[node name="Margin" type="MarginContainer" parent="UI/HUD" unique_id=2015274875]
+layout_mode = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 14
+theme_override_constants/margin_bottom = 10
+accessibility_region = true
+
+[node name="VBox" type="VBoxContainer" parent="UI/HUD/Margin" unique_id=880193300]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Row1" type="HBoxContainer" parent="UI/HUD/Margin/VBox" unique_id=1418581767]
+layout_mode = 2
+
+[node name="DayLabel" type="Label" parent="UI/HUD/Margin/VBox/Row1" unique_id=551537752]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 18
+text = "第 1 天"
+
+[node name="NextDayButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894362]
+layout_mode = 2
+text = "下一天"
+
+[node name="MarketButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894363]
+layout_mode = 2
+text = "大盘"
+
+[node name="MemoryButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894364]
+layout_mode = 2
+text = "记忆"
+
+[node name="StatsLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=403256661]
+layout_mode = 2
+text = "亲密度 0 | 默契 0 | 心情 80"
+
+[node name="StageLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=1713784274]
+layout_mode = 2
+text = "关系阶段：初识"
+
+[node name="HintLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=1564883683]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45, 0.38, 0.32, 1)
+theme_override_font_sizes/font_size = 13
+text = "WASD 移动 · 点击/E 交互 · 商店买卖 · 小狸可投喂零食"
+
+[node name="TaskPanel" type="PanelContainer" parent="UI" unique_id=1100411975]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -285.0
+offset_top = -195.0
+offset_right = 285.0
+offset_bottom = 195.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="UI/TaskPanel" unique_id=1927167453]
+layout_mode = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 14
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 14
+
+[node name="VBox" type="VBoxContainer" parent="UI/TaskPanel/Margin" unique_id=426586898]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="UI/TaskPanel/Margin/VBox" unique_id=1378500393]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "任务"
+horizontal_alignment = 1
+
+[node name="Body" type="Label" parent="UI/TaskPanel/Margin/VBox" unique_id=289234935]
+layout_mode = 2
+text = "描述"
+horizontal_alignment = 1
+autowrap_mode = 2
+
+[node name="TimerLabel" type="Label" parent="UI/TaskPanel/Margin/VBox" unique_id=408670551]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.42, 0.52, 0.38, 1)
+horizontal_alignment = 1
+
+[node name="Buttons" type="HBoxContainer" parent="UI/TaskPanel/Margin/VBox" unique_id=1249299590]
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="ConfirmButton" type="Button" parent="UI/TaskPanel/Margin/VBox/Buttons" unique_id=1861159211]
+layout_mode = 2
+text = "确认"
+
+[node name="CancelButton" type="Button" parent="UI/TaskPanel/Margin/VBox/Buttons" unique_id=1914495537]
+layout_mode = 2
+text = "取消"
+
+[node name="SkipButton" type="Button" parent="UI/TaskPanel/Margin/VBox" unique_id=1799992131]
+visible = false
+layout_mode = 2
+text = "快进完成"
+
+[node name="ChatPanel" type="PanelContainer" parent="UI" unique_id=201781425]
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -180.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="Margin" type="MarginContainer" parent="UI/ChatPanel" unique_id=404970340]
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="UI/ChatPanel/Margin" unique_id=1783953267]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ChatLog" type="RichTextLabel" parent="UI/ChatPanel/Margin/VBox" unique_id=1571864846]
+custom_minimum_size = Vector2(0, 96)
+layout_mode = 2
+theme_override_colors/default_color = Color(0.28, 0.24, 0.2, 1)
+bbcode_enabled = true
+text = "聊天开始。"
+scroll_following = true
+
+[node name="NudgeBar" type="HBoxContainer" parent="UI/ChatPanel/Margin/VBox"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NudgeHint" type="Label" parent="UI/ChatPanel/Margin/VBox/NudgeBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.45, 0.38, 0.28, 1)
+text = "小狸想跟你说件事"
+
+[node name="NudgeOk" type="Button" parent="UI/ChatPanel/Margin/VBox/NudgeBar"]
+layout_mode = 2
+text = "知道了"
+
+[node name="NudgeLater" type="Button" parent="UI/ChatPanel/Margin/VBox/NudgeBar"]
+layout_mode = 2
+text = "稍后"
+
+[node name="ChatRow" type="HBoxContainer" parent="UI/ChatPanel/Margin/VBox" unique_id=1123625181]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ChatInput" type="LineEdit" parent="UI/ChatPanel/Margin/VBox/ChatRow" unique_id=1258299283]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "和小狸说点什么…"
+
+[node name="ChatSend" type="Button" parent="UI/ChatPanel/Margin/VBox/ChatRow" unique_id=873574848]
+layout_mode = 2
+text = "发送"
+
+[node name="ShopPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("3_shop")
+
+[node name="FeedPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("4_feed")
+
+[node name="MarketPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("5_market")
+
+[node name="MemoryPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("6_memory")
+
+[node name="AwakeningPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("6_awakening")
+
+[node name="WeekWrapPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("6_week_wrap")
+
+[node name="StoryChoicePanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("6_story_choice")
+
+[node name="StoryBeatPanel" type="PanelContainer" parent="UI"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("6_story_beat")
+
+[node name="NamePromptPanel" type="PanelContainer" parent="UI"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("6_name_prompt")
+
+[node name="EndingPanel" type="PanelContainer" parent="UI"]
+visible = false
+script = ExtResource("6_ending")

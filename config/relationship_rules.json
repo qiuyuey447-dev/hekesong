@@ -1,0 +1,45 @@
+{
+	"affection_min": -2,
+	"affection_max": 3,
+	"bond_min": 0,
+	"bond_max": 2,
+	"memory_recovery_max": 0.05,
+	"daily_chat_affection_cap": 12,
+	"base_chat_affection": 1,
+	"long_message_chars": 12,
+	"long_message_bonus": 1,
+	"warm_words": [
+		"谢谢", "辛苦", "记住", "留下", "陪", "慢慢来", "没关系", "对不起", "抱歉", "担心", "接纳", "不会赶", "收留"
+	],
+	"cold_words": ["滚", "赶走", "烦", "笨", "没用", "别烦", "走开", "离开这里", "讨厌你"],
+	"memory_words": ["记得", "约定", "忘记", "想起", "回忆", "不会赶", "收留"],
+	"dismissive_exact": ["哦", "嗯", "行", "好", "ok", "OK", "算了", "随便", "…", "..."],
+	"stranger_patience_words": ["我是", "认识", "农场", "留下", "帮工", "没关系", "慢慢", "再介绍", "不记得"],
+	"stranger_impatience_words": ["怎么还不", "又忘了", "烦", "笨", "没用"],
+	"stranger_ooc_phrases": [
+		"又见面了", "还记得", "上次你说", "我们约", "一起看过", "欢迎回来", "你来了", "好久不见",
+		"上次", "以前我们", "那时候", "之前你说", "以前你", "我们的约定", "我们的家", "一起浇",
+		"一起种", "一起收", "你喂过", "你总", "你每次都", "不是第一次", "老朋友", "像家人",
+		"像朋友", "一直在一起", "记起来了", "想起来了", "我记得你", "熟悉的感觉", "每次都",
+		"亲密度", "默契", "你说过", "我们以前", "以前一起", "上次一起", "约好了", "说好了"
+	],
+	"stranger_intimate_phrases": [
+		"想你了", "亲爱的", "宝贝", "乖", "抱抱", "摸摸", "爱你", "好想你", "别走", "一直陪"
+	],
+	"action_intent_affection_cap": 1,
+	"interaction_weights": {
+		"chat_days": 0.30,
+		"nodes": 0.28,
+		"affection": 0.12,
+		"gifts": 0.12,
+		"nights": 0.10,
+		"tasks": 0.08
+	},
+	"interaction_targets": {
+		"chat_days": 12,
+		"gifts": 6,
+		"nodes": 18,
+		"nights": 2,
+		"tasks": 10
+	}
+}

@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://hekesong_player"]
+
+[ext_resource type="Script" path="res://scripts/player/player.gd" id="1_player"]
+
+[node name="Player" type="CharacterBody2D"]
+collision_layer = 0
+collision_mask = 0
+script = ExtResource("1_player")
+
+[node name="Shadow" type="Sprite2D" parent="."]
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(0, -6)

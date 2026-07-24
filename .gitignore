@@ -1,0 +1,27 @@
+.godot/
+.import/
+export.cfg
+export/web/
+export/windows/
+export/*.zip
+relife.html
+relife.*.js
+relife.*.wasm
+relife.*.pck
+*.tpz
+*.translation
+*.import
+
+# Python / local tools
+__pycache__/
+*.py[cod]
+.env
+.env.*
+tools/logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.cursor/

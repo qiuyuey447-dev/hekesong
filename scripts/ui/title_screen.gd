@@ -1,0 +1,590 @@
+extends Control
+
+const MAIN_SCENE := "res://scenes/main.tscn"
+const FARM_MAP_SCENE := preload("res://scenes/farm_map.tscn")
+const FOX_TEX := preload("res://Characters/Animals/fox2_16x20.png")
+const FOX_FRAME := Vector2i(16, 20)
+
+const WORLD_FOCUS := Vector2(520, 360)
+const WORLD_ZOOM := Vector2(1.55, 1.55)
+const TITLE_MAP_BOUNDS := Rect2(64, 108, 520, 380)
+const TITLE_FRAME_MIN_SIZE := Vector2(760, 440)
+const TITLE_FRAME_PADDING := 120.0
+const TITLE_BACKDROP_COLOR := Color(0.34, 0.48, 0.28, 1.0)
+const CAMERA_COVER_OVERSCAN := 1.006
+
+var _menu_root: Control
+var _title_root: Control
+var _menu_panel: PanelContainer
+var _continue_button: Button
+var _new_game_button: Button
+var _exit_button: Button
+var _save_hint_label: Label
+var _world_viewport_container: SubViewportContainer
+var _world_viewport: SubViewport
+var _world_camera: Camera2D
+var _farm_map: Node2D
+var _camera_base := WORLD_FOCUS
+var _camera_zoom := WORLD_ZOOM
+var _title_map_bounds := TITLE_MAP_BOUNDS
+var _title_fox: Node2D
+var _fox_body: Sprite2D
+var _menu_buttons: Array[Button] = []
+var _time := 0.0
+
+
+func _ready() -> void:
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	RenderingServer.set_default_clear_color(TITLE_BACKDROP_COLOR)
+	DisplayServer.window_set_title(GameState.GAME_DISPLAY_NAME)
+	_build_world_background()
+	_build_overlay()
+	_build_menu()
+	await get_tree().process_frame
+	_sync_world_viewport_size()
+	if not get_viewport().size_changed.is_connected(_sync_world_viewport_size):
+		get_viewport().size_changed.connect(_sync_world_viewport_size)
+	if _world_viewport_container != null and not _world_viewport_container.resized.is_connected(_sync_world_viewport_size):
+		_world_viewport_container.resized.connect(_sync_world_viewport_size)
+	_refresh_save_state()
+
+
+func _process(delta: float) -> void:
+	_time += delta
+	if _world_camera != null:
+		var drift := Vector2(
+			sin(_time * 0.28) * 4.0,
+			cos(_time * 0.21) * 5.0
+		)
+		_world_camera.position = _clamp_camera_position(_camera_base + drift)
+		_world_camera.zoom = _camera_zoom
+	if _title_root != null:
+		_title_root.offset_top = sin(_time * 1.15) * 5.0
+		_title_root.offset_bottom = -sin(_time * 1.15) * 5.0
+	if _menu_panel != null:
+		_menu_panel.rotation = sin(_time * 0.65) * 0.004
+	_update_title_fox()
+
+
+func _update_title_fox() -> void:
+	if _title_fox == null or _fox_body == null:
+		return
+
+	var wag := sin(_time * 5.4)
+	var bounce := sin(_time * 2.2)
+	_title_fox.rotation = wag * 0.14
+	_title_fox.position.x = float(_title_fox.get_meta("base_x", _title_fox.position.x))
+	_title_fox.position.y = float(_title_fox.get_meta("base_y", _title_fox.position.y)) + bounce * 4.0
+	var base_scale := float(_title_fox.get_meta("base_scale", 3.0))
+	var squash := 1.0 + sin(_time * 3.6) * 0.05
+	_title_fox.scale = Vector2(base_scale * squash, base_scale * (1.08 - squash * 0.08))
+
+	var frame_col := 1
+	if wag > 0.38:
+		frame_col = 2
+	elif wag < -0.38:
+		frame_col = 0
+	_fox_body.texture = SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, frame_col, 0)
+
+
+func _build_world_background() -> void:
+	_world_viewport_container = SubViewportContainer.new()
+	_world_viewport_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_world_viewport_container.stretch = true
+	_world_viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_world_viewport_container)
+
+	_world_viewport = SubViewport.new()
+	_world_viewport.transparent_bg = false
+	_world_viewport.size = Vector2i(1920, 1080)
+	_world_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_world_viewport.handle_input_locally = false
+	_world_viewport.gui_disable_input = true
+	_world_viewport_container.add_child(_world_viewport)
+
+	var world := Node2D.new()
+	world.name = "TitleWorld"
+	_world_viewport.add_child(world)
+
+	_add_title_world_backdrop(world)
+
+	var atmosphere := CanvasModulate.new()
+	atmosphere.color = Color(1.0, 0.94, 0.86, 1.0)
+	world.add_child(atmosphere)
+
+	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
+	_farm_map = farm_map
+	world.add_child(farm_map)
+
+	_spawn_title_fox(farm_map)
+	_configure_title_camera(farm_map)
+
+	_world_camera = Camera2D.new()
+	_world_camera.position = _camera_base
+	_world_camera.zoom = _camera_zoom
+	_world_camera.enabled = true
+	world.add_child(_world_camera)
+
+
+func _sync_world_viewport_size() -> void:
+	if _world_viewport == null:
+		return
+	var size := _get_layout_viewport_size()
+	_world_viewport.size = Vector2i(maxi(1, int(size.x)), maxi(1, int(size.y)))
+	if _farm_map != null:
+		_configure_title_camera(_farm_map)
+	if _world_camera != null:
+		_world_camera.zoom = _camera_zoom
+		_world_camera.position = _clamp_camera_position(_camera_base)
+
+
+func _get_layout_viewport_size() -> Vector2:
+	if _world_viewport_container != null:
+		var container_size := _world_viewport_container.get_rect().size
+		if container_size.x > 1.0 and container_size.y > 1.0:
+			return container_size
+	return get_viewport_rect().size
+
+
+func _configure_title_camera(farm_map: Node2D) -> void:
+	var content_bounds := _compute_title_map_bounds(farm_map)
+	_title_map_bounds = content_bounds
+	var frame_rect := _compute_title_frame_rect(farm_map, content_bounds)
+
+	var vp_size := _get_layout_viewport_size()
+	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
+		vp_size = Vector2(1920, 1080)
+
+	var zoom_x := vp_size.x / maxf(frame_rect.size.x, 1.0)
+	var zoom_y := vp_size.y / maxf(frame_rect.size.y, 1.0)
+	var zoom_value := maxf(zoom_x, zoom_y) * CAMERA_COVER_OVERSCAN
+	_camera_zoom = Vector2(zoom_value, zoom_value)
+	_camera_base = frame_rect.get_center()
+	_camera_base = _clamp_camera_position(_camera_base)
+
+
+func _add_title_world_backdrop(world: Node2D) -> void:
+	var backdrop := Sprite2D.new()
+	backdrop.name = "TitleBackdrop"
+	backdrop.z_index = -100
+	var img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	img.fill(TITLE_BACKDROP_COLOR)
+	backdrop.texture = ImageTexture.create_from_image(img)
+	backdrop.centered = false
+	backdrop.position = Vector2(-2048, -2048)
+	backdrop.scale = Vector2(4096, 4096)
+	world.add_child(backdrop)
+
+
+func _compute_title_map_bounds(farm_map: Node2D) -> Rect2:
+	var bounds := _layer_world_bounds(farm_map.get_node_or_null("草地") as TileMapLayer)
+	var has_bounds := bounds.size.x > 0.0 and bounds.size.y > 0.0
+	for layer_name in ["河流树木家园", "沙地", "家", "田", "商店以及附属品"]:
+		var layer_bounds := _layer_world_bounds(farm_map.get_node_or_null(layer_name) as TileMapLayer)
+		if layer_bounds.size.x <= 0.0 or layer_bounds.size.y <= 0.0:
+			continue
+		if not has_bounds:
+			bounds = layer_bounds
+			has_bounds = true
+		else:
+			bounds = bounds.merge(layer_bounds)
+	return bounds if has_bounds else TITLE_MAP_BOUNDS
+
+
+func _compute_title_frame_rect(farm_map: Node2D, content_bounds: Rect2) -> Rect2:
+	var frame := Rect2()
+	var has_frame := false
+	for marker_name in ["小狸", "人"]:
+		var marker := farm_map.get_node_or_null(marker_name) as Node2D
+		if marker == null:
+			continue
+		if not has_frame:
+			frame = Rect2(marker.position, Vector2.ZERO)
+			has_frame = true
+		else:
+			frame = frame.expand(marker.position)
+	if not has_frame:
+		frame = content_bounds
+	frame = frame.grow(TITLE_FRAME_PADDING)
+	if frame.size.x < TITLE_FRAME_MIN_SIZE.x:
+		var pad_x := (TITLE_FRAME_MIN_SIZE.x - frame.size.x) * 0.5
+		frame = frame.grow_individual(pad_x, 0.0, pad_x, 0.0)
+	if frame.size.y < TITLE_FRAME_MIN_SIZE.y:
+		var pad_y := (TITLE_FRAME_MIN_SIZE.y - frame.size.y) * 0.5
+		frame = frame.grow_individual(0.0, pad_y, 0.0, pad_y)
+	return _rect_clamp_inside(frame, content_bounds) if content_bounds.size.x > 0.0 else frame
+
+
+func _rect_clamp_inside(inner: Rect2, outer: Rect2) -> Rect2:
+	if outer.size.x <= 0.0 or outer.size.y <= 0.0:
+		return inner
+	var size := inner.size
+	size.x = minf(size.x, outer.size.x)
+	size.y = minf(size.y, outer.size.y)
+	var center := inner.get_center()
+	center.x = clampf(
+		center.x,
+		outer.position.x + size.x * 0.5,
+		outer.position.x + outer.size.x - size.x * 0.5
+	)
+	center.y = clampf(
+		center.y,
+		outer.position.y + size.y * 0.5,
+		outer.position.y + outer.size.y - size.y * 0.5
+	)
+	return Rect2(center - size * 0.5, size)
+
+
+func _layer_world_bounds(layer: TileMapLayer) -> Rect2:
+	if layer == null:
+		return Rect2()
+	var used := layer.get_used_rect()
+	if used.size.x <= 0 or used.size.y <= 0:
+		return Rect2()
+	var scale := layer.scale
+	return Rect2(
+		Vector2(used.position) * 16.0 * scale,
+		Vector2(used.size) * 16.0 * scale
+	)
+
+
+func _clamp_camera_position(target: Vector2) -> Vector2:
+	var vp_size := _get_layout_viewport_size()
+	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
+		return target
+
+	var half_w := vp_size.x / (2.0 * _camera_zoom.x)
+	var half_h := vp_size.y / (2.0 * _camera_zoom.y)
+	var bounds := _title_map_bounds
+	var result := target
+
+	var min_x := bounds.position.x + half_w
+	var max_x := bounds.position.x + bounds.size.x - half_w
+	if min_x > max_x:
+		result.x = bounds.get_center().x
+	else:
+		result.x = clampf(target.x, min_x, max_x)
+
+	var min_y := bounds.position.y + half_h
+	var max_y := bounds.position.y + bounds.size.y - half_h
+	if min_y > max_y:
+		result.y = bounds.get_center().y
+	else:
+		result.y = clampf(target.y, min_y, max_y)
+
+	return result
+
+
+func _spawn_title_fox(farm_map: Node2D) -> void:
+	_title_fox = Node2D.new()
+	_title_fox.name = "TitleFox"
+	_title_fox.z_index = 2
+
+	var marker := farm_map.get_node_or_null("小狸") as Node2D
+	if marker != null:
+		_title_fox.position = marker.position
+	else:
+		_title_fox.position = Vector2(272, 412)
+	_title_fox.set_meta("base_x", _title_fox.position.x)
+	_title_fox.set_meta("base_y", _title_fox.position.y)
+	_title_fox.set_meta("base_scale", 3.2)
+
+	var shadow := Sprite2D.new()
+	var shadow_img := Image.create(22, 8, false, Image.FORMAT_RGBA8)
+	shadow_img.fill(Color(0, 0, 0, 0))
+	for y in range(8):
+		for x in range(22):
+			var dx := (x - 11.0) / 11.0
+			var dy := (y - 4.0) / 4.0
+			if dx * dx + dy * dy <= 1.0:
+				shadow_img.set_pixel(x, y, Color(0, 0, 0, 0.24))
+	shadow.texture = ImageTexture.create_from_image(shadow_img)
+	shadow.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	shadow.centered = true
+	shadow.position = Vector2(0, 4)
+	shadow.z_index = -1
+	_title_fox.add_child(shadow)
+
+	_fox_body = Sprite2D.new()
+	_fox_body.texture = SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, 1, 0)
+	_fox_body.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_fox_body.centered = false
+	_fox_body.offset = Vector2(-8, -18)
+	_title_fox.add_child(_fox_body)
+
+	_title_fox.scale = Vector2(3.2, 3.2)
+	farm_map.add_child(_title_fox)
+
+
+func _build_overlay() -> void:
+	var vignette := ColorRect.new()
+	vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vignette.color = Color(0.05, 0.08, 0.12, 0.22)
+	add_child(vignette)
+
+	var warm := ColorRect.new()
+	warm.set_anchors_preset(Control.PRESET_FULL_RECT)
+	warm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	warm.color = Color(1.0, 0.92, 0.78, 0.08)
+	add_child(warm)
+
+
+func _build_menu() -> void:
+	_menu_root = Control.new()
+	_menu_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_menu_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_menu_root)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_menu_root.add_child(center)
+
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 18)
+	stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(stack)
+
+	stack.add_child(_build_title_banner())
+
+	_menu_panel = PanelContainer.new()
+	_menu_panel.custom_minimum_size = Vector2(392, 360)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.98, 0.95, 0.9, 0.94)
+	panel_style.border_color = Color(0.62, 0.48, 0.34, 0.75)
+	panel_style.set_border_width_all(3)
+	panel_style.set_corner_radius_all(28)
+	panel_style.shadow_color = Color(0.08, 0.06, 0.04, 0.28)
+	panel_style.shadow_size = 16
+	panel_style.shadow_offset = Vector2(0, 6)
+	panel_style.content_margin_left = 28
+	panel_style.content_margin_right = 28
+	panel_style.content_margin_top = 28
+	panel_style.content_margin_bottom = 22
+	_menu_panel.add_theme_stylebox_override("panel", panel_style)
+	stack.add_child(_menu_panel)
+
+	var panel_vbox := VBoxContainer.new()
+	panel_vbox.add_theme_constant_override("separation", 16)
+	panel_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_menu_panel.add_child(panel_vbox)
+
+	_continue_button = _make_pill_button("继续")
+	_new_game_button = _make_pill_button("新游戏")
+	_exit_button = _make_pill_button("退出")
+	panel_vbox.add_child(_continue_button)
+	panel_vbox.add_child(_new_game_button)
+	panel_vbox.add_child(_exit_button)
+
+	_continue_button.pressed.connect(_on_continue_pressed)
+	_new_game_button.pressed.connect(_on_new_game_pressed)
+	_exit_button.pressed.connect(_on_exit_pressed)
+
+	_save_hint_label = Label.new()
+	_save_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_save_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_save_hint_label.custom_minimum_size = Vector2(360, 0)
+	_save_hint_label.add_theme_font_size_override("font_size", 15)
+	_save_hint_label.add_theme_color_override("font_color", Color(0.4, 0.3, 0.22, 0.9))
+	panel_vbox.add_child(_save_hint_label)
+
+	await get_tree().process_frame
+	_menu_panel.pivot_offset = _menu_panel.size * 0.5
+
+
+func _build_title_banner() -> Control:
+	_title_root = Control.new()
+	_title_root.custom_minimum_size = Vector2(420, 96)
+	_title_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title_root.add_child(_make_title_text_block())
+
+	var underline := PanelContainer.new()
+	underline.custom_minimum_size = Vector2(360, 10)
+	var line_style := StyleBoxFlat.new()
+	line_style.bg_color = Color(1.0, 0.96, 0.82, 0.55)
+	line_style.set_corner_radius_all(5)
+	line_style.shadow_color = Color(0.45, 0.32, 0.18, 0.18)
+	line_style.shadow_size = 4
+	underline.add_theme_stylebox_override("panel", line_style)
+	underline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var banner := VBoxContainer.new()
+	banner.add_theme_constant_override("separation", 10)
+	banner.alignment = BoxContainer.ALIGNMENT_CENTER
+	banner.add_child(_title_root)
+	banner.add_child(underline)
+	return banner
+
+
+func _make_title_text_block() -> Control:
+	var block := Control.new()
+	block.set_anchors_preset(Control.PRESET_FULL_RECT)
+	block.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var title_text := GameState.GAME_DISPLAY_NAME
+	var layers: Array[Dictionary] = [
+		{
+			"offset": Vector2(0, 8),
+			"color": Color(0.22, 0.14, 0.08, 0.55),
+			"outline": 0,
+			"size": 74,
+		},
+		{
+			"offset": Vector2(0, 5),
+			"color": Color(0.48, 0.3, 0.16, 0.85),
+			"outline": 0,
+			"size": 74,
+		},
+		{
+			"offset": Vector2(0, 2),
+			"color": Color(0.72, 0.48, 0.24, 0.95),
+			"outline": 4,
+			"outline_color": Color(0.38, 0.24, 0.12),
+			"size": 74,
+		},
+		{
+			"offset": Vector2(0, 0),
+			"color": Color(1.0, 0.98, 0.9),
+			"outline": 10,
+			"outline_color": Color(0.34, 0.22, 0.12),
+			"size": 74,
+		},
+		{
+			"offset": Vector2(-1, -2),
+			"color": Color(1.0, 1.0, 0.96, 0.42),
+			"outline": 0,
+			"size": 74,
+		},
+	]
+
+	for layer_data in layers:
+		var label := Label.new()
+		label.text = title_text
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.set_anchors_preset(Control.PRESET_FULL_RECT)
+		label.offset_left = layer_data["offset"].x
+		label.offset_top = layer_data["offset"].y
+		label.offset_right = layer_data["offset"].x
+		label.offset_bottom = layer_data["offset"].y
+		label.add_theme_font_override("font", _title_font())
+		label.add_theme_font_size_override("font_size", int(layer_data["size"]))
+		label.add_theme_color_override("font_color", layer_data["color"])
+		var outline_size := int(layer_data.get("outline", 0))
+		if outline_size > 0:
+			label.add_theme_constant_override("outline_size", outline_size)
+			label.add_theme_color_override(
+				"font_outline_color",
+				layer_data.get("outline_color", Color(0.2, 0.12, 0.08))
+			)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		block.add_child(label)
+
+	return block
+
+
+func _title_font() -> Font:
+	var font := SystemFont.new()
+	font.font_names = PackedStringArray(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC"])
+	font.font_weight = 700
+	font.font_stretch = 105
+	return font
+
+
+func _make_pill_button(label_text: String) -> Button:
+	var button := Button.new()
+	button.custom_minimum_size = Vector2(320, 58)
+	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	button.text = label_text
+	button.add_theme_font_size_override("font_size", 30)
+
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.93, 0.78, 0.54, 1.0)
+	normal.border_color = Color(0.58, 0.42, 0.26, 0.95)
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(24)
+	normal.content_margin_left = 24
+	normal.content_margin_right = 24
+	normal.shadow_color = Color(0.12, 0.08, 0.04, 0.18)
+	normal.shadow_size = 5
+	normal.shadow_offset = Vector2(0, 2)
+
+	var hover := normal.duplicate()
+	hover.bg_color = Color(0.98, 0.88, 0.64, 1.0)
+	hover.shadow_size = 8
+
+	var pressed := normal.duplicate()
+	pressed.bg_color = Color(0.82, 0.66, 0.42, 1.0)
+	pressed.shadow_size = 2
+
+	var disabled := normal.duplicate()
+	disabled.bg_color = Color(0.86, 0.8, 0.72, 0.85)
+	disabled.border_color = Color(0.68, 0.6, 0.52, 0.6)
+
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", hover)
+	button.add_theme_stylebox_override("disabled", disabled)
+	button.add_theme_color_override("font_color", Color(0.24, 0.16, 0.1))
+	button.add_theme_color_override("font_hover_color", Color(0.18, 0.12, 0.08))
+	button.add_theme_color_override("font_disabled_color", Color(0.46, 0.4, 0.34))
+
+	button.mouse_entered.connect(func() -> void:
+		button.pivot_offset = button.size * 0.5
+		button.scale = Vector2(1.04, 1.04)
+	)
+	button.mouse_exited.connect(func() -> void:
+		button.scale = Vector2.ONE
+	)
+	_menu_buttons.append(button)
+	return button
+
+
+func _refresh_save_state() -> void:
+	GameState.ensure_save_migrated()
+	var has_save := GameState.has_save_file()
+	_continue_button.disabled = not has_save
+	if has_save:
+		_save_hint_label.text = "存档：第 %d 天 · 周目 %d" % [GameState.game_day, GameState.get_week_index()]
+	else:
+		_save_hint_label.text = "尚无存档，请选择「新游戏」"
+
+
+func _on_continue_pressed() -> void:
+	if not GameState.ensure_save_migrated():
+		_save_hint_label.text = "未找到存档，请选择「新游戏」"
+		_refresh_save_state()
+		return
+	GameState.continue_from_save()
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
+
+func _on_new_game_pressed() -> void:
+	if GameState.has_save_file():
+		var dialog := ConfirmationDialog.new()
+		dialog.title = "开始新游戏"
+		dialog.dialog_text = "这将删除当前存档，从第一天重新开始。确定吗？"
+		dialog.ok_button_text = "确定"
+		dialog.cancel_button_text = "取消"
+		add_child(dialog)
+		dialog.confirmed.connect(func() -> void:
+			dialog.queue_free()
+			_start_new_game_confirmed()
+		)
+		dialog.canceled.connect(dialog.queue_free)
+		dialog.close_requested.connect(dialog.queue_free)
+		dialog.popup_centered()
+		return
+	_start_new_game_confirmed()
+
+
+func _start_new_game_confirmed() -> void:
+	GameState.start_new_game_fresh()
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
+
+func _on_exit_pressed() -> void:
+	get_tree().quit()

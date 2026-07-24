@@ -1,0 +1,46 @@
+{
+	"companion_id": "xiaoli",
+	"name": "小狸",
+	"sprite": "fox2_16x20",
+	"movement": {
+		"wander_speed": 36,
+		"task_speed": 92,
+		"walks_to_target_on_command": true,
+		"idle_behaviors": ["stand", "wander"],
+		"stand_duration_sec": [4, 10],
+		"wander_cooldown_sec": [5, 10]
+	},
+	"capabilities": [
+		"water",
+		"water_all",
+		"plant",
+		"plant_all",
+		"harvest",
+		"harvest_all",
+		"open_shop",
+		"open_market",
+		"open_memory",
+		"check_status",
+		"help",
+		"sleep"
+	],
+	"cannot_delegate": ["sell"],
+	"delegate_bond_min": {
+		"harvest": 20
+	},
+	"animations": {
+		"directions": ["down", "left", "right", "up"],
+		"walk_frames_per_direction": 3,
+		"idle_stand_frame": "每方向中间帧站立",
+		"idle_wag": "正面三帧慢速摆尾",
+		"extra_action_sheets": "无专用浇水/收货/购物动画；工作时站立朝向目标",
+		"alternate_sprites": ["fox1_16x20", "fox2_16x20"]
+	},
+	"command_examples": [
+		"帮我去商店买东西 → open_shop",
+		"去买点种子 → open_shop（问数量后自动种浇）",
+		"帮我把田都浇了 → water_all",
+		"帮我去种萝卜 → plant",
+		"帮我去收萝卜 → harvest"
+	]
+}

@@ -1,0 +1,12 @@
+{
+	"enabled": true,
+	"api_url": "http://127.0.0.1:8080/v1/chat",
+	"api_key": "",
+	"npc_id": "xiaoli",
+	"timeout_sec": 15.0,
+	"mock_delay_sec": 0.4,
+	"intent_fallback_enabled": true,
+	"intent_classify_url": "",
+	"intent_timeout_sec": 8.0,
+	"require_relationship_delta": true
+}

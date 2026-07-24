@@ -1,0 +1,10 @@
+﻿python :   File "E:\hekesong\tools\parse_tiles.py", line 9
+所在位置 C:\Users\valerieyang\AppData\Local\Temp\ps-script-fcc066b6-324e-437e-bc70-a6ab118fd5a1.ps1:7 字符: 1
++ python "E:\hekesong\tools\parse_tiles.py" "E:\hekesong\scenes\farm_ma ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  File "E:\heke...les.py", line 9:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    marker = f'[node name="{layer}"'
+                                   ^
+SyntaxError: invalid syntax

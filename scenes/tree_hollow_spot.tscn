@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://hekesong_tree_hollow"]
+
+[ext_resource type="Script" path="res://scripts/world/tree_hollow_spot.gd" id="1_hollow"]
+
+[node name="TreeHollowSpot" type="Area2D"]
+script = ExtResource("1_hollow")
