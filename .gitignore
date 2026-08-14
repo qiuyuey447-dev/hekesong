@@ -4,6 +4,7 @@ export.cfg
 export/web/
 export/windows/
 export/*.zip
+build/
 relife.html
 relife.*.js
 relife.*.wasm
@@ -11,6 +12,10 @@ relife.*.pck
 *.tpz
 *.translation
 *.import
+
+# Local dumps
+tools/tile_out.txt
+tools/__pycache__/
 
 # Python / local tools
 __pycache__/

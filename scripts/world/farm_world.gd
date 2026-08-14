@@ -11,8 +11,24 @@ const PLAYER_SPAWN_HOME_CELL := Vector2i(6, 7)
 const COMPANION_SPAWN_CELL := Vector2i(8, 12)
 const GROUND_LAYERS: Array[String] = ["草地", "沙地", "田"]
 const PLOT_LAYER := "田"
-# Autotile crop overlays on the farm layer are decorative; gameplay crops use FarmPlot sprites.
-const DECORATIVE_CROP_SOURCES: Array[int] = [1, 6]
+# 中间那两垄是临时田，删掉。可种的田只用最右边围栏里的三垄。
+const FIELD_CLEAR_RECT := Rect2i(31, 21, 9, 12)
+const EXTRA_STRIP_XS: Array[int] = [54, 56]
+const WORKING_PLOT_CELLS: Array[Vector2i] = [
+	Vector2i(46, 21), Vector2i(46, 22), Vector2i(46, 23), Vector2i(46, 24), Vector2i(46, 25), Vector2i(46, 26),
+	Vector2i(48, 21), Vector2i(48, 22), Vector2i(48, 23), Vector2i(48, 24), Vector2i(48, 25), Vector2i(48, 26),
+	Vector2i(50, 21), Vector2i(50, 22), Vector2i(50, 23), Vector2i(50, 24), Vector2i(50, 25), Vector2i(50, 26),
+]
+const MAX_WORKING_PLOTS := 18
+# 仅剥离 source 0 上「纯装饰用」的静态作物贴图（若地图里仍有）。source 6 是农田 autotile 土块，绝不能删。
+const DECORATIVE_CROP_SOURCE := 0
+const DECORATIVE_CROP_ATLAS_COORDS: Array[Vector2i] = [
+	Vector2i(29, 1), Vector2i(30, 1), Vector2i(31, 1), Vector2i(32, 1), Vector2i(33, 1), Vector2i(34, 1),
+	Vector2i(42, 1), Vector2i(43, 1), Vector2i(44, 1),
+	Vector2i(49, 1), Vector2i(50, 1), Vector2i(51, 1), Vector2i(52, 1), Vector2i(53, 1), Vector2i(54, 1),
+	Vector2i(55, 1), Vector2i(56, 1), Vector2i(57, 1), Vector2i(58, 1),
+	Vector2i(60, 1), Vector2i(61, 1), Vector2i(62, 1),
+]
 
 @onready var _farm_map: Node2D = $FarmMap
 
@@ -44,18 +60,21 @@ const SNUGGLE_COMPANION_X := 16.0
 func _ready() -> void:
 	add_to_group("farm_world")
 	add_to_group("pixel_world")
-	y_sort_enabled = true
+	y_sort_enabled = false
 	_setup_layers()
+	FarmSetdress.sync_markers(_farm_map)
 	_ensure_entities()
+	FarmSetdress.apply(_farm_map, _actors())
 	_spawn_player()
 	_setup_camera_limits()
+	call_deferred("_setup_camera_limits")
 	set_process(false)
 
 
 func start_companion_snuggle(on_finished: Callable) -> void:
 	if _snuggle_active:
 		return
-	var entities := _farm_map.get_node_or_null("Entities") as Node2D
+	var entities := _actors()
 	if entities == null or _player == null:
 		if on_finished.is_valid():
 			on_finished.call()
@@ -107,7 +126,7 @@ func _align_snuggle_positions(anchor: Vector2) -> void:
 
 
 func _tree_hollow_anchor() -> Vector2:
-	var entities := _farm_map.get_node_or_null("Entities") as Node2D
+	var entities := _actors()
 	if entities != null:
 		var hollow := entities.get_node_or_null("TreeHollow") as Node2D
 		if hollow != null:
@@ -115,7 +134,7 @@ func _tree_hollow_anchor() -> Vector2:
 	var marker := _farm_map.get_node_or_null("树洞") as Node2D
 	if marker != null:
 		return marker.global_position
-	return Vector2(987, 440)
+	return FarmSetdress.POS_HOLLOW
 
 
 func _process(delta: float) -> void:
@@ -191,6 +210,10 @@ func get_farm_map() -> Node2D:
 	return _farm_map
 
 
+func is_rain_sheltered(world_pos: Vector2) -> bool:
+	return FarmSetdress.porch_shelter_rect(_farm_map).has_point(world_pos)
+
+
 func _has_ground_at(world_pos: Vector2) -> bool:
 	for layer in _ground_layers:
 		var cell := layer.local_to_map(layer.to_local(world_pos))
@@ -204,7 +227,7 @@ func set_plot_watered(_plot_id: int, _watered: bool) -> void:
 
 
 func _setup_layers() -> void:
-	_farm_map.y_sort_enabled = true
+	_farm_map.y_sort_enabled = false
 	_ground_layer = _farm_map.get_node_or_null("草地") as TileMapLayer
 	if _ground_layer == null:
 		for child in _farm_map.get_children():
@@ -217,17 +240,17 @@ func _setup_layers() -> void:
 	for layer_name in GROUND_LAYERS:
 		var layer := _farm_map.get_node_or_null(layer_name) as TileMapLayer
 		if layer != null:
+			layer.z_index = 0
+			layer.y_sort_enabled = false
 			_ground_layers.append(layer)
 
 
+func _actors() -> Node2D:
+	return FarmSetdress.ensure_actors(_farm_map)
+
+
 func _ensure_entities() -> void:
-	var entities := _farm_map.get_node_or_null("Entities") as Node2D
-	if entities == null:
-		entities = Node2D.new()
-		entities.name = "Entities"
-		entities.y_sort_enabled = true
-		_farm_map.add_child(entities)
-	entities.z_index = 1
+	var entities := _actors()
 
 	var door := entities.get_node_or_null("Door")
 	if door != null:
@@ -247,14 +270,15 @@ func _ensure_entities() -> void:
 
 
 func _spawn_tree_hollow(entities: Node2D) -> void:
-	var existing := entities.get_node_or_null("TreeHollow")
-	if existing != null:
-		existing.queue_free()
-
 	var marker := _farm_map.get_node_or_null("树洞") as Node2D
-	var pos := Vector2(987, 440)
+	var pos := FarmSetdress.POS_HOLLOW
 	if marker != null:
 		pos = marker.position
+
+	var existing := entities.get_node_or_null("TreeHollow") as Node2D
+	if existing != null:
+		existing.position = pos
+		return
 
 	var hollow := TREE_HOLLOW_SCENE.instantiate() as Area2D
 	if hollow == null:
@@ -265,12 +289,13 @@ func _spawn_tree_hollow(entities: Node2D) -> void:
 
 
 func _spawn_shop(entities: Node2D) -> void:
-	var existing := entities.get_node_or_null("Shop")
-	if existing != null:
-		existing.queue_free()
-
 	var marker := _farm_map.get_node_or_null("商店") as Node2D
 	if marker == null:
+		return
+
+	var existing := entities.get_node_or_null("Shop") as Node2D
+	if existing != null:
+		existing.position = marker.position
 		return
 
 	var shop := SHOP_SCENE.instantiate() as Area2D
@@ -291,18 +316,12 @@ func _spawn_plots(entities: Node2D) -> int:
 		return 0
 
 	_strip_decorative_crop_tiles(plot_layer)
-
-	var cells := plot_layer.get_used_cells()
-	cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		if a.y == b.y:
-			return a.x < b.x
-		return a.y < b.y
-	)
+	_layout_working_field(plot_layer)
 
 	var plot_id := 1
-	for cell in cells:
-		if not _is_interactive_soil_cell(plot_layer, cell):
-			continue
+	for cell in WORKING_PLOT_CELLS:
+		if plot_id > MAX_WORKING_PLOTS:
+			break
 		var plot := PLOT_SCENE.instantiate() as FarmPlot
 		if plot == null:
 			continue
@@ -316,25 +335,33 @@ func _spawn_plots(entities: Node2D) -> int:
 	return plot_id - 1
 
 
-func _strip_decorative_crop_tiles(plot_layer: TileMapLayer) -> void:
+func _layout_working_field(plot_layer: TileMapLayer) -> void:
 	for cell in plot_layer.get_used_cells():
-		if plot_layer.get_cell_source_id(cell) in DECORATIVE_CROP_SOURCES:
+		if FIELD_CLEAR_RECT.has_point(cell):
+			plot_layer.erase_cell(cell)
+		elif cell.x in EXTRA_STRIP_XS and cell.y >= 21 and cell.y <= 26:
 			plot_layer.erase_cell(cell)
 
 
-func _is_interactive_soil_cell(plot_layer: TileMapLayer, cell: Vector2i) -> bool:
-	var source_id := plot_layer.get_cell_source_id(cell)
-	if source_id < 0:
-		return false
-	return source_id not in DECORATIVE_CROP_SOURCES
+func _strip_decorative_crop_tiles(plot_layer: TileMapLayer) -> void:
+	for cell in plot_layer.get_used_cells():
+		if plot_layer.get_cell_source_id(cell) != DECORATIVE_CROP_SOURCE:
+			continue
+		if plot_layer.get_cell_atlas_coords(cell) in DECORATIVE_CROP_ATLAS_COORDS:
+			plot_layer.erase_cell(cell)
 
 
 func _spawn_player() -> void:
-	_player = _farm_map.get_node_or_null("Player") as CharacterBody2D
+	var actors := _actors()
+	_player = actors.get_node_or_null("Player") as CharacterBody2D
+	if _player == null:
+		_player = _farm_map.get_node_or_null("Player") as CharacterBody2D
 	if _player == null:
 		_player = PLAYER_SCENE.instantiate() as CharacterBody2D
 		_player.name = "Player"
-		_farm_map.add_child(_player)
+		actors.add_child(_player)
+	elif _player.get_parent() != actors:
+		_player.reparent(actors)
 	_player.position = _player_spawn_position()
 	if _player.has_method("sync_world_position"):
 		_player.sync_world_position()
@@ -371,17 +398,37 @@ func _default_spawn_position() -> Vector2:
 
 
 func _setup_camera_limits() -> void:
-	if _player == null or _ground_layer == null:
+	if _player == null:
 		return
-	var used := _ground_layer.get_used_rect()
-	var offset_px := Vector2(used.position) * TILE_SIZE * _layer_scale
-	var size_px := Vector2(used.size) * TILE_SIZE * _layer_scale
 	var camera := _player.get_node("Camera2D") as Camera2D
-	camera.limit_left = int(offset_px.x)
-	camera.limit_top = int(offset_px.y)
-	camera.limit_right = int(offset_px.x + size_px.x)
-	camera.limit_bottom = int(offset_px.y + size_px.y)
+	if camera == null:
+		return
+	var map_rect := _grass_world_rect()
+	if map_rect.size.x < 8.0 or map_rect.size.y < 8.0:
+		map_rect = FarmSetdress.living_yard_rect(_farm_map).grow(80.0)
+	# 镜头贴着草地边缘，能跟着人往南走，又不会探出地图露出灰边。
+	camera.limit_left = int(floor(map_rect.position.x))
+	camera.limit_top = int(floor(map_rect.position.y))
+	camera.limit_right = int(ceil(map_rect.end.x))
+	camera.limit_bottom = int(ceil(map_rect.end.y))
 	camera.limit_smoothed = true
+	if _player.has_method("set_walk_bounds"):
+		_player.set_walk_bounds(map_rect.grow(-12.0))
+
+
+func _grass_world_rect() -> Rect2:
+	var layer := _ground_layer
+	if layer == null or layer.tile_set == null:
+		return Rect2()
+	var used := layer.get_used_rect()
+	if used.size.x <= 0 or used.size.y <= 0:
+		return Rect2()
+	var cell_px := Vector2(layer.tile_set.tile_size) * layer.scale
+	var first := layer.to_global(layer.map_to_local(used.position))
+	var last := layer.to_global(layer.map_to_local(used.position + used.size - Vector2i.ONE))
+	var origin := first - cell_px * 0.5
+	var end := last + cell_px * 0.5
+	return Rect2(origin, end - origin)
 
 
 func _world_pos_to_cell(world_pos: Vector2) -> Vector2i:
@@ -410,27 +457,37 @@ func _setup_companion_agent(entities: Node2D) -> void:
 		if child is FarmPlot:
 			plot_positions[int(child.plot_id)] = child.global_position
 
-	var shop_pos := Vector2(1321, 230)
+	var shop_pos := FarmSetdress.marker_position(_farm_map, "商店", FarmSetdress.POS_SHOP)
 	var shop_marker := _farm_map.get_node_or_null("商店") as Node2D
 	if shop_marker != null:
 		shop_pos = shop_marker.global_position
+
+	var field_center := Vector2.ZERO
+	if not plot_positions.is_empty():
+		for raw_pos in plot_positions.values():
+			field_center += Vector2(raw_pos)
+		field_center /= float(plot_positions.size())
+	else:
+		field_center = FarmSetdress.marker_position(_farm_map, "田埂", FarmSetdress.POS_RIDGE)
 
 	CompanionAgent.setup(
 		companion,
 		plot_positions,
 		shop_pos,
-		_companion_path_waypoints()
+		_companion_path_waypoints(field_center, shop_pos),
+		FarmSetdress.story_pois(_farm_map, field_center, shop_pos)
 	)
 
 
-func _companion_path_waypoints() -> Array[Vector2]:
-	# 沿主路、家-营地-商店-池塘-萝卜田的漫游路径（与地图可走区域大致对应）
-	return [
-		Vector2(240, 200), Vector2(180, 280), Vector2(220, 360), Vector2(272, 412),
-		Vector2(340, 460), Vector2(420, 500), Vector2(520, 480), Vector2(620, 420),
-		Vector2(740, 360), Vector2(880, 300), Vector2(1020, 260), Vector2(1180, 220),
-		Vector2(1321, 230), Vector2(1100, 400), Vector2(950, 520), Vector2(780, 580),
-		Vector2(600, 620), Vector2(420, 580), Vector2(300, 520), Vector2(200, 450),
-		Vector2(150, 600), Vector2(280, 650), Vector2(450, 680), Vector2(650, 700),
-		Vector2(850, 680), Vector2(1050, 650), Vector2(480, 380), Vector2(520, 180),
+func _companion_path_waypoints(field_center: Vector2, shop_pos: Vector2) -> Array[Vector2]:
+	var points: Array[Vector2] = [
+		FarmSetdress.marker_position(_farm_map, "廊下", FarmSetdress.POS_PORCH),
+		FarmSetdress.marker_position(_farm_map, "人", FarmSetdress.POS_HOME),
+		FarmSetdress.marker_position(_farm_map, "树洞", FarmSetdress.POS_HOLLOW),
+		shop_pos,
+		field_center,
+		FarmSetdress.marker_position(_farm_map, "田埂", FarmSetdress.POS_RIDGE),
+		FarmSetdress.marker_position(_farm_map, "空土垄", FarmSetdress.POS_EMPTY),
+		FarmSetdress.marker_position(_farm_map, "河边", FarmSetdress.POS_RIVER),
 	]
+	return points

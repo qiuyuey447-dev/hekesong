@@ -109,6 +109,8 @@ func _random_air_position(view: Rect2) -> Vector2:
 
 
 func _resolve_hit(pos: Vector2, prev_y: float) -> Vector2:
+	if _is_sheltered(Vector2(pos.x, pos.y)):
+		return Vector2.INF
 	var feet := _character_feet_at(pos, prev_y)
 	if feet != Vector2.INF:
 		return feet
@@ -116,6 +118,13 @@ func _resolve_hit(pos: Vector2, prev_y: float) -> Vector2:
 	if prev_y <= ground_y and pos.y >= ground_y:
 		return Vector2(pos.x, ground_y - 1.0)
 	return Vector2.INF
+
+
+func _is_sheltered(world_pos: Vector2) -> bool:
+	var world := get_tree().get_first_node_in_group("farm_world")
+	if world != null and world.has_method("is_rain_sheltered"):
+		return bool(world.call("is_rain_sheltered", world_pos))
+	return false
 
 
 func _character_feet_at(pos: Vector2, prev_y: float) -> Vector2:
@@ -128,6 +137,8 @@ func _character_feet_at(pos: Vector2, prev_y: float) -> Vector2:
 		var feet := n.global_position
 		if node.has_method("get_rain_feet_position"):
 			feet = node.call("get_rain_feet_position")
+		if _is_sheltered(feet):
+			continue
 		var half_w := 16.0 * n.scale.x
 		if node.is_in_group("player"):
 			half_w = 20.0 * n.scale.x

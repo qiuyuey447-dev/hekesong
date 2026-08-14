@@ -24,7 +24,7 @@
 		"help",
 		"sleep"
 	],
-	"cannot_delegate": ["sell"],
+	"cannot_delegate": [],
 	"delegate_bond_min": {
 		"harvest": 20
 	},

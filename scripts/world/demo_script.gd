@@ -32,8 +32,10 @@ func _session_start_override(week: int, day: int) -> String:
 		return "……你是谁？抱歉，我不记得了。我怎么会在这里？……这是你的农场吗？"
 	if week == 2 and day == 2 and not GameState.has_revealed_memory():
 		return "对不起……你的本子上好像记过我会来帮工。可我脑子里对不上。你能再告诉我一次吗？"
+	if GameState.IS_TEN_DAY_EDITION and GameState.game_day == 10 and not GameState.has_revealed_memory():
+		return "第十天了……我常梦见这片田，像很多年前来过，又像昨天才走。可一醒来，什么都抓不住。"
 	if week == 5 and day == 1 and not GameState.has_revealed_memory():
-		return "第五周了……我有时会梦见这片田，像是很久很久以前，又像是昨天。"
+		return "这些日子……我有时会梦见这片田，像是很久很久以前，又像是昨天。"
 	if week == 5 and day == 7 and GameState.has_revealed_memory():
 		return "我还记得那天。谢谢你一直没有赶我走。"
 	if day == 7 and not GameState.has_revealed_memory() and week < 5:
@@ -57,7 +59,7 @@ func _task_complete_override(week: int, day: int, game_facts: Dictionary) -> Str
 func _player_chat_override(week: int, day: int, text: String) -> String:
 	if week == 2 and day == 1 and not GameState.has_revealed_memory():
 		if "我是谁" in text or "不认识" in text or "记得我" in text:
-			return "……你说我们见过？对不起，我脑子里有些画面，但拼不起来。"
+			return "……你说我们见过？对不起。我想不起来。"
 		if "小狸" in text and ("认识" in text or "记得" in text or "一起" in text):
 			return "你叫我的名字……好像是对的。可我还是想不起来，在这里做过什么。"
 		if "农场" in text or "田" in text or "留下" in text:
@@ -81,10 +83,10 @@ func _companion_react_override(week: int, day: int, react_type: String) -> Strin
 func get_leak_fallback(node_id: String) -> String:
 	match node_id:
 		"N07":
-			return "这颜色……好像在哪里见过。等过很久，又像是昨天。"
+			return "这颜色……我见过。不止一次。只是怎么也想不起，是哪一回了。"
 		"N11":
-			return "那个关于萝卜田的约定……我记不清是谁先说的，但听起来很熟。"
+			return "那个关于萝卜田的约定……我记不清是谁先说的，却熟得像早就许过很多遍。"
 		"N14":
-			return "你递萝卜给我的那个下午，好像发生过不止一次。"
+			return "你递萝卜给我的那个下午，好像发生过不止一次——很多个一模一样的下午。"
 		_:
 			return ""

@@ -155,31 +155,62 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 24.0
-offset_top = -180.0
-offset_right = -24.0
-offset_bottom = -24.0
+offset_left = 28.0
+offset_top = -292.0
+offset_right = -28.0
+offset_bottom = -16.0
 grow_horizontal = 2
 grow_vertical = 0
 
 [node name="Margin" type="MarginContainer" parent="UI/ChatPanel" unique_id=404970340]
 layout_mode = 2
-theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 12
-theme_override_constants/margin_bottom = 8
+theme_override_constants/margin_left = 28
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 28
+theme_override_constants/margin_bottom = 16
 
 [node name="VBox" type="VBoxContainer" parent="UI/ChatPanel/Margin" unique_id=1783953267]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 10
+
+[node name="PlayerEcho" type="Label" parent="UI/ChatPanel/Margin/VBox"]
+visible = false
+modulate = Color(1, 1, 1, 1)
+custom_minimum_size = Vector2(0, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.32, 0.26, 0.2, 1)
+theme_override_font_sizes/font_size = 17
+text = ""
+horizontal_alignment = 2
+autowrap_mode = 2
+
+[node name="Sign" type="Label" parent="UI/ChatPanel/Margin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.28, 0.18, 0.10, 1)
+theme_override_font_sizes/font_size = 22
+text = "—— 和她说说话 ——"
+horizontal_alignment = 1
 
 [node name="ChatLog" type="RichTextLabel" parent="UI/ChatPanel/Margin/VBox" unique_id=1571864846]
-custom_minimum_size = Vector2(0, 96)
+custom_minimum_size = Vector2(0, 148)
 layout_mode = 2
-theme_override_colors/default_color = Color(0.28, 0.24, 0.2, 1)
+size_flags_vertical = 3
+mouse_filter = 0
+theme_override_colors/default_color = Color(0.22, 0.17, 0.13, 1)
+theme_override_constants/line_separation = 8
+theme_override_font_sizes/normal_font_size = 19
+scroll_active = true
 bbcode_enabled = true
-text = "聊天开始。"
+text = "……"
 scroll_following = true
+
+[node name="ContinueArrow" type="Label" parent="UI/ChatPanel/Margin/VBox"]
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(0.549, 0.482, 0.408, 1)
+theme_override_font_sizes/font_size = 18
+text = "↘"
+horizontal_alignment = 2
 
 [node name="NudgeBar" type="HBoxContainer" parent="UI/ChatPanel/Margin/VBox"]
 visible = false
@@ -201,15 +232,21 @@ layout_mode = 2
 text = "稍后"
 
 [node name="ChatRow" type="HBoxContainer" parent="UI/ChatPanel/Margin/VBox" unique_id=1123625181]
+custom_minimum_size = Vector2(0, 48)
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="ChatInput" type="LineEdit" parent="UI/ChatPanel/Margin/VBox/ChatRow" unique_id=1258299283]
+custom_minimum_size = Vector2(0, 48)
 layout_mode = 2
 size_flags_horizontal = 3
-placeholder_text = "和小狸说点什么…"
+theme_override_colors/font_color = Color(0.2, 0.15, 0.1, 1)
+theme_override_colors/font_placeholder_color = Color(0.38, 0.26, 0.16, 0.95)
+theme_override_font_sizes/font_size = 18
+placeholder_text = "…（轻声对小狸说）"
 
 [node name="ChatSend" type="Button" parent="UI/ChatPanel/Margin/VBox/ChatRow" unique_id=873574848]
+visible = false
 layout_mode = 2
 text = "发送"
 
@@ -231,6 +268,11 @@ script = ExtResource("6_memory")
 
 [node name="AwakeningPanel" type="PanelContainer" parent="UI"]
 visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("6_awakening")
 
 [node name="WeekWrapPanel" type="PanelContainer" parent="UI"]
@@ -261,4 +303,27 @@ script = ExtResource("6_name_prompt")
 
 [node name="EndingPanel" type="PanelContainer" parent="UI"]
 visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("6_ending")
+
+[node name="Toast" type="Label" parent="UI"]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -320.0
+offset_top = 70.0
+offset_right = 320.0
+offset_bottom = 112.0
+grow_horizontal = 2
+modulate = Color(1, 1, 1, 0)
+theme_override_colors/font_color = Color(0.28, 0.18, 0.10, 1)
+theme_override_colors/font_outline_color = Color(0.98, 0.95, 0.88, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 20
+text = ""
+horizontal_alignment = 1
+autowrap_mode = 2

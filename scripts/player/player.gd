@@ -14,6 +14,11 @@ const FRAME_SIZE := Vector2i(32, 32)
 var _facing := "down"
 var _focused_plot: FarmPlot = null
 var _movement_locked := false
+var _walk_bounds := Rect2()
+
+
+func set_walk_bounds(rect: Rect2) -> void:
+	_walk_bounds = rect
 
 
 func _ready() -> void:
@@ -25,7 +30,7 @@ func _ready() -> void:
 	_camera.enabled = true
 	_camera.position_smoothing_enabled = true
 	_camera.position_smoothing_speed = 8.0
-	_camera.zoom = Vector2(2.0, 2.0)
+	_camera.zoom = Vector2(1.65, 1.65)
 
 
 func sync_world_position() -> void:
@@ -68,6 +73,9 @@ func _physics_process(_delta: float) -> void:
 		_anim.frame = 0
 
 	move_and_slide()
+	if _walk_bounds.size.x > 1.0 and _walk_bounds.size.y > 1.0:
+		global_position.x = clampf(global_position.x, _walk_bounds.position.x, _walk_bounds.end.x)
+		global_position.y = clampf(global_position.y, _walk_bounds.position.y, _walk_bounds.end.y)
 	_update_plot_hover()
 	_update_interact_cursor()
 
@@ -279,9 +287,16 @@ func _find_nearest_interactable() -> Node2D:
 			continue
 		if node.is_in_group("tree_hollow_interact"):
 			continue
-		var dist := global_position.distance_to((node as Node2D).global_position)
-		if dist <= INTERACT_RANGE and (best == null or dist < best_dist):
+		var target := node as Node2D
+		var center := target.global_position
+		if target.has_method("get_interact_center"):
+			center = target.call("get_interact_center")
+		var range_limit := INTERACT_RANGE
+		if target.is_in_group("shop_interact"):
+			range_limit = 110.0
+		var dist := global_position.distance_to(center)
+		if dist <= range_limit and (best == null or dist < best_dist):
 			best_dist = dist
-			best = node
+			best = target
 
 	return best

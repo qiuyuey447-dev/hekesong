@@ -17,35 +17,25 @@ const ROUTE_LABELS := {
 	ROUTE_BAD_EARLY: "放手",
 }
 
-# 各路线 game_day → 独立 beat_id（不同路线 ID 绝不重复）
+# 十日版日程：D1–D5 序章 → D5 抉择 → D6–D9 路线节点 → D10 觉醒（无日历 beat）
 const DAY_BEATS := {
 	ROUTE_PROLOGUE: {
-		1: "P_N01", 2: "P_N02", 3: "P_N03", 4: "P_N01p", 5: "P_N11", 6: "P_N12", 7: "P_N04",
-		8: "P_N05", 9: "P_N06", 10: "P_N06p",
+		1: "P_N01", 2: "P_N02", 3: "P_N11", 4: "P_N05", 5: "P_N06p",
 	},
 	ROUTE_BAD_EARLY: {
-		1: "BE_N01", 5: "BE_N11", 6: "BE_N12", 8: "BE_N05", 9: "BE_N06",
-		11: "BE_N07",
+		6: "BE_N07",
 	},
 	ROUTE_NORMAL: {
-		11: "NM_N07", 14: "NM_N14n", 15: "NM_N09", 16: "NM_N02p", 17: "NM_N13", 18: "NM_N14",
-		21: "NM_N15", 22: "NM_N16", 23: "NM_N11p", 25: "NM_N17", 27: "NM_N18p", 28: "NM_N08p",
-		29: "NM_N19", 30: "NM_N20a", 32: "NM_N20b", 33: "NM_N33", 34: "NM_N20c",
+		6: "NM_N02p", 7: "NM_N16", 8: "NM_N15", 9: "NM_N20c",
 	},
 	ROUTE_HAPPY: {
-		11: "HP_N07", 14: "HP_N14n", 15: "HP_N09", 16: "HP_N02p", 17: "HP_N13", 18: "HP_N14",
-		21: "HP_N15", 22: "HP_N16", 23: "HP_N11p", 25: "HP_N17", 27: "HP_N18p", 28: "HP_N08p",
-		29: "HP_N19", 30: "HP_N20a", 32: "HP_N20b", 33: "HP_N33", 34: "HP_N20c",
+		6: "HP_N02p", 7: "HP_N16", 8: "HP_N15", 9: "HP_N20c",
 	},
 	ROUTE_TRUE: {
-		11: "TR_N07", 14: "TR_N14n", 15: "TR_N09", 16: "TR_N02p", 17: "TR_N13", 18: "TR_N14",
-		21: "TR_N15", 22: "TR_N16", 23: "TR_N11p", 25: "TR_N17", 27: "TR_N18p", 28: "TR_N08p",
-		29: "TR_N19", 30: "TR_N20a", 32: "TR_N20b", 33: "TR_N33", 34: "TR_N20c",
+		6: "TR_N02p", 7: "TR_N16", 8: "TR_N15", 9: "TR_N20c",
 	},
 	ROUTE_BAD: {
-		11: "BL_N07", 14: "BL_N14n", 15: "BL_N09", 16: "BL_N02p", 17: "BL_N13", 18: "BL_N14",
-		21: "BL_N15", 22: "BL_N16", 23: "BL_N11p", 25: "BL_N17", 27: "BL_N18p", 28: "BL_N08p",
-		29: "BL_N19", 30: "BL_N20a", 32: "BL_N20b", 33: "BL_N33", 34: "BL_N20c",
+		6: "BL_N02p", 7: "BL_N16", 8: "BL_N15", 9: "BL_N20c",
 	},
 }
 
@@ -94,6 +84,9 @@ func should_inject_morning_opening(beat_id: String) -> bool:
 	if is_night_beat(beat_id):
 		return false
 	if GameState.has_pending_absence() and not StoryDirector.is_stranger_mode():
+		return true
+	## 十日版 D4：陌生化需 telegraph 清晨，即使节点正文自洽也要注入
+	if GameState.IS_TEN_DAY_EDITION and beat_id == "P_N05":
 		return true
 	if beat_id in PROLOGUE_SELF_CONTAINED:
 		return false
@@ -177,7 +170,10 @@ func _prologue_def(beat_id: String) -> Dictionary:
 				"steps": [{"title": "登门", "template": "P_N01"}]}
 		"P_N02":
 			return {"node_label": "N02", "emotion": "日常", "recovery": 0.04, "fragment": "", "template": "P_N02",
-				"steps": [{"title": "雨天廊下", "template": "P_N02"}]}
+				"steps": [
+					{"title": "雨天廊下", "template": "P_N02"},
+					{"title": "这块干的", "template": "P_N02_b"},
+				]}
 		"P_N03":
 			return {"node_label": "N03", "emotion": "日常", "recovery": 0.04, "fragment": "", "template": "P_N03",
 				"steps": [
@@ -192,13 +188,19 @@ func _prologue_def(beat_id: String) -> Dictionary:
 				"steps": [{"title": "第一周末", "template": "P_N04"}]}
 		"P_N11":
 			return {"node_label": "N11", "emotion": "约定", "recovery": 0.08, "fragment": "", "template": "P_N11",
-				"steps": [{"title": "约定", "template": "P_N11"}]}
+				"steps": [
+					{"title": "跟浇", "template": "P_N03"},
+					{"title": "约定", "template": "P_N11"},
+				]}
 		"P_N12":
 			return {"node_label": "N12", "emotion": "兑现", "recovery": 0.05, "fragment": "", "template": "P_N12",
 				"steps": [{"title": "约定进行中", "template": "P_N12"}]}
 		"P_N05":
 			return {"node_label": "N05", "emotion": "失去", "recovery": 0.06, "fragment": "", "template": "P_N05",
-				"steps": [{"title": "失去", "template": "P_N05"}]}
+				"steps": [
+					{"title": "失去", "template": "P_N05"},
+					{"title": "垄还认得", "template": "P_N05_b"},
+				]}
 		"P_N06":
 			return {"node_label": "N06", "emotion": "确认", "recovery": 0.08, "fragment": "", "template": "P_N06",
 				"steps": [
@@ -208,7 +210,9 @@ func _prologue_def(beat_id: String) -> Dictionary:
 		"P_N06p":
 			return {"node_label": "N06′", "emotion": "选择", "recovery": 0.05, "fragment": "", "template": "P_N06p",
 				"steps": [
-					{"title": "第二周 · 抉择", "template": "P_N06p"},
+					{"title": "发现本子", "template": "P_N06_a"},
+					{"title": "对不上的日期", "template": "P_N06_b"},
+					{"title": "抉择", "template": "P_N06p"},
 					{"title": "你的选择", "kind": "choice", "choices": [
 						{"id": "w2_keep", "label": StoryNodeCopy.get_choice("w2_keep")},
 						{"id": "w2_expel", "label": StoryNodeCopy.get_choice("w2_expel")},
@@ -232,10 +236,13 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 			emotion = "回转" if prefix != "BL" else "隔雾"
 			steps = [{"title": "帮工来过？", "template": beat_id}]
 		"N02p":
-			emotion = "场景"
+			emotion = "似曾相识" if GameState.IS_TEN_DAY_EDITION else "场景"
 			recovery = 0.08
 			fragment = "F01" if prefix != "BL" else ""
-			steps = [{"title": "雨天廊下", "template": "%s_a" % beat_id}]
+			var n02p_title := "似曾相识" if GameState.IS_TEN_DAY_EDITION else "雨天廊下"
+			steps = [{"title": n02p_title, "template": "%s_a" % beat_id}]
+			if GameState.IS_TEN_DAY_EDITION:
+				steps.append({"title": "手还记得", "template": "%s_b" % beat_id})
 			if fragment != "":
 				steps.append({"title": "登门", "template": "F01", "kind": "fragment"})
 		"N13":
@@ -250,7 +257,7 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 				{"title": "第一粒种", "template": "F02", "kind": "fragment"},
 			]
 		"N15":
-			emotion = "周末"
+			emotion = "本子" if GameState.IS_TEN_DAY_EDITION else "周末"
 			recovery = 0.08
 			fragment = "F03"
 			steps = [
@@ -258,9 +265,15 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 				{"title": "小狸的本子", "template": "F03", "kind": "fragment"},
 			]
 		"N16":
-			emotion = "名字" if prefix != "BL" else "几乎叫出"
+			emotion = "回响" if GameState.IS_TEN_DAY_EDITION else ("名字" if prefix != "BL" else "几乎叫出")
 			recovery = 0.10 if prefix != "BL" else 0.04
-			steps = [{"title": "叫出名字", "template": beat_id}]
+			fragment = "F07" if prefix != "BL" and GameState.IS_TEN_DAY_EDITION else ""
+			var n16_title := "名字与约定" if GameState.IS_TEN_DAY_EDITION else "叫出名字"
+			steps = [{"title": n16_title, "template": beat_id}]
+			if GameState.IS_TEN_DAY_EDITION:
+				steps.append(companion_night_choice_step("夜深了。你可以过去坐下，也可以先回屋。"))
+				if fragment != "":
+					steps.append({"title": "名字", "template": "F07", "kind": "fragment"})
 		"N11p":
 			emotion = "约定"
 			recovery = 0.08
@@ -320,8 +333,11 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 			else:
 				steps.append({"title": "信（未完成）", "template": "%s_b" % beat_id})
 		"N20c":
-			emotion = "前夕" if prefix != "BL" else "雾夜"
-			steps = [{"title": "明天", "template": beat_id}]
+			emotion = "前夜" if GameState.IS_TEN_DAY_EDITION else ("前夕" if prefix != "BL" else "雾夜")
+			var n20c_title := "前夜" if GameState.IS_TEN_DAY_EDITION else "明天"
+			steps = [{"title": n20c_title, "template": beat_id}]
+			if GameState.IS_TEN_DAY_EDITION:
+				steps.append({"title": "灯还亮着", "template": "%s_b" % beat_id})
 		"N08p":
 			emotion = "周末"
 			recovery = 0.05
@@ -380,7 +396,7 @@ func _render_template(beat_id: String, key: String) -> String:
 		return _render_n19_part(beat_id, key, route_tone)
 
 	for suffix in [
-		"_N02p_a", "_N14", "_N15", "_N14n", "_N18p", "_N19", "_N20b_a", "_N20b_b", "_N20c", "_N08p", "_N33",
+		"_N02p_a", "_N02p_b", "_N14", "_N15", "_N14n", "_N18p", "_N19", "_N20b_a", "_N20b_b", "_N20c", "_N20c_b", "_N08p", "_N33",
 	]:
 		if key.ends_with(suffix):
 			if suffix in ["_N20b_a", "_N20b_b"]:
@@ -542,6 +558,9 @@ func render_morning_opening(include_yesterday_echo: bool = false, beat_id: Strin
 		if hint != "":
 			return hint
 
+	if GameState.IS_TEN_DAY_EDITION:
+		return _render_morning_ten_day(include_yesterday_echo, beat_id, sky, companion)
+
 	if week == 2 and day == 1 and not GameState.has_revealed_memory():
 		if beat_id in ["P_N05", "BE_N05"]:
 			return StoryNodeCopy.get_morning("w2_d1_beat_n05")
@@ -651,6 +670,49 @@ func render_morning_opening(include_yesterday_echo: bool = false, beat_id: Strin
 			return StoryNodeCopy.get_morning("generic") % sky
 
 
+func _render_morning_ten_day(
+	include_yesterday_echo: bool,
+	beat_id: String,
+	sky: String,
+	companion: String
+) -> String:
+	var gday := GameState.game_day
+	match gday:
+		1:
+			return StoryNodeCopy.get_morning("t10_d1") % [sky, companion]
+		2:
+			return StoryNodeCopy.get_morning("t10_d2") % sky
+		3:
+			return StoryNodeCopy.get_morning("t10_d3") % [sky, companion]
+		4:
+			return StoryNodeCopy.get_morning("t10_d4_telegraph")
+		5:
+			return StoryNodeCopy.get_morning("t10_d5") % [sky, companion]
+		6:
+			if beat_id.ends_with("_N02p") or beat_id == "BE_N07":
+				return StoryNodeCopy.get_morning("t10_d6_leak") % [sky, companion]
+			return StoryNodeCopy.get_morning("t10_d6") % [sky, companion]
+		7:
+			if beat_id.ends_with("_N16"):
+				return StoryNodeCopy.get_morning("t10_d7_name") % [sky, companion]
+			return StoryNodeCopy.get_morning("t10_d7") % [sky, companion]
+		8:
+			if beat_id.ends_with("_N15"):
+				return StoryNodeCopy.get_morning("t10_d8_notebook") % [sky, companion]
+			return StoryNodeCopy.get_morning("t10_d8") % [sky, companion]
+		9:
+			return StoryNodeCopy.get_morning("t10_d9") % [sky, companion]
+		10:
+			return StoryNodeCopy.get_morning("t10_d10")
+	if include_yesterday_echo and GameState.last_day_summary.strip_edges() != "":
+		if not StoryDirector.is_stranger_mode():
+			var clause := GameState.build_yesterday_echo_hint()
+			if clause == "":
+				clause = StorySlotService.slot("yesterday_echo")
+			return StoryNodeCopy.get_morning("yesterday_echo") % clause
+	return StoryNodeCopy.get_morning("generic") % sky
+
+
 func render_evening_opening(beat_id: String) -> String:
 	var companion := GameState.companion_name
 	var sky := "%s的%s" % [GameState.get_weather_label(), GameState.get_time_label()]
@@ -686,6 +748,9 @@ func render_companion_night_after(beat_id: String, choice_id: String) -> String:
 
 func _companion_night_response_suffix(beat_id: String, choice_id: String) -> String:
 	if beat_id.ends_with("_N14n"):
+		return "_N14n_sit" if choice_id == "companion_sit" else "_N14n_leave"
+	## 十日版 D7：夜选挂在 N16 上，复用树洞陪伴台词
+	if beat_id.ends_with("_N16") and GameState.IS_TEN_DAY_EDITION:
 		return "_N14n_sit" if choice_id == "companion_sit" else "_N14n_leave"
 	if beat_id.ends_with("_N17"):
 		return "_N17_sit" if choice_id == "companion_sit" else "_N17_leave"

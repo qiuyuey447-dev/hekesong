@@ -8,6 +8,35 @@ const STORY_MODE_EVENTS := [
 	"story_beat",
 ]
 
+const CHAT_LIKE_EVENTS := [
+	"player_chat",
+	"session_start",
+	"companion_proactive",
+	"companion_casual",
+	"companion_react",
+	"morning_sidewrite",
+	"story_beat",
+	"task_complete",
+]
+
+const LITERARY_PHRASES := [
+	"雨帘",
+	"隔着雾",
+	"心里发紧",
+	"模模糊糊",
+	"毛玻璃",
+	"像隔着",
+	"隔着一层",
+	"模糊的画面",
+	"隔着雨",
+	"薄雾",
+	"脑子里的雾",
+	"雾里的灯",
+	"行情",
+	"大盘",
+	"售价",
+]
+
 var debug_disable_fact_lock := false
 
 
@@ -18,6 +47,12 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 
 	if event != "companion_feed" and _mentions_forbidden_crop(cleaned):
 		return {"ok": false, "reason": "wrong_crop"}
+
+	if event in CHAT_LIKE_EVENTS and _is_literary_reply(cleaned):
+		return {"ok": false, "reason": "literary"}
+
+	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_action_mismatch_reply(cleaned, payload):
+		return {"ok": false, "reason": "action_mismatch"}
 
 	if debug_disable_fact_lock:
 		return {"ok": true, "text": cleaned}
@@ -105,6 +140,36 @@ func _mentions_forbidden_crop(text: String) -> bool:
 	for crop_name in ["向日葵", "番茄", "蓝莓", "小麦", "玉米", "南瓜"]:
 		if crop_name in text:
 			return true
+	return false
+
+
+func _is_literary_reply(text: String) -> bool:
+	for phrase in LITERARY_PHRASES:
+		if phrase in text:
+			return true
+	return false
+
+
+func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:
+	for phrase in ["包种子", "手头有", "要种几", "种几块", "第二片叶", "第几片叶"]:
+		if phrase in text:
+			return true
+	var snap: Dictionary = payload.get("world_snapshot", {})
+	var companion: Dictionary = snap.get("companion", {}) if snap is Dictionary else {}
+	var loc := str(companion.get("location_name", "")).strip_edges()
+	var activity := str(companion.get("activity", "")).strip_edges()
+	var places := ["商店", "萝卜田", "廊下", "旧屋门口", "树洞", "田埂", "空土垄", "河边", "小径"]
+	for place in places:
+		if loc != "" and place == loc:
+			continue
+		if loc == "旧屋门口" and place == "小径":
+			continue
+		if loc == "廊下" and place in ["旧屋门口", "小径"]:
+			continue
+		if ("我在" + place) in text or ("在" + place + "上") in text or ("在" + place + "边") in text:
+			return true
+	if activity in ["闲逛", "发呆", "待命"] and ("我去浇" in text or "我去种" in text or "我去收" in text):
+		return true
 	return false
 
 

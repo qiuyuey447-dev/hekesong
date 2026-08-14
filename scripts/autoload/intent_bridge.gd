@@ -41,6 +41,11 @@ func should_fallback(local_intent: Dictionary) -> bool:
 		return false
 	if str(local_intent.get("intent", "")) == IntentParser.INTENT_REFUSE:
 		return false
+	if str(local_intent.get("intent", "")) == IntentParser.INTENT_SLEEP:
+		return false
+	var raw_for_sleep := str(local_intent.get("raw_text", "")).strip_edges()
+	if IntentParser.is_explicit_sleep_utterance(raw_for_sleep):
+		return false
 	if IntentParser.is_action_intent(local_intent):
 		if float(local_intent.get("confidence", 0.0)) >= IntentParser.API_SKIP_CONFIDENCE:
 			return false
@@ -115,9 +120,9 @@ func _intent_instruction() -> String:
 		+ "字段：intent(枚举)、plot_id(整数，无则-1)、confidence(0~1)、refuse_kind(仅 intent=refuse 时：sell)。"
 		+ "intent 只能从 allowed_intents 中选。"
 		+ "玩家在委托做事时用 action intent；纯聊天用 chat。"
-		+ "小狸可代做：浇水 water/water_all、种萝卜 plant/plant_all、收萝卜 harvest/harvest_all、去商店 open_shop、看大盘 open_market 等；"
+		+ "小狸可代做：浇水 water/water_all、种萝卜 plant/plant_all、收萝卜 harvest/harvest_all、去商店 open_shop、出售萝卜 open_market 等；"
 		+ "收到委托后会在地图上走过去执行。"
-		+ "仅帮卖 sell 时用 refuse；种萝卜用 plant，不要 refuse plant。"
+		+ "卖萝卜用 open_market；种萝卜用 plant，不要 refuse plant。"
 		+ "参考 world_snapshot.companion 的位置、状态与 capabilities。"
 		+ "示例：{\"intent\":\"harvest\",\"plot_id\":-1,\"confidence\":0.92,\"refuse_kind\":\"\"}"
 	)

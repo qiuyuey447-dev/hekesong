@@ -38,7 +38,8 @@ func setup(
 	companion: Node2D,
 	plot_positions: Dictionary,
 	shop_position: Vector2,
-	path_waypoints: Array[Vector2]
+	path_waypoints: Array[Vector2],
+	pois: Array = []
 ) -> void:
 	_companion = companion
 	_visual = companion
@@ -46,7 +47,13 @@ func setup(
 	_shop_position = shop_position
 	_path_waypoints = path_waypoints.duplicate()
 	_field_center = _compute_field_center()
-	_pois = _build_pois()
+	_pois.clear()
+	if pois.is_empty():
+		_pois = _build_pois()
+	else:
+		for item in pois:
+			if item is Dictionary:
+				_pois.append(item)
 	_ready = _companion != null
 	_update_location_from_position()
 	location_changed.emit(get_snapshot())
@@ -180,7 +187,7 @@ func _finish_work_step() -> void:
 			var plot_ids: Array = _current_job.get("plot_ids", [])
 			var index := int(_current_job.get("index", 0))
 			if index < plot_ids.size():
-				GameState.mark_plot_watered(int(plot_ids[index]))
+				GameState.mark_plot_watered(int(plot_ids[index]), true)
 			_current_job["index"] = index + 1
 			if int(_current_job.get("index", 0)) >= plot_ids.size():
 				_finish_job()
@@ -256,7 +263,7 @@ func skip_current_job() -> void:
 	match kind:
 		"water":
 			for plot_id in _remaining_plot_ids():
-				GameState.mark_plot_watered(int(plot_id))
+				GameState.mark_plot_watered(int(plot_id), true)
 		"harvest":
 			for plot_id in _remaining_plot_ids():
 				var pid := int(plot_id)
@@ -419,11 +426,9 @@ func _compute_field_center() -> Vector2:
 
 func _build_pois() -> Array[Dictionary]:
 	return [
-		{"id": "home", "name": "家门口", "pos": Vector2(266, 215), "radius": 90.0},
-		{"id": "shop", "name": "商店", "pos": _shop_position, "radius": 110.0},
-		{"id": "field", "name": "萝卜田", "pos": _field_center, "radius": 150.0},
-		{"id": "camp", "name": "营地", "pos": Vector2(520, 180), "radius": 85.0},
-		{"id": "pond", "name": "池塘", "pos": Vector2(160, 620), "radius": 95.0},
-		{"id": "log", "name": "空心树桩", "pos": Vector2(480, 380), "radius": 75.0},
-		{"id": "waterfall", "name": "瀑布边", "pos": Vector2(1180, 140), "radius": 90.0},
+		{"id": "home", "name": "旧屋门口", "pos": FarmSetdress.POS_HOME, "radius": 95.0},
+		{"id": "shop", "name": "商店", "pos": _shop_position, "radius": 120.0},
+		{"id": "field", "name": "萝卜田", "pos": _field_center, "radius": 140.0},
+		{"id": "porch", "name": "廊下", "pos": FarmSetdress.POS_PORCH, "radius": 120.0},
+		{"id": "hollow", "name": "树洞", "pos": FarmSetdress.POS_HOLLOW, "radius": 100.0},
 	]

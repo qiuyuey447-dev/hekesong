@@ -5,7 +5,7 @@ const FARM_MAP_SCENE := preload("res://scenes/farm_map.tscn")
 const FOX_TEX := preload("res://Characters/Animals/fox2_16x20.png")
 const FOX_FRAME := Vector2i(16, 20)
 
-const WORLD_FOCUS := Vector2(520, 360)
+const WORLD_FOCUS := Vector2(1080, 500)
 const WORLD_ZOOM := Vector2(1.55, 1.55)
 const TITLE_MAP_BOUNDS := Rect2(64, 108, 520, 380)
 const TITLE_FRAME_MIN_SIZE := Vector2(760, 440)
@@ -116,6 +116,7 @@ func _build_world_background() -> void:
 	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
 	_farm_map = farm_map
 	world.add_child(farm_map)
+	FarmSetdress.apply(farm_map)
 
 	_spawn_title_fox(farm_map)
 	_configure_title_camera(farm_map)
@@ -130,8 +131,10 @@ func _build_world_background() -> void:
 func _sync_world_viewport_size() -> void:
 	if _world_viewport == null:
 		return
-	var size := _get_layout_viewport_size()
-	_world_viewport.size = Vector2i(maxi(1, int(size.x)), maxi(1, int(size.y)))
+	# stretch=true 时由 SubViewportContainer 管尺寸，禁止手动改 size（会刷 WARNING）。
+	if _world_viewport_container == null or not _world_viewport_container.stretch:
+		var size := _get_layout_viewport_size()
+		_world_viewport.size = Vector2i(maxi(1, int(size.x)), maxi(1, int(size.y)))
 	if _farm_map != null:
 		_configure_title_camera(_farm_map)
 	if _world_camera != null:
@@ -195,7 +198,7 @@ func _compute_title_map_bounds(farm_map: Node2D) -> Rect2:
 func _compute_title_frame_rect(farm_map: Node2D, content_bounds: Rect2) -> Rect2:
 	var frame := Rect2()
 	var has_frame := false
-	for marker_name in ["小狸", "人"]:
+	for marker_name in ["小狸", "人", "树洞", "廊下", "商店", "田埂"]:
 		var marker := farm_map.get_node_or_null(marker_name) as Node2D
 		if marker == null:
 			continue
@@ -279,13 +282,11 @@ func _clamp_camera_position(target: Vector2) -> Vector2:
 func _spawn_title_fox(farm_map: Node2D) -> void:
 	_title_fox = Node2D.new()
 	_title_fox.name = "TitleFox"
-	_title_fox.z_index = 2
-
 	var marker := farm_map.get_node_or_null("小狸") as Node2D
 	if marker != null:
 		_title_fox.position = marker.position
 	else:
-		_title_fox.position = Vector2(272, 412)
+		_title_fox.position = FarmSetdress.POS_FOX
 	_title_fox.set_meta("base_x", _title_fox.position.x)
 	_title_fox.set_meta("base_y", _title_fox.position.y)
 	_title_fox.set_meta("base_scale", 3.2)
@@ -314,7 +315,8 @@ func _spawn_title_fox(farm_map: Node2D) -> void:
 	_title_fox.add_child(_fox_body)
 
 	_title_fox.scale = Vector2(3.2, 3.2)
-	farm_map.add_child(_title_fox)
+	var actors := FarmSetdress.ensure_actors(farm_map)
+	actors.add_child(_title_fox)
 
 
 func _build_overlay() -> void:
@@ -486,11 +488,7 @@ func _make_title_text_block() -> Control:
 
 
 func _title_font() -> Font:
-	var font := SystemFont.new()
-	font.font_names = PackedStringArray(["Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC"])
-	font.font_weight = 700
-	font.font_stretch = 105
-	return font
+	return UIFontTheme.get_font()
 
 
 func _make_pill_button(label_text: String) -> Button:
@@ -548,7 +546,12 @@ func _refresh_save_state() -> void:
 	var has_save := GameState.has_save_file()
 	_continue_button.disabled = not has_save
 	if has_save:
-		_save_hint_label.text = "存档：第 %d 天 · 周目 %d" % [GameState.game_day, GameState.get_week_index()]
+		if GameState.is_story_complete():
+			_save_hint_label.text = "十日已收束。重玩这十天，请开新游戏。"
+		elif GameState.IS_TEN_DAY_EDITION:
+			_save_hint_label.text = "存档：第 %d/%d 天" % [GameState.game_day, GameState.FINAL_GAME_DAY]
+		else:
+			_save_hint_label.text = "存档：第 %d 天 · 周目 %d" % [GameState.game_day, GameState.get_week_index()]
 	else:
 		_save_hint_label.text = "尚无存档，请选择「新游戏」"
 

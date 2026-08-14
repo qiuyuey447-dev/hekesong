@@ -1,6 +1,6 @@
 {
 	"enabled": true,
-	"api_url": "http://127.0.0.1:8080/v1/chat",
+	"api_url": "https://xiaoli-api-288258-10-1457975289.sh.run.tcloudbase.com/v1/chat",
 	"api_key": "",
 	"npc_id": "xiaoli",
 	"timeout_sec": 15.0,

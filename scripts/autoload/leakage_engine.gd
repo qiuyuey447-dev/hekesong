@@ -14,6 +14,98 @@ const FAV_LEAK_TREATS := {
 }
 
 
+func try_daily_leak() -> String:
+	## 未点名渗漏：十日版仅 D6–D8；一句真记忆，不编造。
+	var ctx := peek_leak_context()
+	if ctx.is_empty():
+		return ""
+	var line := str(ctx.get("fallback_line", "")).strip_edges()
+	commit_leak_from_context(ctx)
+	if line != "":
+		GameState.record_initiation("leak_session", {
+			"node": str(ctx.get("node_id", "")),
+		}, line)
+	return line
+
+
+func peek_leak_context() -> Dictionary:
+	## 只读：给大模型用这个玩家的真锚点，不消耗漏句。
+	if GameState.IS_TEN_DAY_EDITION:
+		if GameState.game_day < 6 or GameState.game_day > 8:
+			return {}
+	if not _can_leak():
+		return {}
+	if GameState.IS_TEN_DAY_EDITION:
+		for nid in [NODE_N11, NODE_N14, NODE_N07]:
+			if GameState.has_leak_seen(nid):
+				continue
+			var node_anchor := _pick_anchor_for_node(nid)
+			if not node_anchor.is_empty():
+				return _pack_leak_context(node_anchor, nid)
+		var general := _pick_anchor()
+		if not general.is_empty():
+			return _pack_leak_context(general, "")
+		return _pack_prefs_context()
+
+	var week := GameState.get_week_index()
+	var day := GameState.get_loop_day()
+	if week == 3 and day >= 3 and not GameState.has_leak_seen(NODE_N11):
+		var n11 := _pick_anchor_for_node(NODE_N11)
+		if not n11.is_empty():
+			return _pack_leak_context(n11, NODE_N11)
+	if week >= 4 and day >= 2 and not GameState.has_leak_seen(NODE_N14):
+		var n14 := _pick_anchor_for_node(NODE_N14)
+		if not n14.is_empty():
+			return _pack_leak_context(n14, NODE_N14)
+	var anchor := _pick_anchor()
+	if not anchor.is_empty():
+		return _pack_leak_context(anchor, "")
+	return _pack_prefs_context()
+
+
+func commit_leak_from_context(ctx: Dictionary) -> void:
+	if ctx.is_empty():
+		return
+	var node_id := str(ctx.get("node_id", "")).strip_edges()
+	if node_id != "" and not GameState.has_leak_seen(node_id):
+		GameState.mark_leak_seen(node_id)
+
+
+func _pack_leak_context(anchor: Dictionary, node_id: String) -> Dictionary:
+	var summary := str(anchor.get("summary", "")).strip_edges()
+	if summary == "" and node_id != "":
+		summary = _demo_leak_fallback(node_id)
+	if summary == "":
+		return {}
+	return {
+		"available": true,
+		"node_id": node_id,
+		"anchor_id": str(anchor.get("id", "")),
+		"anchor_summary": summary,
+		"anchor_kind": str(anchor.get("kind", "")),
+		"fallback_line": _format_anchor_leak(anchor, node_id, "session") if node_id != "" else _wrap_anchor_summary(summary, "session"),
+	}
+
+
+func _pack_prefs_context() -> Dictionary:
+	var prefs: Dictionary = GameState.long_term_memory.get("prefs", {})
+	var rhythm := str(prefs.get("time_rhythm", "")).strip_edges()
+	var fav := str(prefs.get("fav_crop", "")).strip_edges()
+	var summary := _fallback_from_prefs(GameState.get_week_index()).strip_edges()
+	if summary == "" and rhythm == "" and fav == "":
+		return {}
+	return {
+		"available": true,
+		"node_id": "",
+		"anchor_id": "",
+		"anchor_summary": summary,
+		"anchor_kind": "pref",
+		"time_rhythm": rhythm,
+		"fav_crop": fav,
+		"fallback_line": summary,
+	}
+
+
 func try_session_leak() -> String:
 	if not _can_leak():
 		return ""
@@ -101,7 +193,10 @@ func try_leak_for_react(react_type: String) -> String:
 
 
 func _can_leak() -> bool:
-	if GameState.get_week_index() < MIN_WEEK:
+	if GameState.IS_TEN_DAY_EDITION:
+		if GameState.game_day < 6:
+			return false
+	elif GameState.get_week_index() < MIN_WEEK:
 		return false
 	if GameState.has_revealed_memory():
 		return false

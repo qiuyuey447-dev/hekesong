@@ -49,6 +49,10 @@ func get_morning(key: String) -> String:
 	return _section_text("morning", key)
 
 
+func get_invite(key: String) -> String:
+	return _section_text("invites", key)
+
+
 func get_nudge(key: String) -> String:
 	return _section_text("nudges", key)
 

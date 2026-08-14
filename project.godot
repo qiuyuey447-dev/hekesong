@@ -45,6 +45,7 @@ EndingDirector="*res://scripts/autoload/ending_director.gd"
 RelationshipDirector="*res://scripts/autoload/relationship_director.gd"
 CompanionDirector="*res://scripts/autoload/companion_director.gd"
 CompanionAgent="*res://scripts/autoload/companion_agent.gd"
+UIFontTheme="*res://scripts/autoload/ui_theme.gd"
 
 [display]
 
@@ -56,6 +57,10 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/size/min_width=1280
 window/size/min_height=720
+
+[gui]
+
+theme/default="res://theme_default.tres"
 
 [input]
 

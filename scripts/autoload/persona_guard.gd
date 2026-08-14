@@ -42,8 +42,10 @@ func check_execution_failure(intent: Dictionary, failure: Dictionary) -> String:
 	match reason:
 		"busy":
 			return "我还在忙，稍等一下。"
+		"no_growing":
+			return reply_when_cannot_water()
 		"no_plots":
-			return "今天需要浇的田都浇过了。"
+			return reply_when_already_watered()
 		"plot_already_watered":
 			return "那块田今天已经浇过了。"
 		"plot_not_found":
@@ -59,13 +61,60 @@ func check_execution_failure(intent: Dictionary, failure: Dictionary) -> String:
 		"plot_not_harvestable":
 			return "那块田的萝卜还没熟，或者已经收过了。"
 		"no_seeds":
-			return "背包里没有萝卜种子了，先去商店买点吧。"
+			return "背包里没有萝卜种子了，先去商店买点吧。要不要我帮你去买？"
 		"no_empty_plots":
 			return "现在没有空田可以种。"
 		"plot_not_empty":
 			return "那块田已经有萝卜了，换一块空田吧。"
 		_:
 			return "这个我暂时帮不上，我们换个方式试试。"
+
+
+func reply_when_cannot_water() -> String:
+	## 田里没有在长的作物：实话 + 主动要活。
+	var summary := GameState.get_plot_summary()
+	var empty := int(summary.get("empty", 0))
+	var seeds := int(GameState.get_item_count("turnip_seed"))
+	if empty > 0 and seeds <= 0:
+		return "田里还空着，也没有萝卜种子——浇也浇不到苗上。要不要我去商店买几包，种上再浇？"
+	if empty > 0:
+		return "田里还没有萝卜呢，空田浇水也没用。要不要我先帮你把空田种上？"
+	return "这会儿田里没什么能浇的。要不要我去买种子，还是先歇一会儿？"
+
+
+func reply_when_already_watered() -> String:
+	var summary := GameState.get_plot_summary()
+	var harvestable := int(summary.get("harvestable", 0))
+	if harvestable > 0:
+		return "今天需要浇的田都浇过了。有 %d 块已经能收了，要不要你去看看？" % harvestable
+	return "今天需要浇的田都浇过了。还想让我帮你做什么？种田、买种子都可以说。"
+
+
+func reply_when_cannot_plant() -> String:
+	var summary := GameState.get_plot_summary()
+	var empty := int(summary.get("empty", 0))
+	var seeds := int(GameState.get_item_count("turnip_seed"))
+	if empty <= 0:
+		return "现在没有空田可以种了。要不要我去浇水，还是先歇一会儿？"
+	if seeds <= 0:
+		return "空田还有，可背包里没有萝卜种子。要不要我去商店买几包种上？"
+	return "这会儿还种不了。你再说一次，我再帮你。"
+
+
+func reply_when_cannot_harvest() -> String:
+	if not can_delegate_harvest():
+		return "萝卜得你来收才踏实。不过我可以帮你看哪块田已经熟了。"
+	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+	if harvestable <= 0:
+		return "现在还没有可以收的萝卜。"
+	return "这会儿还走不开，稍等我一下再收。"
+
+
+func reply_when_shop_not_done() -> String:
+	var seeds := int(GameState.get_item_count("turnip_seed"))
+	if seeds <= 0:
+		return "种子还没买呢。要不要我去商店买几包？"
+	return "种子还在背包里，还没新买。要不要我现在去种上？"
 
 
 func can_delegate_water() -> bool:
@@ -83,6 +132,6 @@ func _can_delegate_water() -> bool:
 func _refuse_reply(kind: String) -> String:
 	match kind:
 		"sell":
-			return "卖萝卜得你来定。我可以帮你看行情，或者打开大盘给你参考。"
+			return "好。筐里有的，我帮你换成金币。"
 		_:
 			return "这件事我帮不了，但田和家园的事我还在。"

@@ -20,8 +20,10 @@ const MILESTONE_TRADE_BIG_WIN_PRICE := 15
 const MILESTONE_TRADE_LOW_COINS := 15
 const MILESTONE_TRADE_RISKY_BUY_RATIO := 0.45
 const ABSENCE_MIN_GAP_HOURS := 2
-const STORY_WEEKS := 5
-const FINAL_GAME_DAY := STORY_WEEKS * 7
+## 十日完整版：总天数 10；STORY_WEEKS 仅作旧周逻辑兼容，周结算在十日版关闭。
+const STORY_WEEKS := 2
+const FINAL_GAME_DAY := 10
+const IS_TEN_DAY_EDITION := true
 const CROP_TURNIP := "turnip"
 const MATURE_STAGE := 3
 const SAVE_VERSION := 2
@@ -37,6 +39,9 @@ const WEATHER_LABELS := {
 	WEATHER_SUN: "晴天",
 	WEATHER_RAIN: "雨天",
 }
+# 十日版：D2 雨天廊下强制雨天。
+const STORY_RAIN_DAYS: Array[int] = [2]
+const WEATHER_RAIN_CHANCE := 0.38
 
 const TIME_MORNING := "morning"
 const TIME_NOON := "noon"
@@ -62,6 +67,7 @@ var coins: int = 80
 
 var weather_today: String = WEATHER_SUN
 var weather_tomorrow_hint: String = WEATHER_RAIN
+var weather_seed: int = 0
 var time_of_day: String = TIME_MORNING
 var _period_elapsed: float = 0.0
 var watered_plots: Array[int] = []
@@ -82,12 +88,14 @@ var market_state: Dictionary = {
 
 var short_term_memory: Array[Dictionary] = []
 var recent_chat_turns: Array[Dictionary] = []
-const MAX_CHAT_TURNS := 12
-const MAX_TODAY_CHAT := 16
+const MAX_CHAT_TURNS := 48
+const MAX_TODAY_CHAT := 32
 var today_chat_log: Array[Dictionary] = []
 var feeds_today: int = 0
 var feed_pester_count: int = 0
 var today_feed_replies: Array[String] = []
+var today_water_by_player: int = 0
+var today_water_by_companion: int = 0
 var day_journal: Array[Dictionary] = []
 var long_term_memory: Dictionary = {
 	"prefs": {
@@ -225,6 +233,14 @@ func get_player_name_for_llm() -> String:
 func companion_knows_player_name() -> bool:
 	if not has_player_name_set():
 		return false
+	if has_revealed_memory():
+		return true
+	if IS_TEN_DAY_EDITION:
+		if game_day <= 3:
+			return true
+		if game_day <= 6:
+			return false
+		return has_name_recall_unlocked() or game_day >= 7
 	var week := get_week_index()
 	if week == 1:
 		return true
@@ -242,6 +258,10 @@ func companion_can_say_player_name() -> bool:
 		return false
 	if StoryDirector.is_stranger_mode():
 		return false
+	if IS_TEN_DAY_EDITION:
+		if game_day <= 3:
+			return true
+		return has_name_recall_unlocked()
 	var week := get_week_index()
 	if week == 1:
 		return true
@@ -253,11 +273,13 @@ func companion_can_say_player_name() -> bool:
 func has_name_recall_unlocked() -> bool:
 	if has_revealed_memory():
 		return true
-	if get_week_index() >= 5:
-		return true
 	for node_id in NAME_RECALL_NODES:
 		if is_story_node_seen(node_id):
 			return true
+	if IS_TEN_DAY_EDITION:
+		return game_day >= 7 and bool(get_ending_flags().get("w2_chose_keep", false))
+	if get_week_index() >= 5:
+		return true
 	if get_week_index() >= 4 and game_day >= 22:
 		return true
 	return false
@@ -284,6 +306,11 @@ func get_weather_label(weather: String = weather_today) -> String:
 
 func get_time_label(time_key: String = time_of_day) -> String:
 	return str(TIME_LABELS.get(time_key, "未知时段"))
+
+
+func get_day_period_label() -> String:
+	## 玩家可见：第 X 天 · 清晨 / 正午 / 傍晚 / 夜晚
+	return "第 %d 天 · %s" % [game_day, get_time_label()]
 
 
 func is_night() -> bool:
@@ -342,6 +369,27 @@ func normalize_weather(weather: String) -> String:
 	return WEATHER_SUN
 
 
+func resolve_weather_for_day(day: int) -> String:
+	var safe_day := maxi(day, 1)
+	if safe_day in STORY_RAIN_DAYS:
+		return WEATHER_RAIN
+	return _random_weather_for_day(safe_day)
+
+
+func _random_weather_for_day(day: int) -> String:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%d:%d" % [weather_seed, day])
+	if rng.randf() < WEATHER_RAIN_CHANCE:
+		return WEATHER_RAIN
+	return WEATHER_SUN
+
+
+func _ensure_weather_seed() -> void:
+	if weather_seed != 0:
+		return
+	weather_seed = randi()
+
+
 func advance_time_period() -> bool:
 	var idx := TIME_ORDER.find(time_of_day)
 	if idx < 0:
@@ -380,7 +428,7 @@ func get_seed_buy_price() -> int:
 
 
 func get_turnip_sell_price() -> int:
-	return int(market_state.get("turnip_sell_price", 12))
+	return 12
 
 
 func get_market_snapshot() -> Dictionary:
@@ -571,6 +619,128 @@ func is_companion_nudge_dismissed() -> bool:
 	return str(long_term_memory.get("nudge_dismiss_period", "")) == get_nudge_period_key()
 
 
+func _proactive_rec() -> Dictionary:
+	var rec: Variant = long_term_memory.get("proactive_speech", {})
+	if rec is not Dictionary:
+		rec = {}
+	var data: Dictionary = rec
+	if int(data.get("day", -1)) != game_day:
+		return {
+			"day": game_day,
+			"count": 0,
+			"period": "",
+			"channels": [],
+			"invite_beat": "",
+			"invite_spoken": false,
+			"invite_reminded": false,
+			"pending_invite": "",
+		}
+	return data
+
+
+func _save_proactive_rec(data: Dictionary) -> void:
+	long_term_memory["proactive_speech"] = data
+	memory_changed.emit()
+
+
+func proactive_count_today() -> int:
+	return int(_proactive_rec().get("count", 0))
+
+
+func proactive_period_used() -> bool:
+	var rec := _proactive_rec()
+	return str(rec.get("period", "")) == time_of_day and int(rec.get("count", 0)) > 0
+
+
+func proactive_had_channel(channel: String) -> bool:
+	var channels: Variant = _proactive_rec().get("channels", [])
+	if channels is Array:
+		return channel in channels
+	return false
+
+
+func can_proactive_speech(channel: String) -> bool:
+	if is_story_complete():
+		return false
+	if proactive_period_used():
+		return false
+	if proactive_count_today() >= 2:
+		return false
+	# 闲聊与剧情邀请可错开时段：早上推剧情、傍晚闲聊，或反过来。
+	if channel == "leak" and proactive_had_channel("leak"):
+		return false
+	return true
+
+
+func consume_proactive_speech(channel: String, extra: Dictionary = {}) -> void:
+	var rec := _proactive_rec()
+	rec["day"] = game_day
+	rec["count"] = int(rec.get("count", 0)) + 1
+	rec["period"] = time_of_day
+	var channels: Array = []
+	var raw: Variant = rec.get("channels", [])
+	if raw is Array:
+		channels = raw.duplicate()
+	if channel != "" and channel not in channels:
+		channels.append(channel)
+	rec["channels"] = channels
+	if extra.has("invite_beat"):
+		rec["invite_beat"] = str(extra.get("invite_beat", ""))
+		rec["invite_spoken"] = true
+	if bool(extra.get("remind", false)):
+		rec["invite_reminded"] = true
+	if extra.has("pending_invite"):
+		rec["pending_invite"] = str(extra.get("pending_invite", ""))
+	if extra.has("extra_channel"):
+		var extra_ch := str(extra.get("extra_channel", "")).strip_edges()
+		if extra_ch != "" and extra_ch not in channels:
+			channels.append(extra_ch)
+		rec["channels"] = channels
+	_save_proactive_rec(rec)
+
+
+func get_pending_invite_beat() -> String:
+	return str(_proactive_rec().get("pending_invite", "")).strip_edges()
+
+
+func set_pending_invite_beat(beat_id: String) -> void:
+	var rec := _proactive_rec()
+	rec["pending_invite"] = beat_id.strip_edges()
+	_save_proactive_rec(rec)
+
+
+func clear_pending_invite_beat() -> void:
+	var rec := _proactive_rec()
+	rec["pending_invite"] = ""
+	_save_proactive_rec(rec)
+
+
+func was_invite_spoken_for(beat_id: String) -> bool:
+	var rec := _proactive_rec()
+	return bool(rec.get("invite_spoken", false)) and str(rec.get("invite_beat", "")) == beat_id
+
+
+func was_invite_reminded_for(beat_id: String) -> bool:
+	var rec := _proactive_rec()
+	return bool(rec.get("invite_reminded", false)) and str(rec.get("invite_beat", "")) == beat_id
+
+
+func get_recent_initiation_lines(limit: int = 8) -> Array:
+	var inits: Variant = long_term_memory.get("initiations", [])
+	var out: Array = []
+	if inits is not Array:
+		return out
+	var start := maxi(0, inits.size() - limit)
+	for i in range(start, inits.size()):
+		var item: Variant = inits[i]
+		if item is not Dictionary:
+			continue
+		var said := str(item.get("said", "")).strip_edges()
+		if said != "":
+			out.append(said)
+	return out
+
+
 func record_initiation(trigger: String, facts: Dictionary, said: String = "") -> void:
 	var inits: Array = long_term_memory.get("initiations", [])
 	inits.append({
@@ -731,11 +901,11 @@ func mark_w2_stranger_seen() -> void:
 
 
 func is_awakening_day() -> bool:
-	return get_week_index() == STORY_WEEKS and get_loop_day() == 7
+	return game_day == FINAL_GAME_DAY
 
 
 func is_post_story() -> bool:
-	return game_day > FINAL_GAME_DAY or (has_revealed_memory() and get_week_index() >= STORY_WEEKS)
+	return game_day > FINAL_GAME_DAY or (has_revealed_memory() and game_day >= FINAL_GAME_DAY)
 
 
 func must_finish_awakening_today() -> bool:
@@ -758,6 +928,8 @@ func is_week_last_day() -> bool:
 
 
 func should_show_week_wrap() -> bool:
+	if IS_TEN_DAY_EDITION:
+		return false
 	if not is_week_last_day():
 		return false
 	if must_finish_awakening_today():
@@ -843,9 +1015,9 @@ func mark_awakening_complete(skipped: bool) -> void:
 	long_term_memory["revealed"] = true
 	set_ending_flag("f10_skipped", skipped)
 	add_memory_recovery(0.08)
-	var summary := "第五周最后一天，小狸想起来了。"
+	var summary := "第十天，小狸想起来了。"
 	if skipped:
-		summary = "第五周最后一天，你跳过了觉醒闪回，但小狸仍记下了这一刻。"
+		summary = "第十天，你跳过了觉醒闪回，但小狸仍记下了这一刻。"
 	record_memory_event(
 		"awakening",
 		summary,
@@ -857,16 +1029,20 @@ func mark_awakening_complete(skipped: bool) -> void:
 
 
 func debug_jump_to_d35() -> void:
+	## 兼容旧名：跳到终章日（十日版为 D10）。
 	if is_story_complete():
 		return
 	game_day = FINAL_GAME_DAY
 	time_of_day = TIME_NIGHT
 	_period_elapsed = 0.0
+	weather_today = resolve_weather_for_day(game_day)
+	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 	long_term_memory["awakening_seen"] = false
 	long_term_memory["revealed"] = false
 	save_game()
 	stats_changed.emit()
 	time_changed.emit(time_of_day)
+	atmosphere_changed.emit()
 	debug_awakening_requested.emit()
 
 
@@ -897,8 +1073,9 @@ func _apply_new_game_defaults(player: String, companion: String) -> void:
 	bond = 0
 	mood = 80
 	coins = 80
-	weather_today = WEATHER_SUN
-	weather_tomorrow_hint = WEATHER_RAIN
+	weather_seed = randi()
+	weather_today = resolve_weather_for_day(game_day)
+	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 	time_of_day = TIME_MORNING
 	_period_elapsed = 0.0
 	watered_plots.clear()
@@ -922,7 +1099,6 @@ func _apply_new_game_defaults(player: String, companion: String) -> void:
 	long_term_memory = _default_long_term_memory()
 	_ensure_runtime_defaults()
 	roll_market_for_weather(weather_today)
-	weather_tomorrow_hint = _next_weather_hint()
 
 
 func _default_long_term_memory() -> Dictionary:
@@ -944,6 +1120,7 @@ func _default_long_term_memory() -> Dictionary:
 			"absence_days": 0,
 		},
 		"initiations": [],
+		"proactive_speech": {},
 		"absence_notes": [],
 		"player_busy": 0,
 		"counters": {
@@ -1062,13 +1239,18 @@ func mark_w2_keep_choice() -> void:
 
 
 func should_show_w2_keep_choice() -> bool:
-	if game_day != 10:
+	var choice_day := 5 if IS_TEN_DAY_EDITION else 10
+	if game_day != choice_day:
 		return false
 	var flags := get_ending_flags()
 	return not bool(flags.get("w2_choice_made", false))
 
 
 func get_companion_night_week() -> int:
+	if IS_TEN_DAY_EDITION:
+		if game_day == 7:
+			return 1
+		return 0
 	if game_day == 14:
 		return 2
 	if game_day == 25:
@@ -1428,14 +1610,46 @@ func sell_inventory_item(item_id: String) -> String:
 	stats_changed.emit()
 	record_memory_event(
 		"trade_sell",
-		"你卖出了 1 个萝卜，价格 %d 金币。" % price,
-		0.55,
+		"你把 1 个萝卜换成了 %d 金币。" % price,
+		0.45,
 		{"item_id": item_id, "price": price}
 	)
 	BehaviorCollector.observe_trade_sell(item_id, price)
 	_check_trade_sell_milestone(item_id, price)
 	save_game()
-	return "卖出了 %s，获得 %d 金币。" % [str(item.get("name", item_id)), price]
+	return "卖掉了 %s，换来 %d 金币。" % [str(item.get("name", item_id)), price]
+
+
+func sell_all_turnips() -> Dictionary:
+	var count := get_item_count("turnip")
+	if count <= 0:
+		return {
+			"ok": false,
+			"count": 0,
+			"total": 0,
+			"message": "筐里还没有萝卜。",
+		}
+	var price := get_turnip_sell_price()
+	var total := count * price
+	remove_item("turnip", count)
+	coins += total
+	stats_changed.emit()
+	record_memory_event(
+		"trade_sell",
+		"你们把 %d 个萝卜换成了 %d 金币。" % [count, total],
+		0.55,
+		{"item_id": "turnip", "price": price, "count": count, "total": total}
+	)
+	for _i in range(count):
+		BehaviorCollector.observe_trade_sell("turnip", price)
+	_check_trade_sell_milestone("turnip", price)
+	save_game()
+	return {
+		"ok": true,
+		"count": count,
+		"total": total,
+		"message": "卖掉了 %d 个萝卜，换来 %d 金币。" % [count, total],
+	}
 
 
 func get_owned_treats() -> Array[Dictionary]:
@@ -1684,18 +1898,41 @@ func harvest_turnip(plot_id: int) -> bool:
 		0.7,
 		{"plot_id": plot_id, "crop": CROP_TURNIP, "count": 1}
 	)
+	var promise: Dictionary = long_term_memory.get("promise", {})
+	if not promise.is_empty() and not bool(promise.get("fulfilled", false)):
+		fulfill_promise("萝卜熟了。你们一起看了这片田——约定还在。")
 	set_preference("fav_crop", CROP_TURNIP)
 	companion_world_event.emit("player_harvested", {"plot_id": plot_id, "count": 1})
 	save_game()
 	return true
 
 
-func mark_plot_watered(plot_id: int) -> void:
+func mark_plot_watered(plot_id: int, by_companion: bool = false) -> void:
 	if plot_id not in watered_plots:
 		watered_plots.append(plot_id)
 	var plot := ensure_plot(plot_id)
 	plot["watered"] = true
 	stats_changed.emit()
+	if by_companion:
+		today_water_by_companion += 1
+		if today_water_by_companion == 1:
+			record_memory_event(
+				"task_water",
+				"小狸帮你浇了田。手抬起来，就知道往哪走。",
+				0.45,
+				{"plot_id": plot_id, "by_companion": true}
+			)
+			companion_world_event.emit("companion_watered", {"plot_id": plot_id})
+	else:
+		today_water_by_player += 1
+		if today_water_by_player == 1:
+			record_memory_event(
+				"water",
+				"你浇了田。她在旁边看着。",
+				0.4,
+				{"plot_id": plot_id, "by_companion": false}
+			)
+			companion_world_event.emit("player_watered", {"plot_id": plot_id})
 	save_game()
 
 
@@ -1710,6 +1947,18 @@ func record_chat_turn(role: String, text: String) -> void:
 	today_chat_log.append(turn.duplicate(true))
 	while today_chat_log.size() > MAX_TODAY_CHAT:
 		today_chat_log.remove_at(0)
+	save_game()
+
+
+func get_chat_history_for_ui(limit: int = MAX_CHAT_TURNS) -> Array[Dictionary]:
+	## 供话区重建：优先用跨天 recent，空则回退今日日志。
+	if not recent_chat_turns.is_empty():
+		var count := mini(limit, recent_chat_turns.size())
+		return recent_chat_turns.slice(recent_chat_turns.size() - count, recent_chat_turns.size())
+	if today_chat_log.is_empty():
+		return []
+	var today_count := mini(limit, today_chat_log.size())
+	return today_chat_log.slice(today_chat_log.size() - today_count, today_chat_log.size())
 
 
 func snapshot_today_chat_log() -> Array[Dictionary]:
@@ -1787,6 +2036,8 @@ func fulfill_promise(summary: String) -> void:
 
 func reset_daily_plots() -> void:
 	watered_plots.clear()
+	today_water_by_player = 0
+	today_water_by_companion = 0
 	reset_daily_feed()
 	for key in plot_data.keys():
 		plot_data[key]["watered"] = false
@@ -1808,10 +2059,10 @@ func advance_day() -> void:
 	reset_daily_plots()
 	game_day += 1
 	mood = clampi(mood - 5, 40, 100)
-	if current_loop_day >= 7 and get_week_index() < STORY_WEEKS:
+	if not IS_TEN_DAY_EDITION and current_loop_day >= 7 and get_week_index() < STORY_WEEKS:
 		_reset_for_new_week()
-	weather_today = weather_tomorrow_hint
-	weather_tomorrow_hint = _next_weather_hint()
+	weather_today = resolve_weather_for_day(game_day)
+	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 	time_of_day = TIME_MORNING
 	_period_elapsed = 0.0
 	roll_market_for_weather(weather_today)
@@ -1826,19 +2077,13 @@ func advance_day() -> void:
 
 
 func roll_market_for_weather(weather: String) -> void:
+	market_state["turnip_sell_price"] = 12
+	market_state["trend"] = "stable"
 	match normalize_weather(weather):
 		WEATHER_SUN:
 			market_state["turnip_seed_price"] = 9
-			market_state["turnip_sell_price"] = 13
-			market_state["trend"] = "up"
-		WEATHER_RAIN:
-			market_state["turnip_seed_price"] = 8
-			market_state["turnip_sell_price"] = 15
-			market_state["trend"] = "surge"
 		_:
 			market_state["turnip_seed_price"] = 8
-			market_state["turnip_sell_price"] = 12
-			market_state["trend"] = "stable"
 	atmosphere_changed.emit()
 	market_changed.emit()
 
@@ -2040,8 +2285,12 @@ func _maybe_trigger_reveal() -> void:
 
 
 func _next_weather_hint() -> String:
-	var idx := (game_day + get_week_index()) % WEATHER_ORDER.size()
-	return WEATHER_ORDER[idx]
+	return resolve_weather_for_day(game_day + 1)
+
+
+func _sync_weather_to_story_day() -> void:
+	weather_today = resolve_weather_for_day(game_day)
+	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 
 
 func _plot_key(plot_id: int) -> String:
@@ -2107,12 +2356,10 @@ func _sanitize_story_progress() -> void:
 
 
 func _ensure_runtime_defaults() -> void:
+	_ensure_weather_seed()
+	_sync_weather_to_story_day()
 	weather_today = normalize_weather(weather_today)
 	weather_tomorrow_hint = normalize_weather(weather_tomorrow_hint)
-	if weather_today == "":
-		weather_today = WEATHER_SUN
-	if weather_tomorrow_hint == "":
-		weather_tomorrow_hint = _next_weather_hint()
 	if not TIME_ORDER.has(time_of_day):
 		time_of_day = TIME_MORNING
 	if market_state.is_empty():
@@ -2227,6 +2474,7 @@ func save_game() -> void:
 		"coins": coins,
 		"weather_today": weather_today,
 		"weather_tomorrow_hint": weather_tomorrow_hint,
+		"weather_seed": weather_seed,
 		"time_of_day": time_of_day,
 		"market_state": market_state.duplicate(true),
 		"inventory": inventory.duplicate(),
@@ -2277,6 +2525,7 @@ func load_game() -> void:
 	last_day_summary = str(data.get("last_day_summary", ""))
 	weather_today = normalize_weather(str(data.get("weather_today", weather_today)))
 	weather_tomorrow_hint = normalize_weather(str(data.get("weather_tomorrow_hint", weather_tomorrow_hint)))
+	weather_seed = int(data.get("weather_seed", weather_seed))
 	time_of_day = str(data.get("time_of_day", time_of_day))
 	_period_elapsed = 0.0
 

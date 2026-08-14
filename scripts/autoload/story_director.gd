@@ -47,53 +47,67 @@ func get_worldview_brief(mode: String = "") -> String:
 func get_beat() -> Dictionary:
 	var week := GameState.get_week_index()
 	var day := GameState.get_loop_day()
-	var beat_id := "w%d_d%d" % [week, day]
+	var gday := GameState.game_day
+	var beat_id := "d%d" % gday if GameState.IS_TEN_DAY_EDITION else "w%d_d%d" % [week, day]
 	var hint := ""
 	var goal := ""
 	var proactive := false
 	var mode := get_story_mode()
 
-	match week:
-		1:
-			match day:
-				1:
-					hint = "【不速之客】小狸刚出现，记忆完整；请求留下帮工，语气礼貌小心。"
-					goal = "收留"
-				2:
-					hint = "【日常】雨天廊下；有屋顶、有田，像找到了该留下的地方。"
-					goal = "建立日常"
-				3:
-					hint = "【日常】黄昏看玩家的田，学浇水的节奏；可主动搭话。"
-					goal = "建立日常"
-				4:
-					hint = "【伏笔】小狸记错昨天是否浇过某块田；玩家可留意，不必点破。"
-					goal = "失忆伏笔"
-				5:
-					hint = "【约定】傍晚可提萝卜将熟、一起看；写入本子；不要抢 task_complete 固定台词。"
-					goal = "建立约定"
-				6, 7:
-					hint = "【两个人的家园】约定进行中、萝卜近熟；D7 预告 W2 可能不一样。"
-					goal = "兑现约定"
-		2:
-			if day == 1:
-				hint = "【陌生化】像不认识玩家，礼貌疏远；但对田与旧屋仍有说不清的安全感（隐藏记忆层，不可点破）。"
-				goal = "W2 情感落差"
-			else:
-				hint = "【似曾相识】从陌生中慢慢浮出熟悉感；可隐约觉得「在这干过活」；仍不可直呼玩家名字。"
-				goal = "隐藏记忆渗漏"
-				proactive = day == 4
-		3, 4:
-			hint = "【两个人的家园】会突然断片、问「刚才说到哪」；引用玩家说过的话；玩家会耐心重新介绍。"
-			goal = "记忆与偏好"
-			proactive = day == 1
-		5:
-			hint = "【真相/觉醒】记忆连贯；温柔认出玩家与为何留下；主题「从未离开」；固定演出由 demo 保底，日常台词补充即可。"
-			goal = "觉醒"
-		_:
-			if GameState.is_story_complete():
-				hint = "五周的故事已经落幕。"
-				goal = "完结"
-			else:
+	if GameState.IS_TEN_DAY_EDITION:
+		match gday:
+			1:
+				hint = "【登门】小狸请求留下帮工；取名；语气礼貌小心。"
+				goal = "收留与取名"
+			2:
+				hint = "【雨天廊下】强制雨天；有屋顶、有田，像找到该留下的地方。"
+				goal = "建立日常锚点"
+			3:
+				hint = "【约定】傍晚约定写入本子；须与 set_promise 一致。"
+				goal = "建立约定"
+			4:
+				hint = "【陌生化】像不认识玩家；禁亲昵与具体回忆；田与旧屋仍有说不清的安全感。"
+				goal = "情感落差"
+			5:
+				hint = "【抉择】收留或赶走；影响结局路线。"
+				goal = "玩家选择"
+			6:
+				hint = "【渗漏】似曾相识；可引用一条真实记忆；仍会断片。"
+				goal = "个性化回调"
+				proactive = true
+			7:
+				hint = "【回响】叫名或复述约定；夜树洞陪伴选择。"
+				goal = "名字与陪伴"
+			8:
+				hint = "【本子】日期乱；notebook 摘自 journal。"
+				goal = "失忆物证"
+			9:
+				hint = "【前夜】预告明天有重要的话。"
+				goal = "终章铺垫"
+			10:
+				hint = "【觉醒】记忆拼合；主题「从未离开」；日记蒙太奇用玩家素材。"
+				goal = "觉醒终章"
+			_:
+				if GameState.is_story_complete():
+					hint = "十日的故事已经落幕。"
+					goal = "完结"
+				else:
+					hint = "继续打理萝卜田和家园。"
+					goal = "日常"
+	else:
+		match week:
+			1:
+				match day:
+					1:
+						hint = "【不速之客】小狸刚出现，记忆完整；请求留下帮工，语气礼貌小心。"
+						goal = "收留"
+					2:
+						hint = "【日常】雨天廊下；有屋顶、有田，像找到了该留下的地方。"
+						goal = "建立日常"
+					_:
+						hint = "继续序章日常。"
+						goal = "建立日常"
+			_:
 				hint = "继续打理萝卜田和家园。"
 				goal = "日常"
 
@@ -101,6 +115,7 @@ func get_beat() -> Dictionary:
 		"beat_id": beat_id,
 		"week_index": week,
 		"loop_day": day,
+		"game_day": gday,
 		"hint": hint,
 		"goal": goal,
 		"proactive": proactive,
@@ -114,6 +129,15 @@ func get_story_mode() -> String:
 		return "awaken"
 	if GameState.is_awakening_day() and not GameState.has_seen_awakening():
 		return "awaken"
+	if GameState.IS_TEN_DAY_EDITION:
+		var gday := GameState.game_day
+		if gday in [4, 5]:
+			return "stranger"
+		if gday in [6, 7, 8]:
+			return "leak"
+		if gday >= 9:
+			return "awaken"
+		return "normal"
 	if GameState.get_week_index() == 2 and GameState.get_loop_day() == 1:
 		return "stranger"
 	if GameState.get_week_index() >= 3 and GameState.get_week_index() <= GameState.STORY_WEEKS:
@@ -189,22 +213,27 @@ func _narrative_constraints() -> Array[String]:
 	var mode := get_story_mode()
 	var loop := GameState.get_loop_day()
 
-	constraints.append("回复须符合当前周目与 story_mode，不可自相矛盾或提前剧透未解锁内容")
+	if GameState.IS_TEN_DAY_EDITION:
+		constraints.append("回复须符合当前日程日与 story_mode，不可自相矛盾或提前剧透未解锁内容")
+	else:
+		constraints.append("回复须符合当前周目与 story_mode，不可自相矛盾或提前剧透未解锁内容")
 
 	if mode == "stranger":
-		constraints.append("W2 陌生化：像不认识玩家，不说「又见面了」或具体共同回忆，不亲昵")
+		constraints.append("陌生化：像不认识玩家，不说「又见面了」或具体共同回忆，不亲昵")
 	elif mode == "leak":
-		constraints.append("W3～W4：可隐约熟悉但仍会断片；引用记忆须克制，仍会问「刚才说到哪」")
+		constraints.append("渗漏期：可隐约熟悉但仍会断片；引用记忆须克制，仍会问「刚才说到哪」")
 	elif mode == "awaken":
 		constraints.append("觉醒前后：记忆较连贯，可温柔认出玩家，主题「从未离开」，仍克制不油")
+	elif GameState.IS_TEN_DAY_EDITION and GameState.game_day <= 3:
+		constraints.append("前三日：小狸记忆完整，礼貌请求留下帮工，对田与旧屋有归属感")
 	elif week == 1:
-		constraints.append("W1 序章：小狸记忆完整，礼貌请求留下帮工，对田与旧屋有归属感")
+		constraints.append("序章：小狸记忆完整，礼貌请求留下帮工，对田与旧屋有归属感")
 
-	if week == 2 and loop > 1 and mode != "stranger":
-		constraints.append("W2 中后期：从陌生中渐生熟悉，仍不可过早直呼玩家名字")
+	if mode == "leak" and not GameState.companion_can_say_player_name():
+		constraints.append("渗漏期：仍不可过早直呼玩家名字")
 
-	if not GameState.has_revealed_memory() and week < 5:
-		constraints.append("D35 前禁止直说转世/灵魂/死去宠物/你是 AI")
+	if not GameState.has_revealed_memory() and not GameState.is_awakening_day():
+		constraints.append("觉醒前禁止直说转世/灵魂/死去宠物/你是 AI")
 
 	if not GameState.has_player_name_set():
 		constraints.append("尚未向小狸告知称呼；被问起时不要编造名字或默认「玩家」")
@@ -221,6 +250,37 @@ func _narrative_constraints() -> Array[String]:
 		constraints.append("玩家曾选择赶她走：语气更疏，仍保留复杂情感，勿假装无事发生")
 
 	constraints.append("禁止提及未实现的作物（本游戏仅萝卜田）")
+
+	# 田况硬约束：避免空田却说「去浇水」这类幻觉
+	var plots := GameState.get_plot_summary()
+	var empty := int(plots.get("empty", 0))
+	var growing := int(plots.get("growing", 0))
+	var unwatered := int(plots.get("unwatered_growing", 0))
+	var harvestable := int(plots.get("harvestable", 0))
+	if growing <= 0 and harvestable <= 0:
+		constraints.append(
+			"当前田里没有在生长/可收的萝卜（空田 %d）。禁止说去浇水、正在浇水、浇完了；"
+			% empty
+			+ "若玩家提到浇水，应承认田是空的，并主动问要不要买种子、种上。"
+		)
+	elif unwatered <= 0:
+		constraints.append(
+			"当前生长中的田今天都已浇过或无需浇（可收 %d）。禁止声称还要去浇/正在浇未浇的田。"
+			% harvestable
+		)
+	else:
+		constraints.append("当前有 %d 块田待浇水，可主动提出帮忙浇。" % unwatered)
+
+	var seeds := int(GameState.get_item_count("turnip_seed"))
+	if empty <= 0:
+		constraints.append("当前没有空田。禁止声称正在种/已种好空田。")
+	elif seeds <= 0:
+		constraints.append(
+			"背包没有萝卜种子。禁止声称已买好/已种下；若要种应先问要不要去买种子。"
+		)
+
+	if harvestable <= 0:
+		constraints.append("当前没有可收萝卜。禁止声称正在收/已收完。")
 
 	return constraints
 

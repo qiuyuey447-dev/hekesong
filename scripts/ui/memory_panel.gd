@@ -33,86 +33,46 @@ func close() -> void:
 
 func refresh() -> void:
 	var snapshot := GameState.get_memory_snapshot()
-	_summary_label.text = "周目 %d · 第 %d 天 · 觉醒：%s · %s" % [
-		int(snapshot.get("week_index", 1)),
-		int(snapshot.get("loop_day", 1)),
-		"是" if GameState.has_revealed_memory() else "否",
-		StoryNodeCopy.get_system("fragment_count") % GameState.get_fragment_count(),
-	]
-	_memory_toggle.text = "记忆对比：%s" % ("关闭" if MemoryService.debug_disable_memory else "开启")
-	_fact_toggle.text = "Fact Lock：%s" % ("关闭" if ResponseValidator.debug_disable_fact_lock else "开启")
+	_summary_label.text = "第 %d 天" % GameState.game_day
 
 	_journal_label.text = ""
-	for entry in snapshot.get("day_journal", []):
-		_journal_label.append_text("[color=#9fd3ff]D%d[/color] %s\n" % [
-			int(entry.get("loop_day", 0)),
-			str(entry.get("summary", "")),
-		])
+	var journal_entries: Array = snapshot.get("day_journal", [])
+	if journal_entries.is_empty():
+		_journal_label.append_text("这几天的字，还没写下。")
+	else:
+		for entry in journal_entries:
+			var day_n := int(entry.get("loop_day", entry.get("game_day", 0)))
+			var summary := str(entry.get("summary", "")).strip_edges()
+			if summary == "":
+				continue
+			_journal_label.append_text("第 %d 天\n%s\n\n" % [day_n, summary])
 
 	_memory_label.text = ""
-	for entry in snapshot.get("short_term_memory", []):
-		_memory_label.append_text("[color=#ffd59a]%s[/color] %s\n" % [
-			str(entry.get("id", "")),
-			str(entry.get("summary", "")),
-		])
-
-	_anchor_label.text = ""
 	var long_term: Dictionary = snapshot.get("long_term_memory", {})
-	var prefs: Dictionary = long_term.get("prefs", {})
-	var persona: Dictionary = long_term.get("persona", {})
-	var behavior: Dictionary = long_term.get("behavior_inferred", {})
-	var counters: Dictionary = long_term.get("counters", {})
-	_anchor_label.append_text(
-		"偏好：作物=%s · 节律=%s\n" % [
-			str(prefs.get("fav_crop", "")),
-			str(prefs.get("time_rhythm", "未知")),
-		]
-	)
-	_anchor_label.append_text(
-		"性格：温=%.2f 严=%.2f 主动=%.2f\n" % [
-			float(persona.get("warm", 0.5)),
-			float(persona.get("strict", 0.5)),
-			float(persona.get("active", 0.5)),
-		]
-	)
-	var absence_hours := int(behavior.get("absence_hours", int(behavior.get("absence_days", 0)) * 24))
-	_anchor_label.append_text(
-		"推断：风险=%.2f · 缺席=%s · 驳回=%d\n" % [
-			float(behavior.get("risk", 0.5)),
-			GameState.format_absence_gap(absence_hours) if absence_hours > 0 else "0",
-			int(long_term.get("player_busy", 0)),
-		]
-	)
-	_anchor_label.append_text(
-		"计数：种 %d · 收 %d · 卖 %d · 买种 %d\n" % [
-			int(counters.get("plant_count", 0)),
-			int(counters.get("harvest_count", 0)),
-			int(counters.get("sell_count", 0)),
-			int(counters.get("buy_seed_count", 0)),
-		]
-	)
 	var promise: Dictionary = long_term.get("promise", {})
 	if not promise.is_empty():
-		_anchor_label.append_text("约定：%s（完成=%s）\n" % [
-			str(promise.get("summary", "")),
-			str(promise.get("fulfilled", false)),
-		])
+		_memory_label.append_text("约定\n%s\n\n" % str(promise.get("summary", "")))
+	var name := GameState.get_player_display_name()
+	if name != "":
+		_memory_label.append_text("名字\n%s\n\n" % name)
+	var wrote := false
 	for entry in long_term.get("anchors", []):
-		_anchor_label.append_text("- %s\n" % str(entry.get("summary", "")))
-	for summary_entry in long_term.get("week_summaries", []):
-		if not summary_entry is Dictionary:
+		var line := str(entry.get("summary", "")).strip_edges()
+		if line == "":
 			continue
-		var week_idx := int(summary_entry.get("week_index", 0))
-		var week_summary := str(summary_entry.get("summary", "")).strip_edges()
-		if week_summary != "":
-			_anchor_label.append_text("[color=#b8c6d9]W%d 摘要[/color] %s\n" % [week_idx, week_summary])
+		if not wrote:
+			_memory_label.append_text("记下的\n")
+			wrote = true
+		_memory_label.append_text("· %s\n" % line)
+	if _memory_label.text.strip_edges() == "":
+		_memory_label.append_text("本子还空着。日子过了，字会来。")
 
 	_fragment_label.text = ""
 	for line in StoryBeatDirector.get_fragment_display_lines():
 		if line.begins_with("?"):
-			_fragment_label.append_text("[color=#888888]%s[/color]\n" % line)
+			_fragment_label.append_text("%s\n" % line)
 		else:
-			_fragment_label.append_text("[color=#c9a86c]%s[/color]\n" % line)
+			_fragment_label.append_text("%s\n" % line)
 
 
 func _build_styles() -> void:
@@ -150,7 +110,7 @@ func _build_shell() -> void:
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "记忆时间线"
+	title.text = "她的本子"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Color(0.42, 0.3, 0.18))
@@ -166,17 +126,17 @@ func _build_shell() -> void:
 	root.add_child(columns)
 
 	_journal_label = _make_rich_box("日记")
-	columns.add_child(_wrap_box("最近 7 天", _journal_label))
-	_memory_label = _make_rich_box("短期记忆")
-	columns.add_child(_wrap_box("短期记忆", _memory_label))
-	_anchor_label = _make_rich_box("长期锚点")
-	columns.add_child(_wrap_box("长期锚点", _anchor_label))
+	columns.add_child(_wrap_box("这些日子", _journal_label))
+	_memory_label = _make_rich_box("本子")
+	columns.add_child(_wrap_box("写进去的", _memory_label))
 	_fragment_label = _make_rich_box("记起的片段")
-	columns.add_child(_wrap_box(StoryNodeCopy.get_system("fragment_panel_title"), _fragment_label))
+	columns.add_child(_wrap_box("记起的片段", _fragment_label))
+	_anchor_label = _memory_label
 
 	var toggles := HBoxContainer.new()
 	toggles.alignment = BoxContainer.ALIGNMENT_CENTER
 	toggles.add_theme_constant_override("separation", 10)
+	toggles.visible = OS.is_debug_build()
 	root.add_child(toggles)
 
 	_memory_toggle = Button.new()
@@ -198,7 +158,7 @@ func _build_shell() -> void:
 	toggles.add_child(_fact_toggle)
 
 	_d35_button = Button.new()
-	_d35_button.text = "调试 · 跳到 D35"
+	_d35_button.text = "调试 · 跳到终章日"
 	_d35_button.custom_minimum_size = Vector2(0, 44)
 	_d35_button.add_theme_font_size_override("font_size", 20)
 	_d35_button.pressed.connect(_on_jump_d35_pressed)

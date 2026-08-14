@@ -8,6 +8,7 @@ const SLOT_FALLBACKS := {
 	"crop_label": "萝卜",
 	"item_name": "零食",
 	"notebook_excerpt": "3月？不对……昨天？好像浇过，又好像没有。",
+	"my_notebook_excerpt": "她浇水的样子，她笑起来尾巴翘的角度。",
 	"time_rhythm_hint": "",
 	"first_meet_summary": "她第一次请求留下帮工。",
 	"first_plant_summary": "你们在你的田上种下第一粒种子。",
@@ -135,6 +136,7 @@ func _base_context() -> Dictionary:
 		"crop_label": _crop_label(),
 		"item_name": _last_gift_name(),
 		"notebook_excerpt": _notebook_excerpt(),
+		"my_notebook_excerpt": _my_notebook_excerpt(),
 		"time_rhythm_hint": _time_rhythm_hint(),
 		"first_meet_summary": _pick_memory_line(["story_beat", "name_set"], str(SLOT_FALLBACKS["first_meet_summary"])),
 		"first_plant_summary": _pick_memory_line(["plant", "harvest"], str(SLOT_FALLBACKS["first_plant_summary"])),
@@ -207,6 +209,49 @@ func _notebook_excerpt() -> String:
 			if line != "":
 				return line.substr(0, mini(line.length(), 48))
 	return str(SLOT_FALLBACKS["notebook_excerpt"])
+
+
+func _my_notebook_excerpt() -> String:
+	## 玩家「偷偷记她」的本子摘录：优先取对她的观察 / 与她相关的高亮，与 {notebook_excerpt} 区分开。
+	var her_line := _notebook_excerpt()
+	var companion := GameState.companion_name
+	# ① journal 里 LLM 提炼的「companion_feel」——对她的观察，最贴题
+	for entry in GameState.day_journal:
+		if not entry is Dictionary:
+			continue
+		var feel := str(entry.get("companion_feel", "")).strip_edges()
+		if feel != "" and feel != her_line:
+			return _clean_excerpt(feel)
+	# ② 提到她的日高亮（投喂 / 陪 / 聊天 / 名字）
+	for entry in GameState.day_journal:
+		if not entry is Dictionary:
+			continue
+		var highlights: Variant = entry.get("highlights", [])
+		if highlights is Array:
+			for h in highlights:
+				var line := _clean_excerpt(str(h))
+				if line == "" or line == her_line:
+					continue
+				if companion in line or "投喂" in line or "喂" in line or "陪" in line or "聊" in line:
+					return line
+	# ③ 与她相关的记忆 / 锚点
+	for raw in _all_memory_entries():
+		if not raw is Dictionary:
+			continue
+		if str(raw.get("kind", "")) in ["gift", "chat", "journal_chat", "companion"]:
+			var s := _clean_excerpt(str(raw.get("summary", "")))
+			if s != "" and s != her_line:
+				return s
+	return str(SLOT_FALLBACKS["my_notebook_excerpt"])
+
+
+func _clean_excerpt(text: String) -> String:
+	var cleaned := text.strip_edges()
+	if cleaned.begins_with("聊天 ·"):
+		cleaned = cleaned.trim_prefix("聊天 ·").strip_edges()
+	if cleaned.length() > 44:
+		cleaned = cleaned.substr(0, 44).strip_edges() + "…"
+	return cleaned
 
 
 func _time_rhythm_hint() -> String:

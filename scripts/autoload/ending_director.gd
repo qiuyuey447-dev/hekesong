@@ -8,11 +8,11 @@ const ENDING_BAD := "ending_bad"
 const ENDING_BAD_EARLY := "ending_bad_early"
 
 const ENDING_LABELS := {
-	ENDING_NORMAL: {"title": "安顿之日", "tagline": "今天，她记住了你。"},
-	ENDING_HAPPY: {"title": "共度的农场", "tagline": "这里也是她的家。"},
-	ENDING_TRUE: {"title": "被记住的农场", "tagline": "爱被重新记住了。"},
-	ENDING_BAD: {"title": "雾中离去", "tagline": "雾还在。"},
-	ENDING_BAD_EARLY: {"title": "雾中离去", "tagline": "你选择了放手。"},
+	ENDING_NORMAL: {"title": "安顿之日", "tagline": "今天，壶还热着。"},
+	ENDING_HAPPY: {"title": "廊下的碗", "tagline": "这里也是她的家。"},
+	ENDING_TRUE: {"title": "最后一程", "tagline": "从空白里，把对方找回来。"},
+	ENDING_BAD: {"title": "雾中", "tagline": "最要紧的，又弄丢了。"},
+	ENDING_BAD_EARLY: {"title": "田埂尽头", "tagline": "她没有回头。"},
 }
 
 
@@ -28,11 +28,18 @@ func _resolve_d35_ending(flashback_skipped: bool) -> String:
 	var factors := RelationshipDirector.get_ending_factors()
 	var recovery := float(factors.get("memory_recovery", 0.0))
 	var fragments := int(factors.get("fragments", 0))
-	var flags := GameState.get_ending_flags()
 	var nights := int(factors.get("companionship_nights", 0))
 	var interaction := float(factors.get("interaction_score", 0.0))
-	var chat_days := int(factors.get("chat_days", 0))
 	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
+
+	if GameState.IS_TEN_DAY_EDITION:
+		if recovery < 0.22 or interaction < 0.18 or (nights == 0 and GameState.affection < 12):
+			return ENDING_BAD
+		if _meets_true(flashback_skipped, recovery, fragments, nights, promise, factors):
+			return ENDING_TRUE
+		if _meets_happy(flashback_skipped, recovery, fragments, nights, factors):
+			return ENDING_HAPPY
+		return ENDING_NORMAL
 
 	if recovery < 0.40 or interaction < 0.32 or (nights == 0 and GameState.affection < 25):
 		return ENDING_BAD
@@ -61,6 +68,20 @@ func _meets_true(
 ) -> bool:
 	if flashback_skipped:
 		return false
+	if GameState.IS_TEN_DAY_EDITION:
+		if recovery < 0.48 or fragments < 3:
+			return false
+		if nights < 1 or GameState.bond < 20:
+			return false
+		if promise.is_empty() or not bool(promise.get("fulfilled", false)):
+			return false
+		if GameState.affection < 28:
+			return false
+		if float(factors.get("interaction_score", 0.0)) < 0.40:
+			return false
+		if int(factors.get("chat_days", 0)) < 3:
+			return false
+		return true
 	if recovery < 0.85 or fragments < 10:
 		return false
 	if nights < 2 or GameState.bond < 40:
@@ -87,6 +108,16 @@ func _meets_happy(
 ) -> bool:
 	if flashback_skipped:
 		return false
+	if GameState.IS_TEN_DAY_EDITION:
+		if recovery < 0.35 or fragments < 2:
+			return false
+		if nights < 1 and GameState.affection < 25:
+			return false
+		if float(factors.get("interaction_score", 0.0)) < 0.30:
+			return false
+		if int(factors.get("chat_days", 0)) < 2:
+			return false
+		return true
 	if recovery < 0.75 or fragments < 7:
 		return false
 	if nights < 1 or GameState.affection < 45:
@@ -117,7 +148,7 @@ const ENDING_ARCS := {
 	},
 	ENDING_TRUE: {
 		"name": "归来",
-		"emotion": "爱被重新记住了",
+		"emotion": "从空白里找回来",
 		"fragments": "F01–F10 全集",
 		"f10": "full",
 	},
@@ -364,23 +395,24 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 				{
 					"title": "尾声 · 一",
 					"body": (
-						"第五周的最后一天过去了。\n\n"
-						+ "%s 看着萝卜田，又看看你，像是要把这一刻刻进脑子里。"
-						+ "她记不全所有日子，但记得是你让她留在这里帮工。"
+						"十日过去了。\n\n"
+						+ "%s 把还温着的壶搁回廊下，又回头看你一眼。"
+						+ "她记不清所有的日子。可这把壶，她认得；你，她今天也认得。"
 					) % companion,
 				},
 				{
 					"title": "尾声 · 二",
 					"body": (
-						"「我可能明天又会糊一下。」她小声说，"
-						+ "「但今天——我记得 %s。谢谢你没赶我走。」" % player
+						"「明天，我说不定又会糊涂。」她低声说，"
+						+ "「可今天——我记得 %s。谢谢你，没有嫌我麻烦。」" % player
 					),
 				},
 				{
 					"title": "尾声 · 三",
 					"body": (
-						"农场还是你的。树洞的灯夜里亮着。"
-						+ "你们约定：明天继续把田照顾好。故事没有完美收官，但还在向前。"
+						"夜里，树洞口那盏灯依旧亮着。\n\n"
+						+ "你把两个本子并排搁在枕边——她的，和你的。她不知道你那一本。"
+						+ "这样，无论谁先醒来，至少还有一行字，能把路指回来。"
 					),
 				},
 			]
@@ -389,27 +421,30 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 				{
 					"title": "尾声 · 一",
 					"body": (
-						"%s 能叫出你的名字了。\n\n"
-						+ "她指着田埂说：「是你让我留下来的。这里……也是我的家了。」"
+						"今天，%s 能稳稳地叫出你的名字。\n\n"
+						+ "廊下那只碗还在。她指着碗沿上的一圈水渍笑：「是你把我留下的。这里……也成了我每天要重新认一次的家。」"
 					) % companion,
 				},
 				{
 					"title": "尾声 · 二",
 					"body": (
-						"你们一起收最后一批萝卜，一起数卖来的金币。"
-						+ "她笑得很稳，不像刚来那天那样拘谨。"
+						"你们一起收下最后一茬萝卜。田边那粒她自己种的，还没冒芽。"
+						+ "她蹲在那儿看了很久，再不像初来那天那样，缩着肩、攥着衣角。"
 					),
 				},
 				{
 					"title": "尾声 · 三",
 					"body": (
-						"「就算哪天我又忘了，」%s 说，"
-						+ "「你也知道怎么找到我。你会在田边，我会在。」" % companion
-					),
+						"「就算哪天我又忘了，」%s 望着你说，"
+						+ "「你也知道该怎么把我找回来——碗在廊下，我就在。」"
+					) % companion,
 				},
 				{
 					"title": "尾声 · 四",
-					"body": "你的农场多了一个人。不是客人，是家人。",
+					"body": (
+						"你的田里，从此多了一个要你每天重新认识一次的人。不是过客。\n\n"
+						+ "明天她若又忘了，你会重新告诉她；哪天你若也空成一片，她会重新告诉你。碗还在。种还在。这样，就够了。"
+					),
 				},
 			]
 		ENDING_TRUE:
@@ -420,23 +455,23 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 					"body": _ending_text("epilogue_true_1_body"),
 				},
 				{
-					"title": "你帮她记下的",
+					"title": "你替她记下的",
 					"body": "……\n\n%s" % "\n\n".join(journal_lines),
 				},
 				{
 					"title": "%s想对你说" % companion,
 					"body": (
-						"「我漂泊了很久。是你第一次让我知道："
-						+ "安定不是找到一个地方，是找到会再次收留你的人。」\n\n"
-						+ "%s，我记得你了。若明天我又忘了——请再来找我。"
-						+ "我会再一次，把你看清楚。」" % player
+						"「我走了很久，来了又走。这么多轮，我才敢信——\n\n"
+						+ "被爱不是被记住，是两个都会忘的人，还愿意一次次，从空白里重新把对方认回来。」\n\n"
+						+ "「%s，这一轮，我们都把对方认回来了。哪天又空成一片——别怕。牙印还在壶上。墨还在掌心。我们总能，再找回来。」" % player
 					),
 				},
 				{
 					"title": "尾声",
 					"body": (
-						"农场、树洞、萝卜田——"
-						+ "所有画面都回到了该在的位置。这一回，没有停在雾中。"
+						"临睡前，你把两个本子并排搁好——她那句「不能弄丢这里」，和你写满了她的那一本。"
+						+ "水壶柄上的浅痕还在。无论下一次醒来是否还有，路是留好了的。\n\n"
+						+ "你知道你们都好不了。这或许真是最后一轮。可这一程，你们好好地，把对方认了个够。"
 					),
 				},
 			]
@@ -445,23 +480,23 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 				{
 					"title": "尾声 · 一",
 					"body": (
-						"你让她离开。\n\n"
-						+ "%s 在树洞收拾了小小的包袱，鞠了一躬："
-						+ "「对不起，给你添麻烦了。」" % companion
-					),
+						"你送她走了。\n\n"
+						+ "%s 把活干完，手套叠好，柜角那只碗推了回去。"
+						+ "水壶搁在廊下，还冒着热气。她向你点了点头：「谢谢你收留过我。」"
+					) % companion,
 				},
 				{
 					"title": "尾声 · 二",
 					"body": (
-						"她消失在田埂尽头。之后的日子，你独自浇田、卖萝卜。"
-						+ "农场还在，却安静得过分。"
+						"她沿着田埂往外走。泥还是来时那层泥。这一回，她没有回头。"
+						+ "往后的日子，你独自浇田。田还在，只是安静。"
 					),
 				},
 				{
 					"title": "尾声 · 三",
 					"body": (
-						"你有时会在风里听见脚步声，回头却什么都没有。"
-						+ "雾没有散。故事在这里结束了。"
+						"有时风起，你仿佛听见身后有脚步声。回头，却空无一人。\n\n"
+						+ "那只碗还在柜角。往后就算你也空成一片，也不会再有人，回来把你认出来了。"
 					),
 				},
 			]
@@ -470,9 +505,9 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 				{
 					"title": "尾声 · 一",
 					"body": (
-						"第五周的最后一天，%s 站在田边，眼神空了一截。"
+						"第十天，%s 站在田边，眼神空了一截。"
 						% companion
-						+ "她努力想说什么，最后只挤出一句：「对不起……我又把重要的事弄丢了。」"
+						+ "那只手套还在行李边。她张了张嘴，最后只挤出一句：「对不起……我又把最要紧的事，弄丢了。」"
 					),
 				},
 				{
@@ -482,8 +517,9 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 				{
 					"title": "尾声 · 三",
 					"body": (
-						"树洞的灯忽明忽暗。你守着你的田，"
-						+ "但那个想在这里安定下来的人，终究没能被留住。"
+						"树洞口那盏灯忽明忽暗。田埂外那条空土垄已经干了。"
+						+ "你守着这片田，可那个想在这里安顿的人，终究没能留住。\n\n"
+						+ "树洞口那盏灯，再也没有人为你留着。"
 					),
 				},
 			]
@@ -499,10 +535,10 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 	steps.append({
 		"title": StoryNodeCopy.get_system("credits_title"),
 		"body": (
-			"《河可松 / 七日田居》\n\n"
+			"《河可松》\n\n"
 			+ "策划 · 程序 · 你\n"
 			+ "小狸 · %s\n\n" % companion
-			+ "—— 感谢游玩 ——"
+			+ "—— 这十日到此为止 ——"
 		),
 		"kind": "credits",
 	})

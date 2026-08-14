@@ -69,6 +69,12 @@ func parse(text: String) -> Dictionary:
 		result["matched_terms"] = ["shop_purchase"]
 		return result
 
+	if is_explicit_sleep_utterance(trimmed):
+		result["intent"] = INTENT_SLEEP
+		result["confidence"] = 0.95
+		result["matched_terms"] = ["sleep"]
+		return result
+
 	result["plot_id"] = _extract_plot_id(trimmed, normalized)
 
 	var scores := _score_all_intents(normalized, lower)
@@ -106,6 +112,21 @@ func parse(text: String) -> Dictionary:
 
 func is_action_intent(intent: Dictionary) -> bool:
 	return str(intent.get("intent", INTENT_CHAT)) in ACTION_INTENTS
+
+
+func is_explicit_sleep_utterance(text: String) -> bool:
+	var normalized := _compact(_normalize(text))
+	if normalized == "":
+		return false
+	if "不睡" in normalized or "别睡" in normalized or "没睡" in normalized or "睡得好" in normalized:
+		return false
+	for phrase in [
+		"睡觉吧", "去睡觉", "该睡觉了", "收工睡觉", "进入下一天",
+		"下一天吧", "下一天", "今天结束了", "结束今天",
+	]:
+		if phrase in normalized:
+			return true
+	return normalized in ["睡觉", "睡吧", "晚安", "休息吧", "困了", "去睡"]
 
 
 func looks_like_shop_purchase(text: String) -> bool:
@@ -298,11 +319,11 @@ func get_intent_label(intent_key: String) -> String:
 		INTENT_WATER_ALL:
 			return "浇全部田"
 		INTENT_OPEN_MARKET:
-			return "看大盘"
+			return "出售萝卜"
 		INTENT_OPEN_SHOP:
 			return "打开商店"
 		INTENT_OPEN_MEMORY:
-			return "看记忆"
+			return "翻本子"
 		INTENT_CHECK_STATUS:
 			return "查看田况"
 		INTENT_HELP:
@@ -400,12 +421,7 @@ func _delegate_boost(normalized: String, terms: Array[String]) -> int:
 	return 0
 
 
-func _detect_refuse_kind(normalized: String) -> String:
-	if _match_any(normalized, [
-		"帮我卖", "替我卖", "代卖", "帮卖", "你去卖", "帮忙卖", "卖光", "卖掉",
-		"全部卖", "都卖", "帮我把萝卜卖", "替我把萝卜卖", "帮我出售", "替我出售",
-	]):
-		return "sell"
+func _detect_refuse_kind(_normalized: String) -> String:
 	return ""
 
 
@@ -577,13 +593,9 @@ func _score_market(normalized: String, lower: String) -> Dictionary:
 		return {"score": 0, "terms": []}
 
 	var keywords := {
-		"行情": 9, "大盘": 9, "看大盘": 10, "打开大盘": 10, "农田大盘": 9,
-		"价格": 7, "售价": 8, "卖多少": 8, "多少钱": 7, "什么价": 7,
-		"看看价": 8, "看看行情": 10, "查行情": 9, "查价格": 8,
-		"萝卜价": 9, "萝卜价格": 9, "萝卜售价": 10, "种子价": 8, "种子价格": 8,
-		"今天卖": 6, "能卖多少": 8, "值不值得卖": 8, "现在卖": 6,
-		"涨跌": 7, "涨没涨": 7, "亏还是赚": 6, "赚不赚钱": 6,
-		"交易": 6, "买卖": 6, "挂单": 7, "市价": 7,
+		"卖掉": 12, "卖光": 12, "出售": 11, "都卖": 11, "全部卖": 12,
+		"卖萝卜": 11, "帮我卖": 11, "替我卖": 11, "代卖": 10,
+		"大盘": 8, "看大盘": 8,
 	}
 	var scored := _score_with_terms(normalized, keywords)
 	if "卖" in normalized and _match_any(normalized, ["看看", "查", "多少", "价", "行情", "大盘"]):
@@ -644,7 +656,7 @@ func _score_status(normalized: String) -> Dictionary:
 
 func _score_sleep(normalized: String) -> Dictionary:
 	var keywords := {
-		"睡觉": 9, "睡吧": 9, "去睡觉": 9, "下一天": 10, "进入下一天": 10,
+		"睡觉吧": 12, "睡觉": 9, "睡吧": 9, "去睡觉": 9, "下一天": 10, "进入下一天": 10,
 		"下一天吧": 10, "明天吧": 8, "休息吧": 7, "困了": 7, "晚安": 8,
 		"结束今天": 8, "今天结束了": 8, "收工睡觉": 9,
 	}

@@ -186,11 +186,13 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"include_absence_comeback": bool(extra.get("include_absence_comeback", false)),
 		"market": GameState.get_market_snapshot(),
 		"weather_today": GameState.weather_today,
+		"weather_label": GameState.get_weather_label(),
 		"weather_tomorrow_hint": GameState.weather_tomorrow_hint,
+		"weather_tomorrow_label": GameState.get_weather_label(GameState.weather_tomorrow_hint),
 		"time_of_day": GameState.time_of_day,
 		"time_label": GameState.get_time_label(),
 		"memory_context": memory_context,
-		"recent_chat_turns": GameState.get_recent_chat_turns(8),
+		"recent_chat_turns": extra.get("recent_chat_turns", GameState.get_recent_chat_turns(8)),
 		"world_snapshot": extra.get("world_snapshot", WorldSnapshot.capture(extra)),
 		"companion_profile": WorldSnapshot.get_companion_profile(),
 		"story_hint": _resolve_story_hint(event, extra),
@@ -211,6 +213,18 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"refused": bool(extra.get("refused", false)),
 		"previous_feed_replies": extra.get("previous_replies", []),
 		"feed_pester_count": int(extra.get("pester_count", 0)),
+		"sprout_tier": int(extra.get("sprout_tier", 0)),
+		"sprout_word": str(extra.get("sprout_word", "")),
+		"proactive_intent": str(extra.get("proactive_intent", "")),
+		"proactive_goal": str(extra.get("proactive_goal", "")),
+		"invite_remind": bool(extra.get("invite_remind", false)),
+		"beat_id": str(extra.get("beat_id", "")),
+		"beat_label": str(extra.get("beat_label", "")),
+		"beat_emotion": str(extra.get("beat_emotion", "")),
+		"leak_context": extra.get("leak_context", {}),
+		"seen_nodes": extra.get("seen_nodes", []),
+		"previous_proactive": extra.get("previous_proactive", extra.get("previous_lines", [])),
+		"player_memories": extra.get("player_memories", []),
 	}
 
 
@@ -242,11 +256,13 @@ func _player_chat_intent_instruction() -> String:
 		+ "cited_memory_ids(字符串数组，可选；仅可引用系统提供的 #id，无引用则 [])、"
 		+ "relationship_reason(字符串)。"
 		+ "玩家委托做事时返回对应 action intent：浇水 water/water_all，种萝卜 plant/plant_all，收萝卜 harvest/harvest_all，"
-		+ "去商店 open_shop，看大盘 open_market 等。"
-		+ "仅帮卖 sell 时 intent=refuse；种萝卜可以 plant，不要 refuse plant。"
-		+ "world_snapshot 含 shop/inventory/plot_details，请据此回答；不要编造购买、种植、浇水等未在 game_facts 中发生的事。"
-		+ "代买种子时游戏会另问数量并自动执行，reply 不要声称已购买或已花费金币。"
+		+ "去商店 open_shop，出售萝卜 open_market 等。"
+		+ "卖萝卜可以代做；种萝卜可以 plant，不要 refuse plant。"
+		+ "world_snapshot 含 shop/inventory/plot_details，请据此回答；不要编造购买、种植、浇水、收获等未在 game_facts 中发生的事。"
+		+ "代买种子时游戏会另问数量并自动执行，reply 不要声称已购买、已花费金币、已种好或已浇完。"
+		+ "若口头答应去浇/种/收/买种子/出售/睡觉，请同时返回对应 action intent，便于游戏执行。"
 		+ "禁止在 reply 中提及「点击」「点农田」「派活」等 UI 操作；用「要不要我帮你浇/种/收」自然询问。"
+		+ "主动说话必须符合你现在的位置和正在做的事，禁止报行情。"
 	)
 
 
@@ -363,6 +379,12 @@ func _fallback_for_event(event: String, extra: Dictionary) -> String:
 			)
 		"day_end":
 			return "今天先到这里，明天见。"
+		"morning_sidewrite":
+			return _fallback_companion_casual(extra)
+		"companion_casual":
+			return _fallback_companion_casual(extra)
+		"companion_proactive":
+			return _fallback_companion_casual(extra)
 		"day_journal_summarize":
 			return _fallback_day_journal_summarize(extra)
 		"companion_feed":
@@ -375,6 +397,14 @@ func _fallback_for_event(event: String, extra: Dictionary) -> String:
 			)
 		_:
 			return "嗯，我在。"
+
+
+func _fallback_morning_sidewrite(extra: Dictionary) -> String:
+	return _fallback_companion_casual(extra)
+
+
+func _fallback_companion_casual(extra: Dictionary) -> String:
+	return NpcFallback.proactive_line(extra)
 
 
 func _fallback_day_journal_summarize(extra: Dictionary) -> String:
@@ -503,6 +533,11 @@ func _on_http_completed(
 			call_deferred("_pump_api_queue")
 			return
 		var reason := str(validation.get("reason", ""))
+		if reason == "literary" or reason == "action_mismatch":
+			var literary_fallback := _fallback_for_event(event, extra)
+			reply_ready.emit(request_id, event, literary_fallback, true)
+			call_deferred("_pump_api_queue")
+			return
 		if reason in ["stranger_ooc", "stranger_name", "stranger_intimate", "bad_citation", "name_locked"]:
 			if event in ResponseValidator.STORY_MODE_EVENTS:
 				var stranger_fallback := _fallback_for_event(event, extra)

@@ -68,7 +68,7 @@ func _capture_companion_snapshot() -> Dictionary:
 	else:
 		snap["capabilities"] = [
 			"water", "water_all", "plant", "plant_all", "harvest", "harvest_all",
-			"open_shop", "open_market", "open_memory", "check_status", "help", "sleep",
+			"open_shop", "open_memory", "check_status", "help", "sleep",
 		]
 	var blocked: Variant = profile.get("cannot_delegate", ["sell"])
 	if blocked is Array:

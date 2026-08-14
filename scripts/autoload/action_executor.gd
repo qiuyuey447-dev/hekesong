@@ -66,6 +66,11 @@ func _execute_water(intent: Dictionary) -> Dictionary:
 func _execute_water_all() -> Dictionary:
 	var plot_ids := GameState.get_unwatered_growing_plot_ids()
 	if plot_ids.is_empty():
+		var summary := GameState.get_plot_summary()
+		var growing := int(summary.get("growing", 0))
+		var harvestable := int(summary.get("harvestable", 0))
+		if growing <= 0 and harvestable <= 0:
+			return {"executed": false, "reason": "no_growing"}
 		return {"executed": false, "reason": "no_plots"}
 	if TaskSystem.start_water_task(plot_ids):
 		return {"executed": true, "task_started": true, "plot_ids": plot_ids.duplicate()}
@@ -106,8 +111,13 @@ func _execute_plant(intent: Dictionary) -> Dictionary:
 
 
 func _execute_open_market() -> Dictionary:
-	get_tree().call_group("main_ui", "open_market_from_companion")
-	return {"executed": true, "task_started": false, "opened_market": true}
+	var sold := GameState.sell_all_turnips()
+	return {
+		"executed": true,
+		"task_started": false,
+		"sold": bool(sold.get("ok", false)),
+		"companion_extra": str(sold.get("message", "")),
+	}
 
 
 func _execute_open_shop(intent: Dictionary) -> Dictionary:
@@ -164,16 +174,13 @@ func _execute_open_memory() -> Dictionary:
 func _execute_check_status() -> Dictionary:
 	var snapshot := WorldSnapshot.capture()
 	var plots: Dictionary = snapshot.get("plots", {})
-	var market: Dictionary = snapshot.get("market", {})
 	var inventory: Dictionary = snapshot.get("inventory", {})
 	var lines: PackedStringArray = []
 
 	lines.append(
-		"现在是%s的%s，萝卜售价 %d 金，种子 %d 金。" % [
+		"现在是%s的%s。" % [
 			str(snapshot.get("weather_label", "晴天")),
 			str(snapshot.get("time_label", "清晨")),
-			int(market.get("turnip_sell_price", 0)),
-			int(market.get("turnip_seed_price", 0)),
 		]
 	)
 
@@ -203,8 +210,8 @@ func _execute_help() -> Dictionary:
 		"task_started": false,
 		"companion_extra": (
 			"你可以让我：浇水、把田都浇了、种萝卜、把空田都种了、收萝卜、把萝卜都收了、"
-			+ "去买种子（会问买几包，并自动种上浇水）、打开商店、看大盘、看记忆、问田况、睡觉。"
-			+ "卖萝卜要你自己来。"
+			+ "去买种子、打开商店、翻本子、问田里怎么样、睡觉。"
+			+ "筐里的萝卜要卖的话，跟我说一声，或者打开篮子。"
 		),
 	}
 

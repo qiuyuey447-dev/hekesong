@@ -70,7 +70,7 @@ func get_story_boundaries() -> Dictionary:
 func get_citable_memories(event: String, extra: Dictionary = {}) -> Array[Dictionary]:
 	if debug_disable_memory or StoryDirector.is_stranger_mode():
 		return []
-	if str(event) not in ["player_chat", "task_complete"]:
+	if str(event) not in ["player_chat", "task_complete", "companion_proactive", "companion_casual", "morning_sidewrite"]:
 		return []
 
 	var recent: Array = GameState.get_recent_memories(6)
@@ -90,7 +90,7 @@ func get_citable_memories(event: String, extra: Dictionary = {}) -> Array[Dictio
 		if picked.size() >= MAX_CITABLE:
 			break
 
-	if picked.is_empty() and event == "player_chat":
+	if picked.is_empty() and event in ["player_chat", "companion_proactive", "companion_casual", "morning_sidewrite"]:
 		for entry in anchors.slice(maxi(0, anchors.size() - MAX_CITABLE), anchors.size()):
 			var copy := _as_citable(entry)
 			if copy.is_empty():
@@ -512,5 +512,7 @@ func _memory_matches_event(entry: Dictionary, event: String, player_message: Str
 			return kind in ["chat", "gift", "promise", "harvest", "day_end"]
 		"companion_react":
 			return kind in ["plant", "harvest", "day_end", "promise", "trade_sell", "task_water"]
+		"companion_proactive", "companion_casual", "morning_sidewrite":
+			return kind in ["chat", "gift", "promise", "harvest", "day_end", "story_beat"]
 		_:
 			return false

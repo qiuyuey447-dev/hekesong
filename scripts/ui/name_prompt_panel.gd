@@ -36,7 +36,7 @@ func _on_name_submitted(_text: String) -> void:
 func _submit() -> void:
 	var cleaned := _name_input.text.strip_edges()
 	if cleaned.is_empty():
-		_name_input.placeholder_text = "至少输入一个字哦"
+		_name_input.placeholder_text = "写一个字就行"
 		_name_input.grab_focus()
 		return
 	GameState.set_player_display_name(cleaned)
@@ -76,14 +76,14 @@ func _build_shell() -> void:
 	card.add_child(vbox)
 
 	var title := Label.new()
-	title.text = "%s 想问你" % GameState.companion_name
+	title.text = "%s" % GameState.companion_name
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color(0.32, 0.24, 0.18))
 	vbox.add_child(title)
 
 	var body := Label.new()
-	body.text = "对了……我还不知道怎么称呼你。"
+	body.text = "那……我该怎么称呼你？叫起来别太绕口就行。"
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.add_theme_font_size_override("font_size", 20)
@@ -91,7 +91,7 @@ func _build_shell() -> void:
 	vbox.add_child(body)
 
 	var hint := Label.new()
-	hint.text = "你希望小狸叫你什么"
+	hint.text = "一个名字就好"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 18)
 	hint.add_theme_color_override("font_color", Color(0.5, 0.4, 0.3))
@@ -99,7 +99,7 @@ func _build_shell() -> void:
 
 	_name_input = LineEdit.new()
 	_name_input.custom_minimum_size = Vector2(420, 44)
-	_name_input.placeholder_text = "输入昵称…"
+	_name_input.placeholder_text = "写下你的名字"
 	_name_input.max_length = 12
 	_name_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_name_input.add_theme_font_size_override("font_size", 22)
@@ -119,7 +119,7 @@ func _build_shell() -> void:
 	vbox.add_child(row)
 
 	_confirm_button = Button.new()
-	_confirm_button.text = "就这样叫我"
+	_confirm_button.text = "叫我这个"
 	_confirm_button.add_theme_font_size_override("font_size", 20)
 	var button_style := card_style.duplicate()
 	button_style.bg_color = Color(0.93, 0.78, 0.52, 1.0)

@@ -177,10 +177,6 @@ func _build_shell() -> void:
 	root.add_child(close_button)
 
 
-	close_button.pressed.connect(close)
-	root.add_child(close_button)
-
-
 func _build_quantity_prompt() -> void:
 	_quantity_panel = PanelContainer.new()
 	_quantity_panel.visible = false
