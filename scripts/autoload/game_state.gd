@@ -995,6 +995,11 @@ func must_finish_awakening_today() -> bool:
 	return is_awakening_day() and not has_seen_awakening()
 
 
+func is_pure_narrative_day() -> bool:
+	## D10 觉醒前：纯叙事日，锁种田与商店派活。
+	return must_finish_awakening_today()
+
+
 func should_force_story_finale() -> bool:
 	if is_story_complete():
 		return false
@@ -2097,7 +2102,35 @@ func record_player_chat(text: String) -> void:
 	if "喜欢萝卜" in text or "萝卜" in text:
 		set_preference("fav_crop", CROP_TURNIP)
 	if "约定" in text or "记得告诉我" in text:
-		set_promise("turnip_field", "等萝卜田准备好了告诉你")
+		_maybe_set_promise_from_chat(text.strip_edges())
+
+
+func _maybe_set_promise_from_chat(text: String) -> void:
+	var existing: Dictionary = long_term_memory.get("promise", {})
+	var existing_id := str(existing.get("id", "")).strip_edges()
+	var existing_summary := str(existing.get("summary", "")).strip_edges()
+	if existing_summary != "" and existing_id not in ["", "chat_promise"]:
+		return
+	var line := _extract_promise_from_chat(text)
+	if line == "":
+		return
+	set_promise("chat_promise", line)
+
+
+func _extract_promise_from_chat(text: String) -> String:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return ""
+	for prefix in ["我们约定", "约定", "记得告诉我", "帮我记住"]:
+		var idx := cleaned.find(prefix)
+		if idx >= 0:
+			cleaned = cleaned.substr(idx + prefix.length()).strip_edges()
+			break
+	cleaned = cleaned.trim_prefix("：").trim_prefix(":").trim_prefix("，").trim_prefix(",").strip_edges()
+	cleaned = cleaned.trim_suffix("。").trim_suffix("！").trim_suffix("!").trim_suffix("？").trim_suffix("?").strip_edges()
+	if cleaned.length() > 44:
+		cleaned = cleaned.substr(0, 44).strip_edges() + "…"
+	return cleaned
 
 
 func set_promise(promise_id: String, summary: String) -> void:

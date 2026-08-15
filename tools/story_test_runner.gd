@@ -58,6 +58,12 @@ func _run_ten_day_tests() -> void:
 	_test_ten_day_smoke_keep_path()
 	_test_ten_day_smoke_expel_path()
 	_test_ten_day_dual_save_diff()
+	_test_ten_day_leak_no_fabrication()
+	_test_ten_day_leak_uses_journal()
+	_test_ten_day_promise_slot_empty()
+	_test_ten_day_pure_narrative_lock()
+	_test_ten_day_chat_promise()
+	_test_ten_day_mid_profile_copy()
 
 
 func _test_advance_day_writes_journal() -> void:
@@ -529,6 +535,76 @@ func _test_ten_day_dual_save_diff() -> void:
 	_assert(d7_a != d7_b, "dual D7 lines differ across saves")
 	_assert("阿松专属" not in montage_b and "南瓜" not in montage_b, "dual B montage lacks A journal")
 	_assert(montage_a != montage_b, "dual D10 montage differs across saves")
+
+
+func _test_ten_day_leak_no_fabrication() -> void:
+	GameState.reset_for_new_game()
+	GameState.game_day = 6
+	GameState.long_term_memory["anchors"] = []
+	GameState.short_term_memory.clear()
+	GameState.day_journal.clear()
+	_assert(LeakageEngine.peek_leak_context().is_empty(), "D6 leak empty without real memory")
+	_assert(LeakageEngine.try_leak_line("session") == "", "D6 leak line empty without anchors")
+
+
+func _test_ten_day_leak_uses_journal() -> void:
+	GameState.reset_for_new_game()
+	GameState.game_day = 6
+	GameState.append_day_journal({
+		"day": 3,
+		"summary": "一起浇了萝卜田",
+		"highlights": ["聊天 · 廊下听雨"],
+	})
+	var ctx := LeakageEngine.peek_leak_context()
+	_assert(not ctx.is_empty(), "D6 leak picks journal highlight")
+	_assert("廊下听雨" in str(ctx.get("anchor_summary", "")), "D6 leak journal text preserved")
+
+
+func _test_ten_day_promise_slot_empty() -> void:
+	GameState.reset_for_new_game()
+	var ctx := StorySlotService.build_context()
+	_assert(str(ctx.get("promise.summary", "")) == "", "empty promise slot stays empty")
+
+
+func _test_ten_day_pure_narrative_lock() -> void:
+	GameState.reset_for_new_game()
+	GameState.game_day = 10
+	_assert(GameState.is_pure_narrative_day(), "D10 pre-awakening is pure narrative")
+	_assert(not TaskSystem.start_water_all_task(), "D10 blocks water task before awakening")
+
+
+func _test_ten_day_chat_promise() -> void:
+	GameState.reset_for_new_game()
+	GameState.record_player_chat("我们约定，等萝卜长好了就一起看。")
+	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
+	_assert(str(promise.get("id", "")) == "chat_promise", "chat sets chat_promise id")
+	_assert("萝卜" in str(promise.get("summary", "")), "chat promise uses player words")
+	GameState.set_promise("turnip_field", "D3 约定句")
+	GameState.record_player_chat("约定别的事")
+	var kept: Dictionary = GameState.long_term_memory.get("promise", {})
+	_assert(str(kept.get("summary", "")) == "D3 约定句", "chat does not overwrite D3 promise")
+
+
+func _test_ten_day_mid_profile_copy() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	GameState.affection = 40
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 2
+	var d2_variant := StoryBeatDirector.resolve_beat_variant("P_N02")
+	var d2_mid := StoryRouteData.render_body("P_N02", str(d2_variant.get("variant_id", "P_N02")))
+	var d2_warm := StoryRouteData.render_body("P_N02", "P_N02_warm")
+	var d2_cold := StoryRouteData.render_body("P_N02", "P_N02_cold")
+	_assert("够两个人" in d2_mid, "D2 mid has shared-space line")
+	_assert(d2_mid != d2_warm and d2_mid != d2_cold, "D2 mid differs from warm/cold")
+	GameState.game_day = 7
+	var d7_mid := StoryRouteData.render_body("NM_N16", "NM_N16")
+	_assert("想不起是哪天的" in d7_mid or "没敢靠太近" in d7_mid, "D7 mid has hesitant recall")
+	GameState.affection = 70
+	var d7_warm := StoryRouteData.render_body("NM_N16", "NM_N16")
+	_assert(d7_mid != d7_warm, "D7 mid differs from warm at high affection")
 
 
 func _seed_true_ending_stats() -> void:

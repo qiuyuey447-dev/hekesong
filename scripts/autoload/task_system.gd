@@ -19,7 +19,7 @@ func start_water_all_task() -> bool:
 
 
 func start_water_task(plot_ids: Array[int]) -> bool:
-	if is_busy() or plot_ids.is_empty():
+	if GameState.is_pure_narrative_day() or is_busy() or plot_ids.is_empty():
 		return false
 	if not CompanionAgent.start_water_job(plot_ids.duplicate()):
 		return false
@@ -41,7 +41,7 @@ func start_harvest_all_task() -> bool:
 
 
 func start_harvest_task(plot_ids: Array[int]) -> bool:
-	if is_busy() or plot_ids.is_empty():
+	if GameState.is_pure_narrative_day() or is_busy() or plot_ids.is_empty():
 		return false
 	if not CompanionAgent.start_harvest_job(plot_ids.duplicate()):
 		return false
@@ -53,7 +53,7 @@ func start_harvest_task(plot_ids: Array[int]) -> bool:
 
 
 func start_shop_task(auto_seed_flow: bool = false) -> bool:
-	if is_busy():
+	if GameState.is_pure_narrative_day() or is_busy():
 		return false
 	if not CompanionAgent.start_shop_job(auto_seed_flow):
 		return false
@@ -70,7 +70,7 @@ func start_plant_all_task() -> bool:
 
 
 func start_plant_task(plot_ids: Array[int]) -> bool:
-	if is_busy() or plot_ids.is_empty():
+	if GameState.is_pure_narrative_day() or is_busy() or plot_ids.is_empty():
 		return false
 	if not CompanionAgent.start_plant_job(plot_ids.duplicate()):
 		return false

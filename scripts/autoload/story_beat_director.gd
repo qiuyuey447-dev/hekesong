@@ -920,8 +920,10 @@ func _resolve_n15_variant(beat_id: String, tier: String) -> Dictionary:
 			journal_max_lines = 3
 		"cold":
 			journal_max_lines = 1
+		"mid":
+			journal_max_lines = 2
 		_:
-			journal_max_lines = 3
+			journal_max_lines = 2
 	return {
 		"variant_id": "%s_%s" % [beat_id, profile],
 		"tier": tier,
@@ -1039,6 +1041,11 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 				"title": "写满的页",
 				"template": "_N15_journal",
 			})
+		elif profile == "mid":
+			for step in steps:
+				var tpl := str(step.get("template", ""))
+				if tpl == beat_id:
+					step["template"] = "%s_mid" % beat_id
 		elif profile == "cold":
 			for step in steps:
 				var tpl := str(step.get("template", ""))
@@ -1141,6 +1148,8 @@ func _variant_invite_hint(beat_id: String, variant: Dictionary) -> String:
 				return "【亲密度·贴】敢提约定、敢提写进本子；仍不要整段念信纸。"
 			"cold":
 				return "【亲密度·远】短句、客气，像完成交代，不要撒娇。"
+			"mid":
+				return "【亲密度·中】写半句、念一半；怕忘所以落字，但不把本子推过来。"
 			_:
 				return "【亲密度·近】有约定的心意，留一点余地。"
 	if beat_id in ["P_N02", "BE_N02"]:
@@ -1149,6 +1158,8 @@ func _variant_invite_hint(beat_id: String, variant: Dictionary) -> String:
 				return "【廊下·贴】敢分担干处、敢提「现在有你」；仍不要整段念信纸。"
 			"cold":
 				return "【廊下·远】短句、留距离，不主动靠近。"
+			"mid":
+				return "【廊下·中】让半块干处、红薯推回来；留一步距离，不贴不赶。"
 			_:
 				return "【廊下·常】让干处、红薯照旧；留一点余地。"
 	if beat_id.ends_with("_N02p"):
@@ -1161,6 +1172,8 @@ func _variant_invite_hint(beat_id: String, variant: Dictionary) -> String:
 				return "【叫名·暖】敢叫名字、敢提约定；像等对方忙完。"
 			"cold":
 				return "【叫名·冷】叫不出名，试探道歉；夜戏更疏。"
+			"mid":
+				return "【叫名·中】名字或约定念得出来，却会停顿、留一步；勿写满 warm 的亲密。"
 			_:
 				return "【叫名·中】记得约定或名字之一；不剧透夜选。"
 	if beat_id.ends_with("_N15"):
@@ -1169,6 +1182,8 @@ func _variant_invite_hint(beat_id: String, variant: Dictionary) -> String:
 				return "【本子·满】页多、字多；可提记下的字，不要整段背信纸。"
 			"cold":
 				return "【本子·薄】少页、短句；不要逼近。"
+			"mid":
+				return "【本子·中】几页新字、日期仍乱；描粗的那行在，但不掏你的本子。"
 			_:
 				return "【本子·常】本子还在，日期仍乱。"
 	if beat_id.ends_with("_N20c"):
@@ -1177,6 +1192,8 @@ func _variant_invite_hint(beat_id: String, variant: Dictionary) -> String:
 				return "【前夜·贴】明天有话要说，今晚想靠近；偏私密时段。"
 			"cold":
 				return "【前夜·远】明天 maybe，今晚不要逼太近。"
+			"mid":
+				return "【前夜·中】明天有事想说，今晚收工；留灯、不逼近。"
 			_:
 				return "【前夜·常】明天有事想说，今晚收工就好。"
 	match tier:

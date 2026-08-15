@@ -856,6 +856,10 @@ func render_companion_night_line(beat_id: String, choice_id: String) -> String:
 			var cold := StoryNodeCopy.get_route(key, route_tone, "cold")
 			if cold.strip_edges() != "":
 				return cold
+		elif profile == "mid":
+			var mid := StoryNodeCopy.get_route(key, route_tone, "mid")
+			if mid.strip_edges() != "":
+				return mid
 		elif profile == "warm" and route_tone in ["true", "happy"]:
 			var warm := StoryNodeCopy.get_route(key, route_tone, route_tone)
 			if warm.strip_edges() != "":

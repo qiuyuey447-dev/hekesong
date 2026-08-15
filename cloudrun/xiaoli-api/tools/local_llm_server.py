@@ -1293,6 +1293,19 @@ def _time_context_line(payload: dict[str, Any]) -> str:
     return f"局内时间：第 {game_day} 天{suffix}"
 
 
+def _profile_speech_hint(profile: str, beat_id: str = "") -> str:
+    profile = str(profile or "").strip()
+    if not profile:
+        return ""
+    if profile == "warm":
+        return "贴：敢靠近、敢提约定或名字；仍勿整段念信纸、勿治愈口吻"
+    if profile == "mid":
+        return "中：记得字/约定之一，会停顿、留一步距离；勿写满 warm 的亲密，勿写 cold 的拒人"
+    if profile == "cold":
+        return "远：短句客气、叫不出名、不提约定；勿撒娇勿解释系统"
+    return ""
+
+
 def _beat_context_line(payload: dict[str, Any]) -> str:
     ctx = payload.get("beat_context") or {}
     if not isinstance(ctx, dict):
@@ -1317,6 +1330,9 @@ def _beat_context_line(payload: dict[str, Any]) -> str:
         parts.append(f"亲密度档：{tier}")
     if profile:
         parts.append(f"分支 profile：{profile}")
+        tone_hint = _profile_speech_hint(profile, beat_id)
+        if tone_hint:
+            parts.append(f"profile 语气：{tone_hint}")
     if ctx.get("chat_track") is True:
         parts.append("D6 有聊天轨：可提聊过的字，勿整段背日记")
     elif ctx.get("chat_track") is False and beat_id.endswith("_N02p"):
@@ -1329,6 +1345,8 @@ def _beat_context_line(payload: dict[str, Any]) -> str:
             parts.append("D8 本子薄：少页、短句")
         elif profile == "warm":
             parts.append("D8 本子满：可多提记下的字，勿整段背信纸")
+        elif profile == "mid" or journal_max_lines == 2:
+            parts.append("D8 本子中：几页新字、日期仍乱；勿写满 warm，勿写 cold 的一行")
     if beat_id in ("P_N02", "BE_N02") and profile:
         parts.append(f"D2 廊下 profile={profile}：须与 invite_tone 一致")
     if invite_tone:
@@ -1812,7 +1830,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"这个玩家的近期记忆：{json.dumps(memories, ensure_ascii=False)}" if memories else "",
             "[可引用记忆（引用时必须把 id 写入 cited_memory_ids；无则 []）]",
             _prompt_citable_memories(payload),
-            "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿时；S2 贴=敢靠近、敢提约定。须与 beat_context 的 profile 一致。",
+            "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿、留一步；S2 贴=敢靠近、敢提约定。profile=mid 时取 S1 近、勿写满 S2。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
             f"关系阶段：{rel.get('stage', '?')}，亲密度 {rel.get('affection', '?')}，档 {affection_tier}，段 {sprout_tier}"
             + (f"，状态词「{sprout_word}」可极轻点一下" if sprout_word and sprout_tier >= 2 else "")

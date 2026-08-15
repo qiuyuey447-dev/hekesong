@@ -1091,6 +1091,8 @@ func on_tree_hollow_clicked() -> void:
 func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 	if _is_gameplay_locked():
 		return
+	if _blocks_farm_chores(true):
+		return
 
 	var plot := GameState.get_plot(plot_id)
 	var stage := int(plot.get("stage", 0))
@@ -1131,6 +1133,8 @@ func on_door_clicked() -> void:
 
 
 func on_shop_clicked() -> void:
+	if _blocks_farm_chores(true):
+		return
 	if TaskSystem.is_busy():
 		_hint("她还在忙，等一下。")
 		return
@@ -1361,6 +1365,8 @@ func begin_companion_seed_purchase() -> void:
 
 func open_shop_from_companion() -> void:
 	if _is_gameplay_locked():
+		return
+	if _blocks_farm_chores(true):
 		return
 	if TaskSystem.is_busy():
 		_hint("她还在忙，等一下。")
@@ -1722,12 +1728,37 @@ func _show_citation_feedback(request_id: int, used_fallback: bool) -> void:
 	var cited_ids := NpcBridge.take_cited_memory_ids(request_id)
 	if cited_ids.is_empty():
 		return
+	var line := MemoryService.build_citation_feedback(cited_ids)
+	if line == "":
+		return
+	if _should_show_leak_citation():
+		_append_companion_message(_format_leak_citation(line))
+		return
 	## 记忆引用属于调试信息，不进玩家可见层。
 	if not SHOW_LLM_DEBUG:
 		return
-	var line := MemoryService.build_citation_feedback(cited_ids)
-	if line != "":
-		_debug_note(line)
+	_debug_note(line)
+
+
+func _should_show_leak_citation() -> bool:
+	if not GameState.IS_TEN_DAY_EDITION:
+		return false
+	return GameState.game_day in [6, 7, 8] and StoryDirector.get_story_mode() == "leak"
+
+
+func _format_leak_citation(raw: String) -> String:
+	var cleaned := raw.strip_edges()
+	if cleaned.begins_with("（") and cleaned.ends_with("）"):
+		cleaned = cleaned.substr(1, cleaned.length() - 2).strip_edges()
+	return cleaned
+
+
+func _blocks_farm_chores(show_hint: bool = false) -> bool:
+	if not GameState.is_pure_narrative_day():
+		return false
+	if show_hint:
+		_hint("今天……她好像有很重要的话要说。田先放一放。")
+	return true
 
 
 func _show_api_source_hint(request_id: int, used_fallback: bool) -> void:
