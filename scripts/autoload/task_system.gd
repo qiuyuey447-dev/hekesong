@@ -150,6 +150,5 @@ func _finish_task() -> void:
 	GameState.last_task_summary = summary
 	current_task = TaskType.NONE
 	_target_plot_ids.clear()
-	GameState.advance_time_period()
 	task_completed.emit(finished_task, summary, game_facts)
 	GameState.save_game()

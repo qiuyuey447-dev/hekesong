@@ -121,12 +121,29 @@ func is_explicit_sleep_utterance(text: String) -> bool:
 	if "不睡" in normalized or "别睡" in normalized or "没睡" in normalized or "睡得好" in normalized:
 		return false
 	for phrase in [
-		"睡觉吧", "去睡觉", "该睡觉了", "收工睡觉", "进入下一天",
-		"下一天吧", "下一天", "今天结束了", "结束今天",
+		"睡觉吧", "去睡觉", "该睡觉了", "该睡了", "收工睡觉", "进入下一天",
+		"下一天吧", "下一天", "今天结束了", "结束今天", "睡觉哦", "睡啦", "睡咯",
 	]:
 		if phrase in normalized:
 			return true
-	return normalized in ["睡觉", "睡吧", "晚安", "休息吧", "困了", "去睡"]
+	return normalized in ["睡觉", "睡吧", "晚安", "休息吧", "困了", "去睡", "休息", "睡了"]
+
+
+func looks_like_sleep_request(text: String) -> bool:
+	if is_explicit_sleep_utterance(text):
+		return true
+	var normalized := _compact(_normalize(text))
+	if normalized == "":
+		return false
+	if "不睡" in normalized or "别睡" in normalized or "没睡" in normalized or "睡得好" in normalized:
+		return false
+	for phrase in [
+		"该睡了", "睡啦", "睡咯", "睡觉哦", "去睡吧", "去歇息", "该歇息",
+		"睡觉", "晚安", "休息了", "休息吧", "困了", "入眠",
+	]:
+		if phrase in normalized:
+			return true
+	return false
 
 
 func looks_like_shop_purchase(text: String) -> bool:
@@ -163,6 +180,17 @@ func resolve_misclassified_refuse(intent: Dictionary) -> Dictionary:
 
 
 func merge_intents(local_intent: Dictionary, api_intent: Dictionary, raw_text: String) -> Dictionary:
+	if looks_like_sleep_request(raw_text):
+		return {
+			"intent": INTENT_SLEEP,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": 0.95,
+			"raw_text": raw_text,
+			"matched_terms": ["sleep_guard"],
+			"source": "local",
+		}
+
 	if str(local_intent.get("intent", "")) == INTENT_REFUSE:
 		if is_action_intent(api_intent):
 			var from_api := api_intent.duplicate(true)

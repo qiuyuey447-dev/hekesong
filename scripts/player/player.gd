@@ -1,11 +1,13 @@
 extends CharacterBody2D
 
-const WALK_ATLAS: Texture2D = preload("res://Characters/Farm/farm_walk_atlas_32x32.png")
+const WALK_ATLAS: Texture2D = preload("res://Characters/Farm/farm_walk_atlas_16x20.png")
 
 const MOVE_SPEED := 240.0
 const INTERACT_RANGE := 64.0
 const PLOT_HOVER_RANGE := 30.0
-const FRAME_SIZE := Vector2i(32, 32)
+const FRAME_SIZE := Vector2i(16, 20)
+const WALK_FRAME_COUNT := 3
+const WALK_FOOT_NUDGE := 2.0
 
 @onready var _shadow: Sprite2D = $Shadow
 @onready var _anim: AnimatedSprite2D = $AnimatedSprite2D
@@ -15,6 +17,7 @@ var _facing := "down"
 var _focused_plot: FarmPlot = null
 var _movement_locked := false
 var _walk_bounds := Rect2()
+var _anim_base_y := 0.0
 
 
 func set_walk_bounds(rect: Rect2) -> void:
@@ -28,8 +31,8 @@ func _ready() -> void:
 	_setup_shadow()
 	_setup_animation()
 	_camera.enabled = true
-	_camera.position_smoothing_enabled = true
-	_camera.position_smoothing_speed = 8.0
+	_camera.position_smoothing_enabled = false
+	_camera.position = Vector2.ZERO
 	_camera.zoom = Vector2(1.65, 1.65)
 
 
@@ -58,6 +61,8 @@ func _physics_process(_delta: float) -> void:
 		_anim.stop()
 		_anim.frame = 0
 		move_and_slide()
+		global_position = global_position.round()
+		_sync_sprite_footing()
 		_update_plot_hover()
 		_update_interact_cursor()
 		return
@@ -76,6 +81,8 @@ func _physics_process(_delta: float) -> void:
 	if _walk_bounds.size.x > 1.0 and _walk_bounds.size.y > 1.0:
 		global_position.x = clampf(global_position.x, _walk_bounds.position.x, _walk_bounds.end.x)
 		global_position.y = clampf(global_position.y, _walk_bounds.position.y, _walk_bounds.end.y)
+	global_position = global_position.round()
+	_sync_sprite_footing()
 	_update_plot_hover()
 	_update_interact_cursor()
 
@@ -155,17 +162,27 @@ func _setup_animation() -> void:
 		frames.add_animation(anim_name)
 		frames.set_animation_speed(anim_name, 8.0)
 		frames.set_animation_loop(anim_name, true)
-		for col in range(4):
+		for col in range(WALK_FRAME_COUNT):
 			var atlas := AtlasTexture.new()
 			atlas.atlas = WALK_ATLAS
 			atlas.region = Rect2(col * FRAME_SIZE.x, row * FRAME_SIZE.y, FRAME_SIZE.x, FRAME_SIZE.y)
+			atlas.filter_clip = true
 			frames.add_frame(anim_name, atlas)
 
 	_anim.sprite_frames = frames
 	_anim.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_anim.centered = false
-	_anim.offset = Vector2(-16, -28)
+	_anim.offset = Vector2(-8, -18)
 	_anim.play("down")
+
+
+func _sync_sprite_footing() -> void:
+	if _anim == null:
+		return
+	if velocity.length() > 8.0 and _anim.is_playing() and _anim.frame > 0:
+		_anim.position.y = _anim_base_y + WALK_FOOT_NUDGE
+	else:
+		_anim.position.y = _anim_base_y
 
 
 func _update_facing(input_dir: Vector2) -> void:

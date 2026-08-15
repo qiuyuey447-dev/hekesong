@@ -303,6 +303,20 @@ static func casual_chat(
 	return "……我在。你忙的话，我就在旁边。"
 
 
+static func proactive_chase_line(previous: Array = []) -> String:
+	var pool: Array = [
+		"等我一下！",
+		"别跑啦——",
+		"你跑太快啦……",
+		"等等我嘛。",
+		"我有话要说！",
+		"喂——听我说一句。",
+		"别走嘛，就一句。",
+		"等等——",
+	]
+	return pick_non_duplicate(pool, previous)
+
+
 static func proactive_line(extra: Dictionary) -> String:
 	## 仅 API 不可用时的兜底。说话跟此刻位置、行动对上。
 	var previous: Array = extra.get("previous_proactive", extra.get("previous_lines", []))
@@ -319,9 +333,23 @@ static func proactive_line(extra: Dictionary) -> String:
 		if leak_line != "":
 			return leak_line
 	if intent == "invite":
+		var beat_ctx: Dictionary = extra.get("beat_context", {})
+		var profile := str(beat_ctx.get("profile", extra.get("beat_profile", ""))).strip_edges()
+		var tier := str(beat_ctx.get("affection_tier", extra.get("affection_tier", ""))).strip_edges()
 		var weather := str(extra.get("weather", GameState.weather_today))
 		var tod := str(extra.get("time_of_day", GameState.time_of_day))
 		var beat := str(extra.get("beat_emotion", extra.get("beat_label", ""))).strip_edges()
+		if profile == "cold" or tier == GameState.AFFECTION_TIER_COLD:
+			return pick_non_duplicate([
+				"……你方便的话，过来一下。我有句话，不太会讲。",
+				"等你忙完。不用急。",
+			], previous)
+		if profile == "warm" or tier == GameState.AFFECTION_TIER_WARM:
+			if tod == GameState.TIME_EVENING:
+				return pick_non_duplicate([
+					"傍晚了。你过来一下——我有句话，想现在就说。",
+					"苗齐了。你别走远，听我说个笨主意。",
+				], previous)
 		if summary != "" and str(extra.get("story_mode", "")) == "leak":
 			return "刚才……%s。你过来一下。" % summary
 		if weather == GameState.WEATHER_RAIN:

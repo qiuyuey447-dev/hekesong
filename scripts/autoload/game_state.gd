@@ -14,6 +14,12 @@ signal milestone_trigger(milestone_id: String, facts: Dictionary)
 const STAGE_STRANGER := "stranger"
 const STAGE_FAMILIAR := "familiar"
 const STAGE_BOND := "bond"
+## 剧情分支档位（Phase 1）：S0 远 / S1 近 / S2 贴
+const AFFECTION_TIER_COLD := "S0"
+const AFFECTION_TIER_MID := "S1"
+const AFFECTION_TIER_WARM := "S2"
+const AFFECTION_TIER_MID_MIN := 25
+const AFFECTION_TIER_WARM_MIN := 55
 const MILESTONE_AFFECTION_FAMILIAR := 30
 const MILESTONE_AFFECTION_BOND := 60
 const MILESTONE_TRADE_BIG_WIN_PRICE := 15
@@ -49,13 +55,20 @@ const TIME_EVENING := "evening"
 const TIME_NIGHT := "night"
 const TIME_ORDER := [TIME_MORNING, TIME_NOON, TIME_EVENING, TIME_NIGHT]
 const TIME_LABELS := {
-	TIME_MORNING: "清晨",
-	TIME_NOON: "正午",
+	TIME_MORNING: "白天",
+	TIME_NOON: "白天",
 	TIME_EVENING: "傍晚",
 	TIME_NIGHT: "夜晚",
 }
-## 每个时段自动流逝秒数；到夜晚后暂停，等“下一天”。
-const PERIOD_SECONDS := 75.0
+## 一日总时长（秒）：白天 1 · 傍晚 0.5 · 夜晚 1 → 72s / 36s / 72s。
+const DAY_CYCLE_SECONDS := 180.0
+const PERIOD_WEIGHT_DAY := 1.0
+const PERIOD_WEIGHT_EVENING := 0.5
+const PERIOD_WEIGHT_NIGHT := 1.0
+const PERIOD_WEIGHT_SUM := PERIOD_WEIGHT_DAY + PERIOD_WEIGHT_EVENING + PERIOD_WEIGHT_NIGHT
+const PLAYABLE_TIME_ORDER := [TIME_MORNING, TIME_EVENING, TIME_NIGHT]
+
+signal sleep_prompt_requested
 
 var player_name: String = ""
 var companion_name: String = "小狸"
@@ -70,6 +83,7 @@ var weather_tomorrow_hint: String = WEATHER_RAIN
 var weather_seed: int = 0
 var time_of_day: String = TIME_MORNING
 var _period_elapsed: float = 0.0
+var _awaiting_sleep: bool = false
 var watered_plots: Array[int] = []
 var inventory: Dictionary = {
 	"turnip_seed": 5,
@@ -168,12 +182,20 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if is_story_complete():
 		return
-	if time_of_day == TIME_NIGHT:
+	if _awaiting_sleep:
 		return
 	_period_elapsed += delta
-	if _period_elapsed < PERIOD_SECONDS:
+	StoryBeatDirector.check_schedule()
+	if _period_elapsed < get_period_seconds():
 		return
 	_period_elapsed = 0.0
+	if time_of_day == TIME_NIGHT:
+		StoryBeatDirector.check_schedule()
+		_awaiting_sleep = true
+		sleep_prompt_requested.emit()
+		stats_changed.emit()
+		save_game()
+		return
 	advance_time_period()
 
 
@@ -183,6 +205,23 @@ func get_stage() -> String:
 	if affection >= 30:
 		return STAGE_FAMILIAR
 	return STAGE_STRANGER
+
+
+func get_affection_tier() -> String:
+	if affection >= AFFECTION_TIER_WARM_MIN:
+		return AFFECTION_TIER_WARM
+	if affection >= AFFECTION_TIER_MID_MIN:
+		return AFFECTION_TIER_MID
+	return AFFECTION_TIER_COLD
+
+
+func chatted_today() -> bool:
+	if not today_chat_log.is_empty():
+		return true
+	var signals: Variant = long_term_memory.get("relationship_signals", {})
+	if signals is Dictionary:
+		return int(signals.get("last_chat_day", 0)) == game_day
+	return false
 
 
 func get_loop_day() -> int:
@@ -309,8 +348,49 @@ func get_time_label(time_key: String = time_of_day) -> String:
 
 
 func get_day_period_label() -> String:
-	## 玩家可见：第 X 天 · 清晨 / 正午 / 傍晚 / 夜晚
+	## 玩家可见：第 X 天 · 白天 / 傍晚 / 夜晚
 	return "第 %d 天 · %s" % [game_day, get_time_label()]
+
+
+func get_time_context_for_llm() -> Dictionary:
+	## 传给 LLM 的局内日历/时段事实（与 HUD 一致）。
+	return {
+		"game_day": game_day,
+		"time_of_day": time_of_day,
+		"time_label": get_time_label(),
+		"day_period_label": get_day_period_label(),
+		"awaiting_sleep": _awaiting_sleep,
+		"can_manual_sleep": can_manual_sleep(),
+	}
+
+
+func get_period_elapsed() -> float:
+	return _period_elapsed
+
+
+func get_period_seconds(time_key: String = time_of_day) -> float:
+	var weight := PERIOD_WEIGHT_DAY
+	match time_key:
+		TIME_EVENING:
+			weight = PERIOD_WEIGHT_EVENING
+		TIME_NIGHT:
+			weight = PERIOD_WEIGHT_NIGHT
+		TIME_NOON:
+			weight = PERIOD_WEIGHT_DAY
+	return DAY_CYCLE_SECONDS * weight / PERIOD_WEIGHT_SUM
+
+
+func is_awaiting_sleep() -> bool:
+	return _awaiting_sleep
+
+
+func can_manual_sleep() -> bool:
+	return time_of_day == TIME_NIGHT or _awaiting_sleep
+
+
+func notify_sleep_sequence_started() -> void:
+	_awaiting_sleep = false
+	_period_elapsed = 0.0
 
 
 func is_night() -> bool:
@@ -391,16 +471,19 @@ func _ensure_weather_seed() -> void:
 
 
 func advance_time_period() -> bool:
-	var idx := TIME_ORDER.find(time_of_day)
+	var idx := PLAYABLE_TIME_ORDER.find(time_of_day)
 	if idx < 0:
-		time_of_day = TIME_MORNING
+		if time_of_day == TIME_NOON:
+			time_of_day = TIME_EVENING
+		else:
+			time_of_day = TIME_MORNING
 		_period_elapsed = 0.0
 		_emit_time_changed()
 		save_game()
 		return true
-	if idx >= TIME_ORDER.size() - 1:
+	if idx >= PLAYABLE_TIME_ORDER.size() - 1:
 		return false
-	time_of_day = TIME_ORDER[idx + 1]
+	time_of_day = PLAYABLE_TIME_ORDER[idx + 1]
 	_period_elapsed = 0.0
 	_emit_time_changed()
 	save_game()
@@ -1078,6 +1161,7 @@ func _apply_new_game_defaults(player: String, companion: String) -> void:
 	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 	time_of_day = TIME_MORNING
 	_period_elapsed = 0.0
+	_awaiting_sleep = false
 	watered_plots.clear()
 	inventory = {
 		"turnip_seed": 5,
@@ -2065,6 +2149,7 @@ func advance_day() -> void:
 	weather_tomorrow_hint = resolve_weather_for_day(game_day + 1)
 	time_of_day = TIME_MORNING
 	_period_elapsed = 0.0
+	_awaiting_sleep = false
 	roll_market_for_weather(weather_today)
 	_maybe_trigger_reveal()
 	day_advanced.emit()
@@ -2361,6 +2446,8 @@ func _ensure_runtime_defaults() -> void:
 	weather_today = normalize_weather(weather_today)
 	weather_tomorrow_hint = normalize_weather(weather_tomorrow_hint)
 	if not TIME_ORDER.has(time_of_day):
+		time_of_day = TIME_MORNING
+	elif time_of_day == TIME_NOON:
 		time_of_day = TIME_MORNING
 	if market_state.is_empty():
 		roll_market_for_weather(weather_today)

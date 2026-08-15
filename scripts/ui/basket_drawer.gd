@@ -148,10 +148,12 @@ func refresh() -> void:
 	_seed_value.text = str(GameState.get_item_count("turnip_seed"))
 	_turnip_value.text = str(GameState.get_item_count("turnip"))
 	_treat_value.text = str(_count_treats())
-	if GameState.is_night():
-		_sleep_button.text = "睡觉"
+	if GameState.is_awaiting_sleep() or GameState.can_manual_sleep():
+		_sleep_button.text = "立马睡觉" if GameState.is_awaiting_sleep() else "睡觉"
+		_sleep_button.disabled = false
 	else:
-		_sleep_button.text = "下一天"
+		_sleep_button.text = "还不到睡"
+		_sleep_button.disabled = true
 	if _day_chip:
 		_day_chip.text = GameState.get_day_period_label()
 	_refresh_today()

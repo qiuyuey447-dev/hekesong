@@ -121,11 +121,14 @@ func get_beat_def(beat_id: String) -> Dictionary:
 func render_body(beat_id: String, template_key: String = "") -> String:
 	if template_key == "":
 		template_key = beat_id
-	var raw := _render_template(beat_id, template_key)
-	return StorySlotService.apply(raw, StorySlotService.build_context({
+	var ctx_extra := {
 		"beat_id": beat_id,
 		"template_key": template_key,
-	}))
+	}
+	if beat_id.ends_with("_N15") and GameState.IS_TEN_DAY_EDITION:
+		ctx_extra["journal_max_lines"] = StoryBeatDirector.get_n15_journal_max_lines(beat_id)
+	var raw := _render_template(beat_id, template_key)
+	return StorySlotService.apply(raw, StorySlotService.build_context(ctx_extra))
 
 
 func get_route_for_ending(ending_id: String) -> String:
@@ -389,6 +392,34 @@ func _render_template(beat_id: String, key: String) -> String:
 	if key.ends_with("_N16"):
 		return _render_n16_line(beat_id, route_tone)
 
+	if key.ends_with("_N02p_chat"):
+		return _render_n02p_chat_line(beat_id)
+
+	if "_N02p_a_nochat" in key or "_N02p_b_nochat" in key:
+		var nochat_suffix := "_N02p_a_nochat" if "_N02p_a_nochat" in key else "_N02p_b_nochat"
+		var routed := StoryNodeCopy.get_route(nochat_suffix, route_tone)
+		if routed.strip_edges() == "":
+			routed = StoryNodeCopy.get_route(nochat_suffix, route_tone, "default")
+		return _format_node_text(routed, companion, crop)
+
+	if _is_n20c_tier_key(key):
+		return _render_n20c_tier_line(beat_id, key, route_tone)
+
+	if _is_n15_tier_key(key):
+		return _render_n15_tier_line(beat_id, key, route_tone)
+
+	if key == "_N15_journal":
+		var journal := StoryNodeCopy.get_template("_N15_journal")
+		if "{" in journal:
+			journal = StorySlotService.apply(
+				journal,
+				StorySlotService.build_context({
+					"beat_id": beat_id,
+					"journal_max_lines": StoryBeatDirector.get_n15_journal_max_lines(beat_id),
+				})
+			)
+		return journal
+
 	if key.ends_with("_N20a"):
 		return _render_n20a_line(beat_id, route_tone)
 
@@ -403,9 +434,12 @@ func _render_template(beat_id: String, key: String) -> String:
 				return _render_n20b_part(beat_id, suffix, route_tone)
 			var routed := StoryNodeCopy.get_route(suffix, route_tone)
 			if "{" in routed:
+				var ctx_extra := {"beat_id": beat_id}
+				if beat_id.ends_with("_N15") and GameState.IS_TEN_DAY_EDITION:
+					ctx_extra["journal_max_lines"] = StoryBeatDirector.get_n15_journal_max_lines(beat_id)
 				routed = StorySlotService.apply(
 					routed,
-					StorySlotService.build_context({"beat_id": beat_id})
+					StorySlotService.build_context(ctx_extra)
 				)
 			return _format_node_text(routed, companion, crop)
 
@@ -436,7 +470,31 @@ func _render_template(beat_id: String, key: String) -> String:
 
 func _render_n16_line(beat_id: String, route_tone: String) -> String:
 	var variant := ""
-	if route_tone == "normal":
+	if GameState.IS_TEN_DAY_EDITION:
+		match StoryBeatDirector.get_n16_profile(beat_id):
+			"warm":
+				if route_tone in ["true", "happy"]:
+					variant = route_tone
+				elif route_tone == "normal":
+					var persona: Dictionary = GameState.get_persona_vector()
+					var warm := float(persona.get("warm", 0.5))
+					var strict := float(persona.get("strict", 0.5))
+					if warm >= strict + 0.12:
+						variant = "normal_warm"
+					elif strict >= warm + 0.12:
+						variant = "normal_strict"
+					else:
+						variant = "normal_warm"
+				else:
+					variant = "default"
+			"cold":
+				variant = "cold"
+			_:
+				if route_tone == "normal":
+					variant = "mid"
+				else:
+					variant = route_tone
+	elif route_tone == "normal":
 		var persona: Dictionary = GameState.get_persona_vector()
 		var warm := float(persona.get("warm", 0.5))
 		var strict := float(persona.get("strict", 0.5))
@@ -453,6 +511,65 @@ func _render_n16_line(beat_id: String, route_tone: String) -> String:
 			StorySlotService.build_context({"beat_id": beat_id})
 		)
 	return StorySlotService.render_player_name_line(route_tone)
+
+
+func _render_n02p_chat_line(_beat_id: String) -> String:
+	var companion := StorySlotService.slot("companion_name")
+	var yesterday := GameState.get_yesterday_journal_entry()
+	var snippet := ""
+	var highlights: Variant = yesterday.get("highlights", [])
+	if highlights is Array and not highlights.is_empty():
+		snippet = str(highlights[0]).strip_edges()
+	if snippet == "":
+		snippet = str(yesterday.get("summary", "")).strip_edges()
+	if snippet == "":
+		snippet = GameState.last_day_summary.strip_edges()
+	if snippet == "":
+		snippet = "你说过的话，她本子上有一行，字迹比正文轻。"
+	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
+	if routed.strip_edges() != "":
+		return routed % [companion, snippet]
+	return "%s 从怀里摸出本子，指着其中一行：「……你好像说过这个。我记下了。」\n\n那行写着：「%s」" % [companion, snippet]
+
+
+func _is_n20c_tier_key(key: String) -> bool:
+	if not key.contains("_N20c"):
+		return false
+	return key.ends_with("_warm") or key.ends_with("_cold")
+
+
+func _is_n15_tier_key(key: String) -> bool:
+	if not key.contains("_N15"):
+		return false
+	return key.ends_with("_warm") or key.ends_with("_cold")
+
+
+func _render_n15_tier_line(beat_id: String, key: String, route_tone: String) -> String:
+	var tier := "warm" if key.ends_with("_warm") else "cold"
+	var ctx := StorySlotService.build_context({
+		"beat_id": beat_id,
+		"journal_max_lines": StoryBeatDirector.get_n15_journal_max_lines(beat_id),
+	})
+	var routed := StoryNodeCopy.get_route("_N15", route_tone, tier)
+	if routed.strip_edges() == "":
+		routed = StoryNodeCopy.get_route("_N15", route_tone)
+	if "{" in routed:
+		routed = StorySlotService.apply(routed, ctx)
+	return _format_node_text(routed, StorySlotService.slot("companion_name", ctx), StorySlotService.slot("crop_label", ctx))
+
+
+func _render_n20c_tier_line(beat_id: String, key: String, route_tone: String) -> String:
+	var tier := "warm" if key.ends_with("_warm") else "cold"
+	var suffix := "_N20c_b" if key.contains("_N20c_b_") else "_N20c"
+	var routed := StoryNodeCopy.get_route(suffix, route_tone, tier)
+	if routed.strip_edges() == "":
+		routed = StoryNodeCopy.get_route(suffix, route_tone)
+	if "{" in routed:
+		routed = StorySlotService.apply(
+			routed,
+			StorySlotService.build_context({"beat_id": beat_id})
+		)
+	return routed
 
 
 func _render_n20a_line(beat_id: String, route_tone: String) -> String:
@@ -733,6 +850,16 @@ func render_companion_night_line(beat_id: String, choice_id: String) -> String:
 		var nights := int(GameState.get_ending_flags().get("companionship_nights", 0))
 		if nights >= 1 and route_tone in ["true", "happy"] and StoryNodeCopy.get_route(key, route_tone, "true_nights") != "":
 			return StoryNodeCopy.get_route(key, route_tone, "true_nights")
+	if beat_id.ends_with("_N16") and GameState.IS_TEN_DAY_EDITION:
+		var profile := StoryBeatDirector.get_n16_profile(beat_id)
+		if profile == "cold":
+			var cold := StoryNodeCopy.get_route(key, route_tone, "cold")
+			if cold.strip_edges() != "":
+				return cold
+		elif profile == "warm" and route_tone in ["true", "happy"]:
+			var warm := StoryNodeCopy.get_route(key, route_tone, route_tone)
+			if warm.strip_edges() != "":
+				return warm
 	return StoryNodeCopy.get_route(key, route_tone)
 
 

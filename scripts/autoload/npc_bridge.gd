@@ -166,6 +166,15 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"week_index": GameState.get_week_index(),
 	}
 
+	var beat_ctx: Dictionary = extra.get("beat_context", {})
+	if beat_ctx.is_empty():
+		var ctx_beat_id := str(extra.get("beat_id", "")).strip_edges()
+		if ctx_beat_id == "":
+			ctx_beat_id = StoryBeatDirector.get_today_beat_id()
+		beat_ctx = StoryBeatDirector.get_beat_context_for_llm(ctx_beat_id)
+	var payload_beat_id := str(extra.get("beat_id", beat_ctx.get("beat_id", ""))).strip_edges()
+	var payload_invite_goal := str(extra.get("proactive_goal", beat_ctx.get("invite_goal", ""))).strip_edges()
+
 	return {
 		"event": event,
 		"companion_id": str(_config.get("npc_id", "xiaoli")),
@@ -191,6 +200,9 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"weather_tomorrow_label": GameState.get_weather_label(GameState.weather_tomorrow_hint),
 		"time_of_day": GameState.time_of_day,
 		"time_label": GameState.get_time_label(),
+		"day_period_label": GameState.get_day_period_label(),
+		"awaiting_sleep": GameState.is_awaiting_sleep(),
+		"time_context": GameState.get_time_context_for_llm(),
 		"memory_context": memory_context,
 		"recent_chat_turns": extra.get("recent_chat_turns", GameState.get_recent_chat_turns(8)),
 		"world_snapshot": extra.get("world_snapshot", WorldSnapshot.capture(extra)),
@@ -218,9 +230,13 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"proactive_intent": str(extra.get("proactive_intent", "")),
 		"proactive_goal": str(extra.get("proactive_goal", "")),
 		"invite_remind": bool(extra.get("invite_remind", false)),
-		"beat_id": str(extra.get("beat_id", "")),
-		"beat_label": str(extra.get("beat_label", "")),
-		"beat_emotion": str(extra.get("beat_emotion", "")),
+		"beat_id": payload_beat_id,
+		"beat_label": str(extra.get("beat_label", beat_ctx.get("node_label", ""))),
+		"beat_emotion": str(extra.get("beat_emotion", beat_ctx.get("emotion", ""))),
+		"beat_context": beat_ctx,
+		"affection_tier": str(beat_ctx.get("affection_tier", GameState.get_affection_tier())),
+		"invite_tone": str(beat_ctx.get("invite_tone", "")),
+		"invite_goal": payload_invite_goal,
 		"leak_context": extra.get("leak_context", {}),
 		"seen_nodes": extra.get("seen_nodes", []),
 		"previous_proactive": extra.get("previous_proactive", extra.get("previous_lines", [])),
@@ -258,9 +274,11 @@ func _player_chat_intent_instruction() -> String:
 		+ "玩家委托做事时返回对应 action intent：浇水 water/water_all，种萝卜 plant/plant_all，收萝卜 harvest/harvest_all，"
 		+ "去商店 open_shop，出售萝卜 open_market 等。"
 		+ "卖萝卜可以代做；种萝卜可以 plant，不要 refuse plant。"
-		+ "world_snapshot 含 shop/inventory/plot_details，请据此回答；不要编造购买、种植、浇水、收获等未在 game_facts 中发生的事。"
+		+ "world_snapshot 含 shop/inventory/plot_details 与 time_context（局内第几天、白天/傍晚/夜晚），请据此回答；不要编造购买、种植、浇水、收获等未在 game_facts 中发生的事。"
+		+ "回复须符合 time_context.day_period_label 所示局内时段，勿把夜晚说成清晨，勿把傍晚说成深夜。"
 		+ "代买种子时游戏会另问数量并自动执行，reply 不要声称已购买、已花费金币、已种好或已浇完。"
 		+ "若口头答应去浇/种/收/买种子/出售/睡觉，请同时返回对应 action intent，便于游戏执行。"
+		+ "玩家说睡觉/晚安/休息/下一天：必须 intent=sleep，先答应休息，禁止转去报田况或推销浇水。"
 		+ "禁止在 reply 中提及「点击」「点农田」「派活」等 UI 操作；用「要不要我帮你浇/种/收」自然询问。"
 		+ "主动说话必须符合你现在的位置和正在做的事，禁止报行情。"
 	)

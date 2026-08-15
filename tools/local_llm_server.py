@@ -409,9 +409,25 @@ INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
     ("open_memory", ["记忆", "回忆", "记得"]),
     ("check_status", ["状态", "怎么样", "看看田", "背包"]),
     ("help", ["帮助", "怎么玩", "教我", "你能做什么", "你会什么"]),
-    ("sleep", ["睡觉", "休息", "晚安", "睡了"]),
+    ("sleep", ["睡觉", "休息", "晚安", "睡了", "去睡", "该睡", "下一天"]),
     ("refuse", ["不要", "别", "不行", "不想", "不用", "拒绝"]),
 ]
+
+
+def looks_like_sleep_request(message: str) -> bool:
+    text = message.strip().replace(" ", "").replace("　", "")
+    if not text:
+        return False
+    if any(p in text for p in ("不睡", "别睡", "没睡", "睡得好")):
+        return False
+    sleep_phrases = (
+        "睡觉吧", "去睡觉", "该睡觉了", "该睡了", "收工睡觉", "进入下一天",
+        "下一天吧", "下一天", "今天结束了", "结束今天", "睡觉哦", "睡啦", "睡咯",
+        "睡觉", "睡吧", "晚安", "休息吧", "困了", "去睡", "休息", "睡了", "入眠",
+    )
+    if text in sleep_phrases:
+        return True
+    return any(p in text for p in sleep_phrases if len(p) >= 2)
 
 
 def looks_like_shop_request(message: str) -> bool:
@@ -523,6 +539,31 @@ def is_off_topic_feed_reply(text: str, item_name: str, refused: bool) -> bool:
 
 
 STORY_MODE_EVENTS = frozenset({"player_chat", "session_start", "task_complete", "story_beat"})
+
+## 须携带 beat_context 的剧情搭话 event（与 StoryBeatDirector.STORY_LLM_SPEECH_EVENTS 一致 · 策划 §4.5.5）
+STORY_LLM_SPEECH_EVENTS = frozenset({
+    "player_chat",
+    "session_start",
+    "companion_proactive",
+    "companion_casual",
+    "morning_sidewrite",
+    "story_beat",
+    "companion_react",
+})
+
+
+def _story_speech_context_lines(payload: dict[str, Any]) -> list[str]:
+    """剧情搭话统一口径：beat 变体 + 开口方向（铁律 §4.5.5）。"""
+    lines: list[str] = []
+    beat_line = _beat_context_line(payload)
+    if beat_line:
+        lines.append(beat_line)
+    beat_ctx = payload.get("beat_context") or {}
+    goal = str(payload.get("invite_goal") or (beat_ctx.get("invite_goal") if isinstance(beat_ctx, dict) else "")).strip()
+    if goal:
+        lines.append(f"开口方向（勿剧透信纸正文）：{goal[:96]}")
+    return lines
+
 
 STRANGER_CHAT_FALLBACKS = [
     "……抱歉，我脑子有点乱，不太确定是否见过你。",
@@ -881,6 +922,8 @@ def _classify_player_message(message: str) -> str:
     text = message.strip()
     if not text:
         return "empty"
+    if looks_like_sleep_request(text):
+        return "sleep"
     if any(k in text for k in FARM_TOPIC_KEYWORDS):
         return "farm"
     if any(k in text for k in STORY_TOPIC_KEYWORDS):
@@ -959,7 +1002,9 @@ def _player_chat_priority_rules(message: str, topic: str) -> str:
         "- 你必须先回应这句话本身（回答、共情、接话、反问都可以）。",
         "- 不要无视玩家原话，转而汇报天气、行情、田况或剧情背景。",
     ]
-    if topic in ("general", "emotion", "empty"):
+    if looks_like_sleep_request(message) or topic == "sleep":
+        lines.append("- 【睡觉指令】必须 intent=sleep；reply 先答应休息/晚安，禁止转去浇田、报田况或推销种子。")
+    if topic in ("general", "emotion", "empty", "sleep"):
         lines.append("- 玩家未提农场/任务：不要主动推销浇田、卖萝卜、看行情。")
         lines.append("- 可以像朋友一样闲聊；农场细节仅在被问到时再提。")
     elif topic == "farm":
@@ -987,7 +1032,11 @@ def _prompt_story_progress(payload: dict[str, Any]) -> str:
             f"第 {game_day} 日 · W{week} D{loop} · "
             f"{ctx.get('route_label', '')} · story_mode={ctx.get('story_mode', payload.get('story_mode', ''))}"
         ),
+        _time_context_line(payload),
     ]
+    t = _time_context(payload)
+    if t.get("awaiting_sleep"):
+        lines.append("【时辰已尽】玩家可能要休息：禁止推销浇田/种子；若玩家提睡觉必须 intent=sleep。")
     weekly_hint = str(ctx.get("weekly_hint", "") or payload.get("story_hint", "")).strip()
     if weekly_hint:
         lines.append(f"本周叙事：{weekly_hint}")
@@ -1000,6 +1049,16 @@ def _prompt_story_progress(payload: dict[str, Any]) -> str:
             + str(ctx.get("pending_beat_brief", ""))
             + "（聊天勿抢先念节点台词，但语气须与当前阶段一致）"
         )
+    invite_goal = str(ctx.get("invite_goal", "")).strip()
+    if invite_goal:
+        lines.append(f"今日开口方向（勿剧透正文）：{invite_goal}")
+    sched_id = str(ctx.get("scheduled_beat_id", "")).strip()
+    sched_period = str(ctx.get("scheduled_period", "")).strip()
+    if sched_id and sched_period:
+        lines.append(f"日程安排：{sched_id} 倾向在 {sched_period} 由小狸开口邀请")
+    beat_line = _beat_context_line({"story_context": ctx, "beat_context": ctx.get("beat_context") or {}})
+    if beat_line:
+        lines.append(beat_line)
     recent = ctx.get("recent_story_beats") or []
     if isinstance(recent, list) and recent:
         lines.append("近期已发生：" + "；".join(str(x)[:48] for x in recent[:3]))
@@ -1177,6 +1236,110 @@ def _weather_tomorrow_label(payload: dict[str, Any], snap: dict[str, Any] | None
     return label or code
 
 
+def _time_context(payload: dict[str, Any]) -> dict[str, Any]:
+    snap_raw = payload.get("world_snapshot") or {}
+    snap = snap_raw if isinstance(snap_raw, dict) else {}
+    ctx_raw = payload.get("time_context") or snap.get("time_context") or {}
+    ctx = ctx_raw if isinstance(ctx_raw, dict) else {}
+    story_ctx_raw = payload.get("story_context") or {}
+    story_ctx = story_ctx_raw if isinstance(story_ctx_raw, dict) else {}
+    rel_raw = payload.get("relationship") or {}
+    rel = rel_raw if isinstance(rel_raw, dict) else {}
+    game_day = ctx.get("game_day")
+    if game_day is None:
+        game_day = story_ctx.get("game_day", snap.get("game_day", rel.get("game_day", "?")))
+    time_of_day = str(
+        ctx.get("time_of_day")
+        or payload.get("time_of_day")
+        or story_ctx.get("time_of_day")
+        or snap.get("time_of_day", "")
+    ).strip()
+    time_label = str(
+        ctx.get("time_label")
+        or payload.get("time_label")
+        or story_ctx.get("time_label")
+        or snap.get("time_label", "")
+    ).strip()
+    day_period = str(
+        ctx.get("day_period_label")
+        or payload.get("day_period_label")
+        or story_ctx.get("day_period_label")
+        or snap.get("day_period_label", "")
+    ).strip()
+    awaiting_sleep = bool(
+        ctx.get("awaiting_sleep")
+        if "awaiting_sleep" in ctx
+        else payload.get("awaiting_sleep", snap.get("awaiting_sleep", False))
+    )
+    return {
+        "game_day": game_day,
+        "time_of_day": time_of_day,
+        "time_label": time_label,
+        "day_period_label": day_period,
+        "awaiting_sleep": awaiting_sleep,
+    }
+
+
+def _time_context_line(payload: dict[str, Any]) -> str:
+    t = _time_context(payload)
+    day_period = str(t.get("day_period_label", "")).strip()
+    suffix = "（今日时辰已尽，该睡了）" if t.get("awaiting_sleep") else ""
+    if day_period:
+        return f"局内时间：{day_period}{suffix}"
+    time_label = str(t.get("time_label", "")).strip()
+    game_day = t.get("game_day", "?")
+    if time_label:
+        return f"局内时间：第 {game_day} 天 · {time_label}{suffix}"
+    return f"局内时间：第 {game_day} 天{suffix}"
+
+
+def _beat_context_line(payload: dict[str, Any]) -> str:
+    ctx = payload.get("beat_context") or {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    story_ctx = payload.get("story_context") or {}
+    if not isinstance(story_ctx, dict):
+        story_ctx = {}
+    if not ctx and isinstance(story_ctx.get("beat_context"), dict):
+        ctx = story_ctx.get("beat_context") or {}
+    beat_id = str(ctx.get("beat_id") or payload.get("beat_id") or story_ctx.get("pending_beat_id", "")).strip()
+    if not beat_id:
+        return ""
+    variant_id = str(ctx.get("variant_id", beat_id)).strip()
+    tier = str(ctx.get("affection_tier") or payload.get("affection_tier") or story_ctx.get("affection_tier", "")).strip()
+    profile = str(ctx.get("profile") or payload.get("beat_profile", "")).strip()
+    emotion = str(ctx.get("emotion") or payload.get("beat_emotion", "")).strip()
+    invite_tone = str(ctx.get("invite_tone") or payload.get("invite_tone", "")).strip()
+    parts = [f"今日主线节点：{beat_id}（变体 {variant_id}）"]
+    if emotion:
+        parts.append(f"节点情绪：{emotion}")
+    if tier:
+        parts.append(f"亲密度档：{tier}")
+    if profile:
+        parts.append(f"分支 profile：{profile}")
+    if ctx.get("chat_track") is True:
+        parts.append("D6 有聊天轨：可提聊过的字，勿整段背日记")
+    elif ctx.get("chat_track") is False and beat_id.endswith("_N02p"):
+        parts.append("D6 无聊天轨：公事公办、隔一步")
+    if ctx.get("night_warm"):
+        parts.append("D7 夜戏偏暖")
+    journal_max_lines = ctx.get("journal_max_lines")
+    if isinstance(journal_max_lines, int) and journal_max_lines > 0 and beat_id.endswith("_N15"):
+        if journal_max_lines <= 1:
+            parts.append("D8 本子薄：少页、短句")
+        elif profile == "warm":
+            parts.append("D8 本子满：可多提记下的字，勿整段背信纸")
+    if beat_id in ("P_N02", "BE_N02") and profile:
+        parts.append(f"D2 廊下 profile={profile}：须与 invite_tone 一致")
+    if invite_tone:
+        parts.append(f"开口温度：{invite_tone}")
+    invite_goal = str(ctx.get("invite_goal") or payload.get("invite_goal", "")).strip()
+    if invite_goal:
+        parts.append(f"开口方向：{invite_goal[:80]}")
+    parts.append("须与以上分支一致；邀请语只作铺垫，禁止整段念信纸正文或剧透选项。")
+    return " · ".join(parts)
+
+
 def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str = "general") -> str:
     rel = payload.get("relationship") or {}
     market = payload.get("market") or {}
@@ -1192,11 +1355,11 @@ def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str
     weather_tomorrow = _weather_tomorrow_label(payload, snap if isinstance(snap, dict) else {})
     lines = [
         f"玩家：{player_label}",
-        f"时段：{payload.get('time_label') or snap.get('time_label', '')}",
+        _time_context_line(payload),
         f"天气：{weather_today}（明日约 {weather_tomorrow}）",
         f"关系：{rel.get('stage', '')}（亲密度 {rel.get('affection', 0)}）",
     ]
-    if chat_mode and topic in ("general", "emotion", "empty"):
+    if chat_mode and topic in ("general", "emotion", "empty", "sleep"):
         return "\n".join(lines)
 
     if not chat_mode or topic in ("farm", "story"):
@@ -1348,8 +1511,17 @@ def prefers_json_mode(event: str) -> bool:
 def apply_local_intent(data: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     local = payload.get("local_parsed_intent") or {}
     if not isinstance(local, dict):
-        return data
+        local = {}
     player_message = str(payload.get("player_message", ""))
+    if looks_like_sleep_request(player_message):
+        data["intent"] = "sleep"
+        data["plot_id"] = -1
+        data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
+        reply = str(data.get("reply", "")).strip()
+        if not reply or ("浇" in reply and "睡" not in reply and "休息" not in reply):
+            data["reply"] = "好，今天先到这儿。你也早点休息。"
+        return data
     if looks_like_shop_request(player_message):
         data["intent"] = "open_shop"
         data["plot_id"] = int(local.get("plot_id", data.get("plot_id", -1)))
@@ -1482,6 +1654,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             persona,
             _worldview_line(payload),
             "刚完成主线剧情节点，你要主动搭话，温和邀请玩家回应。",
+            _beat_context_line(payload),
             f"节点：{beat.get('beat_id', '')}，情绪：{beat.get('emotion', '')}",
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
@@ -1503,7 +1676,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
             "这是玩家新的一天开场。用 1～2 句口语自然打招呼；"
-            "可融入天气、时段、田况，但不要机械拼接如「今天晴天，一大早」。",
+            "须符合当日 story_mode 与 beat_context，可融入天气、时段，但不要机械拼接如「今天晴天，一大早」。",
+            *_story_speech_context_lines(payload),
             "世界事实：",
             _scene_brief(payload),
         ])
@@ -1533,6 +1707,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _dialogue_rules_from_payload(payload),
             _worldview_line(payload),
             "任务刚完成，用 1～2 句口语反馈，必须贴合下方任务事实，不要编造。",
+            *_story_speech_context_lines(payload),
             f"任务事实：{json.dumps(facts, ensure_ascii=False)}",
             _scene_brief(payload),
         ])
@@ -1596,8 +1771,16 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
         leak = payload.get("leak_context") or {}
         prev = payload.get("previous_proactive") or []
         memories = payload.get("player_memories") or []
+        story_ctx_raw = payload.get("story_context") or {}
+        story_ctx = story_ctx_raw if isinstance(story_ctx_raw, dict) else {}
+        affection_tier = str(
+            payload.get("affection_tier")
+            or (payload.get("beat_context") or {}).get("affection_tier")
+            or story_ctx.get("affection_tier")
+            or "?"
+        )
         intent_rule = {
-            "invite": "任务=邀请：用你自己的话把玩家轻轻带到今天的节点。不要念信纸正文，不要剧透选项，不要点名点击界面。",
+            "invite": "任务=邀请：用你自己的话把玩家轻轻带到今天的节点。不要念信纸正文，不要剧透选项，不要点名点击界面。语气须符合 beat_context 里的亲密度档与 profile。",
             "leak": "任务=渗漏：只用「渗漏锚点」里真实发生过的事，写一句身体先记得、脑子还对不上的话。禁止编造锚点没有的情节。",
             "casual": "任务=闲聊：只说你此刻所在的位置和正在做的事。可以碰到天气。禁止报背包、种子包数、叶片、田块数字。禁止推销种田。",
         }.get(intent, "任务=主动开口：1～2 句口语。")
@@ -1622,19 +1805,21 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             intent_rule,
             loc_line,
             f"开口目标：{goal}" if goal else "",
+            *_story_speech_context_lines(payload),
             f"节点：{payload.get('beat_id', '')} {payload.get('beat_label', '')} / {payload.get('beat_emotion', '')}".strip(),
             f"已看节点：{json.dumps(payload.get('seen_nodes') or [], ensure_ascii=False)}",
             f"渗漏锚点（仅可用这里的事实）：{json.dumps(leak, ensure_ascii=False)}" if leak else "渗漏锚点：无",
             f"这个玩家的近期记忆：{json.dumps(memories, ensure_ascii=False)}" if memories else "",
             "[可引用记忆（引用时必须把 id 写入 cited_memory_ids；无则 []）]",
             _prompt_citable_memories(payload),
-            "按亲密度说话：生疏就短、客气；熟悉就松一点；很近就安静、确定。",
+            "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿时；S2 贴=敢靠近、敢提约定。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
-            f"关系阶段：{rel.get('stage', '?')}，亲密度 {rel.get('affection', '?')}，段 {sprout_tier}"
+            f"关系阶段：{rel.get('stage', '?')}，亲密度 {rel.get('affection', '?')}，档 {affection_tier}，段 {sprout_tier}"
             + (f"，状态词「{sprout_word}」可极轻点一下" if sprout_word and sprout_tier >= 2 else "")
             + "。",
             f"禁止重复：{json.dumps(prev[-8:] if isinstance(prev, list) else [], ensure_ascii=False)}",
-            "位置与天气（只许用这些，不要展开背包）：",
+            "位置、局内时间与天气（只许用这些，不要展开背包）：",
+            _time_context_line(payload),
             loc_line or _companion_brief(companion_snap if isinstance(companion_snap, dict) else {}),
             f"天气：{_weather_label(payload, payload.get('world_snapshot') or {})}",
         ])
@@ -1653,6 +1838,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
             "这是小狸主动搭话，像顺口提醒，不要像系统通知。",
+            "须符合当日 beat_context 与 story_mode；玩家未问田时不要推销浇田。",
+            *_story_speech_context_lines(payload),
             f"触发类型：{payload.get('react_type', '')}",
             "世界事实：",
             _scene_brief(payload),
@@ -1710,7 +1897,10 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "relationship": payload.get("relationship"),
             "market": payload.get("market"),
             "weather_today": payload.get("weather_today"),
+            "time_of_day": payload.get("time_of_day"),
             "time_label": payload.get("time_label"),
+            "day_period_label": payload.get("day_period_label"),
+            "time_context": payload.get("time_context"),
             "world_snapshot": payload.get("world_snapshot"),
             "memory_context": payload.get("memory_context"),
             "yesterday_journal": payload.get("yesterday_journal"),

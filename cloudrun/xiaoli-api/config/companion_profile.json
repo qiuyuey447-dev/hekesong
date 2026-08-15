@@ -1,7 +1,7 @@
 {
 	"companion_id": "xiaoli",
 	"name": "小狸",
-	"sprite": "fox2_16x20",
+	"sprite": "fox1_16x20",
 	"movement": {
 		"wander_speed": 36,
 		"task_speed": 92,

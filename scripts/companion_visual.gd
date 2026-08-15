@@ -1,6 +1,6 @@
 extends Area2D
 
-const COMPANION_TEXTURE: Texture2D = preload("res://Characters/Animals/fox2_16x20.png")
+const COMPANION_TEXTURE: Texture2D = preload("res://Characters/Animals/fox1_16x20.png")
 const COMPANION_FRAME := Vector2i(16, 20)
 
 const WANDER_MOVE_SPEED := 36.0
@@ -35,6 +35,8 @@ var _move_target := Vector2.ZERO
 var _arrive_distance := 6.0
 var _move_callback: Callable = Callable()
 var _moving := false
+var _follow_node: Node2D = null
+var _follow_offset := Vector2.ZERO
 var _move_pace := MovePace.WANDER
 var _facing := "down"
 var _walk_anim := ""
@@ -63,13 +65,24 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _follow_node != null and is_instance_valid(_follow_node):
+		_move_target = _follow_node.global_position + _follow_offset
+		if not _moving:
+			_moving = true
+			_move_pace = MovePace.TASK
+			_start_walk_from_facing()
+
 	if not _moving:
 		_tick_idle(delta)
 		return
 
 	var offset := _move_target - global_position
 	var distance := offset.length()
-	if distance <= _arrive_distance:
+	if _follow_node != null and is_instance_valid(_follow_node):
+		if distance <= _arrive_distance:
+			_play_stand_still()
+			return
+	elif distance <= _arrive_distance:
 		global_position = _move_target
 		_stop_move(true)
 		return
@@ -105,6 +118,7 @@ func is_moving() -> bool:
 
 
 func move_to(target: Vector2, arrive_distance: float, on_arrived: Callable, urgent: bool = false) -> void:
+	_follow_node = null
 	_move_target = target
 	_arrive_distance = maxf(arrive_distance, 2.0)
 	_move_callback = on_arrived
@@ -115,7 +129,33 @@ func move_to(target: Vector2, arrive_distance: float, on_arrived: Callable, urge
 	_start_walk_from_facing()
 
 
+func steer_to(target: Vector2) -> void:
+	_move_target = target
+	if not _moving:
+		_moving = true
+		_move_pace = MovePace.TASK
+		_force_stand = false
+		_start_walk_from_facing()
+
+
 func cancel_move() -> void:
+	stop_follow()
+
+
+func follow_node(node: Node2D, offset: Vector2 = Vector2(0, 28.0), arrive_distance: float = 6.0) -> void:
+	_follow_node = node
+	_follow_offset = offset
+	_arrive_distance = maxf(arrive_distance, 2.0)
+	_move_pace = MovePace.TASK
+	_moving = true
+	_force_stand = false
+	_move_callback = Callable()
+	_walk_phase = 0.0
+	_start_walk_from_facing()
+
+
+func stop_follow() -> void:
+	_follow_node = null
 	_stop_move(false)
 
 
@@ -139,6 +179,7 @@ func hide_status_bubble() -> void:
 
 
 func _stop_move(call_callback: bool) -> void:
+	_follow_node = null
 	_moving = false
 	_play_stand_still()
 	if call_callback and _move_callback.is_valid():

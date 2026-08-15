@@ -11,6 +11,7 @@ extends CanvasLayer
 @onready var _cancel_button: Button = $TaskPanel/Margin/VBox/Buttons/CancelButton
 @onready var _skip_button: Button = $TaskPanel/Margin/VBox/SkipButton
 @onready var _chat_log: RichTextLabel = $ChatPanel/Margin/VBox/ChatLog
+@onready var _chat_date: Label = $ChatPanel/Margin/VBox/DateChip
 @onready var _player_echo: Label = $ChatPanel/Margin/VBox/PlayerEcho
 @onready var _companion_sign: Label = $ChatPanel/Margin/VBox/Sign
 @onready var _continue_arrow: Label = $ChatPanel/Margin/VBox/ContinueArrow
@@ -39,7 +40,11 @@ var _coin_bubble: Label
 var _top_status: Label
 var _pending_morning_sidewrite: bool = false
 var _pending_proactive_speech: Dictionary = {}
+var _proactive_chase_spoken: Array = []
 var _last_sprout_tier_seen: int = -1
+var _day_cycle_overlay: DayCycleOverlay
+var _defer_day_content: bool = false
+var _sleep_flow_active: bool = false
 
 var _npc_busy: bool = false
 var _pending_chat_intent: Dictionary = {}
@@ -86,6 +91,7 @@ func _ready() -> void:
 	_apply_cozy_theme()
 	_setup_minimal_top_bar()
 	_setup_basket_drawer()
+	_setup_day_cycle_overlay()
 	_task_panel.visible = false
 	_chat_input.placeholder_text = "…（轻声对小狸说）"
 	# 历史对话流：滚动记录，不再单句覆盖。
@@ -108,7 +114,10 @@ func _ready() -> void:
 	TaskSystem.task_progress.connect(_on_task_progress)
 	TaskSystem.task_completed.connect(_on_task_completed)
 	GameState.day_advanced.connect(_on_day_advanced)
+	GameState.sleep_prompt_requested.connect(_on_sleep_prompt_requested)
 	GameState.week_reset.connect(_on_week_reset)
+	StoryBeatDirector.scheduled_beat_due.connect(_on_scheduled_story_beat)
+	CompanionAgent.proactive_chase_shout.connect(_on_companion_chase_shout)
 	NpcBridge.reply_ready.connect(_on_npc_reply_ready)
 	NpcBridge.request_failed.connect(_on_npc_request_failed)
 
@@ -225,6 +234,9 @@ func _on_name_prompt_confirmed(name: String) -> void:
 func _on_time_changed(time_of_day: String) -> void:
 	_refresh_hud()
 	_hide_nudge_bar()
+	StoryBeatDirector.check_schedule()
+	if _sleep_flow_active or _defer_day_content:
+		return
 	if time_of_day == GameState.TIME_NIGHT:
 		_hint("夜幕降临了。")
 	elif time_of_day == GameState.TIME_EVENING:
@@ -250,6 +262,8 @@ func _refresh_hud() -> void:
 	if GameState.is_story_complete():
 		week_label += " · 故事完结"
 	_hud_day.text = week_label
+	if _chat_date:
+		_chat_date.text = _get_chat_date_label()
 	if _top_status:
 		_top_status.text = day_period
 	if _coin_bubble:
@@ -257,10 +271,17 @@ func _refresh_hud() -> void:
 	# 旧 HUD 数值行保留节点但不展示（已收进篮子）。
 	_hud_stats.text = ""
 	_hud_stage.text = ""
-	_next_day_button.text = "睡觉/下一天" if GameState.is_night() else "下一天"
+	_next_day_button.text = "睡觉" if GameState.can_manual_sleep() else "还不到睡"
 	if _basket_drawer:
 		_basket_drawer.refresh()
 	_maybe_announce_sprout_growth()
+
+
+func _get_chat_date_label() -> String:
+	var label := GameState.get_day_period_label()
+	if GameState.is_story_complete():
+		return "%s · 故事完结" % label
+	return label
 
 
 func _setup_minimal_top_bar() -> void:
@@ -412,6 +433,139 @@ func _setup_basket_drawer() -> void:
 		coin_wrap.move_to_front()
 
 
+func _setup_day_cycle_overlay() -> void:
+	_day_cycle_overlay = DayCycleOverlay.new()
+	_day_cycle_overlay.name = "DayCycleOverlay"
+	add_child(_day_cycle_overlay)
+	_day_cycle_overlay.sleep_now_pressed.connect(_on_sleep_now_pressed)
+
+
+func _on_sleep_prompt_requested() -> void:
+	if _sleep_flow_active or _day_cycle_overlay.is_busy():
+		return
+	if _day_cycle_overlay.is_prompt_visible():
+		return
+	if not _can_begin_sleep(false):
+		return
+	_enter_sleep_prompt_mode()
+	_day_cycle_overlay.show_sleep_prompt()
+
+
+func _enter_sleep_prompt_mode() -> void:
+	_chat_input.editable = false
+	_chat_send.disabled = true
+	if _basket_button:
+		_basket_button.disabled = true
+	if _basket_drawer and _basket_drawer.is_open():
+		_basket_drawer.close_drawer()
+
+
+func _exit_sleep_prompt_mode() -> void:
+	if _sleep_flow_active or GameState.is_story_complete():
+		return
+	_chat_input.editable = true
+	_chat_send.disabled = false
+	if _basket_button:
+		_basket_button.disabled = false
+
+
+func _on_sleep_now_pressed() -> void:
+	_exit_sleep_prompt_mode()
+	_start_sleep_flow()
+
+
+func _start_sleep_flow() -> void:
+	if _sleep_flow_active or _day_cycle_overlay.is_busy():
+		return
+	if GameState.is_awaiting_sleep() and not _day_cycle_overlay.is_prompt_visible():
+		return
+	if not _can_begin_sleep(true):
+		return
+	_finish_proactive_approach()
+	_exit_sleep_prompt_mode()
+	_sleep_flow_active = true
+	_set_gameplay_controls_enabled(false)
+	_run_sleep_flow()
+
+
+func _run_sleep_flow() -> void:
+	await _day_cycle_overlay.run_sleep_sequence(_sleep_advance_callback)
+	_on_day_opening_finished()
+
+
+func _sleep_advance_callback() -> void:
+	GameState.notify_sleep_sequence_started()
+	StoryBeatDirector.prepare_day_end()
+	if not GameState.can_advance_day():
+		return
+	_defer_day_content = true
+	GameState.advance_day()
+
+
+func _on_day_opening_finished() -> void:
+	if not _sleep_flow_active and not _defer_day_content:
+		return
+	_defer_day_content = false
+	_sleep_flow_active = false
+	_exit_sleep_prompt_mode()
+	_set_gameplay_controls_enabled(true)
+	_refresh_hud()
+	_handle_day_advanced_content()
+
+
+func _can_begin_sleep(show_hints: bool) -> bool:
+	if TaskSystem.is_busy():
+		if show_hints:
+			_hint("她还在忙，等一下再睡。")
+		return false
+	if GameState.is_story_complete():
+		if show_hints:
+			_hint("故事已经结束了。")
+		return false
+	if not GameState.can_manual_sleep():
+		if show_hints:
+			_hint("还不到睡的时候。")
+		return false
+	if GameState.game_day >= GameState.FINAL_GAME_DAY:
+		if not GameState.has_seen_awakening():
+			if show_hints:
+				_hint("她好像还有话想说。")
+			call_deferred("_maybe_show_awakening")
+			return false
+		if not GameState.is_story_complete():
+			call_deferred("_play_ending", EndingDirector.resolve_ending(
+				bool(GameState.get_ending_flags().get("f10_skipped", false))
+			))
+			return false
+		return false
+	if not GameState.can_advance_day():
+		return false
+	if GameState.must_finish_awakening_today():
+		if show_hints:
+			_hint("她好像还有话想说。")
+		call_deferred("_maybe_show_awakening")
+		return false
+	if StoryBeatDirector.has_unseen_weekend_night_beat():
+		if StoryBeatDirector.can_trigger_night_beat_at_hollow():
+			if show_hints:
+				_hint(StoryNodeCopy.get_system("tree_hollow_night_ready"))
+		else:
+			if show_hints:
+				_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
+		return false
+	if _has_unfinished_story_beat_today():
+		if StoryBeatDirector.should_force_schedule_now():
+			call_deferred("_maybe_show_story_beat", true)
+		elif show_hints:
+			_hint("她今天还有话要说，再等等。")
+		return false
+	if GameState.should_show_week_wrap():
+		StoryBeatDirector.prepare_day_end()
+		_week_wrap_panel.open()
+		return false
+	return true
+
+
 func _on_basket_pressed() -> void:
 	if _is_gameplay_locked():
 		return
@@ -457,7 +611,16 @@ func _on_basket_memory() -> void:
 func _on_basket_sleep() -> void:
 	if _basket_drawer:
 		_basket_drawer.close_drawer()
-	_on_next_day_pressed()
+	if GameState.is_awaiting_sleep():
+		if _day_cycle_overlay.is_prompt_visible():
+			_exit_sleep_prompt_mode()
+			_start_sleep_flow()
+			return
+		if _can_begin_sleep(false):
+			_enter_sleep_prompt_mode()
+			_day_cycle_overlay.show_sleep_prompt()
+		return
+	_start_sleep_flow()
 
 
 func _maybe_announce_sprout_growth() -> void:
@@ -504,10 +667,35 @@ func _request_casual_chat() -> void:
 
 func _request_proactive_speech(speech: Dictionary) -> void:
 	_pending_proactive_speech = speech.duplicate(true)
+	_begin_proactive_approach_for_speech()
 	var extra := CompanionDirector.collect_llm_extra(speech)
 	if _basket_drawer:
 		extra["sprout_word"] = _basket_drawer.get_sprout_word()
 	_request_companion_line("companion_proactive", extra)
+
+
+func _begin_proactive_approach_for_speech() -> void:
+	if CompanionAgent.is_proactive_active():
+		return
+	_proactive_chase_spoken.clear()
+	_hint("小狸好像有话对你说")
+	CompanionAgent.begin_proactive_approach()
+
+
+func _finish_proactive_approach() -> void:
+	if not CompanionAgent.is_proactive_active():
+		_proactive_chase_spoken.clear()
+		return
+	CompanionAgent.end_proactive_approach()
+	_proactive_chase_spoken.clear()
+
+
+func _on_companion_chase_shout() -> void:
+	var line := NpcFallback.proactive_chase_line(_proactive_chase_spoken)
+	if line.strip_edges() == "":
+		return
+	_proactive_chase_spoken.append(line)
+	_append_companion_message(line)
 
 
 func _casual_fallback_line() -> String:
@@ -573,25 +761,58 @@ func _on_awakening_finished(skipped: bool) -> void:
 	call_deferred("_play_ending", ending_id)
 
 
+func _on_scheduled_story_beat(beat_id: String) -> void:
+	if _story_beat_blocked or _is_gameplay_locked():
+		return
+	if StoryBeatDirector.should_auto_open_beat(beat_id):
+		_maybe_show_story_beat(true)
+		return
+	_request_scheduled_story_invite(beat_id)
+
+
+func _request_scheduled_story_invite(beat_id: String) -> void:
+	if _npc_busy or _story_beat_panel.visible:
+		call_deferred("_request_scheduled_story_invite", beat_id)
+		return
+	var speech := StoryBeatDirector.build_scheduled_invite(beat_id)
+	if speech.is_empty():
+		call_deferred("_maybe_show_story_beat", true)
+		return
+	CompanionDirector.mark_delivered(speech)
+	_request_proactive_speech(speech)
+
+
+func _has_unfinished_story_beat_today() -> bool:
+	if StoryBeatDirector.has_blocking_today_beat():
+		return true
+	if StoryBeatDirector.has_pending_night_beat():
+		return true
+	return StoryBeatDirector.has_unfired_schedule_today()
+
+
 func _maybe_show_story_beat(force_open: bool = false) -> void:
 	if _story_choice_blocked or _story_beat_blocked or GameState.is_story_complete():
 		return
 	if GameState.should_show_awakening():
 		return
 	var beat := StoryBeatDirector.get_pending_session_beat(_pending_beat_yesterday_echo)
+	if beat.is_empty() and StoryBeatDirector.has_pending_night_beat():
+		if StoryBeatDirector.can_trigger_night_beat_at_hollow() or force_open:
+			beat = StoryBeatDirector.get_pending_night_beat(_pending_beat_yesterday_echo)
 	if beat.is_empty():
 		if not force_open:
-			CompanionDirector.schedule_consider(CompanionDirector.CONSIDER_DELAY, "period")
+			StoryBeatDirector.refresh_daily_schedule()
 		return
 	var beat_id := str(beat.get("id", ""))
 	if not force_open and not StoryBeatDirector.should_auto_open_beat(beat_id):
-		CompanionDirector.schedule_consider(CompanionDirector.CONSIDER_DELAY, "period")
+		StoryBeatDirector.refresh_daily_schedule()
 		return
 	_pending_beat_yesterday_echo = false
 	if beat_id in ["P_N05", "BE_N05"] and not GameState.has_revealed_memory():
 		GameState.mark_w2_stranger_seen()
 	_story_beat_blocked = true
 	GameState.clear_pending_invite_beat()
+	StoryBeatDirector.mark_schedule_fired()
 	_story_beat_panel.open(beat)
 
 
@@ -616,34 +837,6 @@ func deliver_companion_proactive() -> void:
 		return
 	CompanionDirector.mark_delivered(speech)
 	_request_proactive_speech(speech)
-
-
-func _try_open_pending_invite() -> bool:
-	if _is_gameplay_locked() or _story_beat_blocked:
-		return false
-	var beat_id := GameState.get_pending_invite_beat()
-	if beat_id == "":
-		return false
-	if StoryBeatDirector.is_beat_seen(beat_id):
-		GameState.clear_pending_invite_beat()
-		return false
-	var beat: Dictionary = {}
-	if StoryBeatDirector.has_pending_night_beat() and beat_id == StoryBeatDirector.get_pending_night_beat_id():
-		if not StoryBeatDirector.can_trigger_night_beat_at_hollow():
-			_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
-			return true
-		beat = StoryBeatDirector.get_pending_night_beat(_pending_beat_yesterday_echo)
-	else:
-		beat = StoryBeatDirector.build_beat(beat_id, _pending_beat_yesterday_echo)
-	if beat.is_empty():
-		return false
-	_pending_beat_yesterday_echo = false
-	if beat_id in ["P_N05", "BE_N05"] and not GameState.has_revealed_memory():
-		GameState.mark_w2_stranger_seen()
-	_story_beat_blocked = true
-	GameState.clear_pending_invite_beat()
-	_story_beat_panel.open(beat)
-	return true
 
 
 func _on_story_beat_finished(beat_id: String) -> void:
@@ -781,6 +974,13 @@ func _finish_night_after_snuggle() -> void:
 	if GameState.should_show_week_wrap():
 		_week_wrap_panel.open()
 		return
+	if GameState.is_awaiting_sleep() or GameState.can_manual_sleep():
+		if not _sleep_flow_active and not _day_cycle_overlay.is_busy():
+			if not _day_cycle_overlay.is_prompt_visible():
+				if _can_begin_sleep(false):
+					_enter_sleep_prompt_mode()
+					_day_cycle_overlay.show_sleep_prompt()
+		return
 	_advance_to_next_day()
 
 
@@ -847,6 +1047,9 @@ func _is_gameplay_locked() -> bool:
 		or _story_choice_blocked
 		or _name_prompt_panel.visible
 		or _snuggle_blocked
+		or _sleep_flow_active
+		or (_day_cycle_overlay != null and _day_cycle_overlay.is_busy())
+		or (_day_cycle_overlay != null and _day_cycle_overlay.is_prompt_visible())
 	)
 
 
@@ -879,19 +1082,8 @@ func on_tree_hollow_clicked() -> void:
 	if _story_beat_blocked:
 		return
 	CompanionDirector.notify_player_active()
-	if _try_open_pending_invite():
-		return
-	if StoryBeatDirector.has_pending_night_beat():
-		if not StoryBeatDirector.can_trigger_night_beat_at_hollow():
-			_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
-			return
-		var night_beat := StoryBeatDirector.get_pending_night_beat(_pending_beat_yesterday_echo)
-		if night_beat.is_empty():
-			_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
-			return
-		_pending_beat_yesterday_echo = false
-		_story_beat_blocked = true
-		_story_beat_panel.open(night_beat)
+	if StoryBeatDirector.has_pending_night_beat() and not StoryBeatDirector.is_beat_seen(StoryBeatDirector.get_pending_night_beat_id()):
+		_hint("今晚她会来找你。再等等。")
 		return
 	_hint(StoryNodeCopy.get_system("tree_hollow_day"))
 
@@ -955,8 +1147,6 @@ func on_companion_clicked() -> void:
 	if _is_gameplay_locked():
 		return
 	CompanionDirector.notify_player_active()
-	if _try_open_pending_invite():
-		return
 	if GameState.get_owned_treats().size() > 0:
 		if _shop_panel.visible:
 			_shop_panel.close()
@@ -1089,58 +1279,24 @@ func _on_task_completed(task_type: TaskSystem.TaskType, _summary: String, game_f
 
 
 func _on_next_day_pressed() -> void:
-	if TaskSystem.is_busy():
-		_hint("她还在忙，等一下再睡。")
-		return
-	if GameState.is_story_complete():
-		_hint("故事已经结束了。")
-		return
-	if GameState.game_day >= GameState.FINAL_GAME_DAY:
-		if not GameState.has_seen_awakening():
-			_hint("她好像还有话想说。")
-			call_deferred("_maybe_show_awakening")
-			return
-		if not GameState.is_story_complete():
-			call_deferred("_play_ending", EndingDirector.resolve_ending(
-				bool(GameState.get_ending_flags().get("f10_skipped", false))
-			))
-			return
-		return
-	if GameState.must_finish_awakening_today():
-		_hint("她好像还有话想说。")
-		call_deferred("_maybe_show_awakening")
-		return
-	if StoryBeatDirector.has_unseen_weekend_night_beat():
-		if StoryBeatDirector.can_trigger_night_beat_at_hollow():
-			_hint(StoryNodeCopy.get_system("tree_hollow_night_ready"))
-		else:
-			_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
-		return
-	if StoryBeatDirector.has_blocking_today_beat():
-		if not _try_open_pending_invite():
-			call_deferred("_maybe_show_story_beat", true)
-		return
-	if GameState.should_show_week_wrap():
-		StoryBeatDirector.prepare_day_end()
-		_week_wrap_panel.open()
-		return
-	StoryBeatDirector.prepare_day_end()
-	_advance_to_next_day()
+	_start_sleep_flow()
 
 
 func _on_week_wrap_confirmed() -> void:
-	_advance_to_next_day()
+	_start_sleep_flow()
 
 
 func _advance_to_next_day() -> void:
-	if not GameState.can_advance_day():
-		return
-	GameState.advance_day()
-	# 顶栏会同步；这里只轻提一句，不塞日记体旁白。
-	_hint("%s · %s" % [GameState.get_day_period_label(), GameState.get_weather_label()])
+	_start_sleep_flow()
 
 
 func _on_day_advanced() -> void:
+	if _defer_day_content:
+		return
+	_handle_day_advanced_content()
+
+
+func _handle_day_advanced_content() -> void:
 	if GameState.game_day >= (5 if GameState.IS_TEN_DAY_EDITION else 10):
 		StoryBeatDirector.ensure_story_route_locked()
 	if not GameState.IS_TEN_DAY_EDITION and GameState.game_day in [22, 29]:
@@ -1153,6 +1309,7 @@ func _on_day_advanced() -> void:
 		return
 	_pending_beat_yesterday_echo = true
 	_pending_morning_sidewrite = true
+	StoryBeatDirector.refresh_daily_schedule()
 	if StoryBeatDirector.has_pending_night_beat():
 		_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
 	call_deferred("_maybe_show_story_beat")
@@ -1233,10 +1390,19 @@ func open_memory_from_companion() -> void:
 
 
 func sleep_from_companion() -> void:
-	if _is_gameplay_locked():
+	if _is_gameplay_locked() and not (_day_cycle_overlay != null and _day_cycle_overlay.is_prompt_visible()):
 		return
 	if TaskSystem.is_busy():
 		_hint("她还在忙，等一下再睡。")
+		return
+	if GameState.is_awaiting_sleep():
+		if _day_cycle_overlay.is_prompt_visible():
+			_exit_sleep_prompt_mode()
+			_start_sleep_flow()
+			return
+		if _can_begin_sleep(false):
+			_enter_sleep_prompt_mode()
+			_day_cycle_overlay.show_sleep_prompt()
 		return
 	_on_next_day_pressed()
 
@@ -1255,16 +1421,11 @@ func _send_chat_async(text: String) -> void:
 	_chat_input.clear()
 	GameState.record_player_chat(trimmed)
 
-	if IntentParser.is_explicit_sleep_utterance(trimmed):
-		if StoryBeatDirector.has_blocking_today_beat():
-			_hint("她还有话要说。")
-			if not _try_open_pending_invite():
-				call_deferred("_maybe_show_story_beat", true)
+	if IntentParser.looks_like_sleep_request(trimmed):
+		if _has_unfinished_story_beat_today():
+			_hint("她还有话要说，再等等。")
 			return
 		sleep_from_companion()
-		return
-
-	if _try_open_pending_invite():
 		return
 
 	if _try_handle_seed_quantity_reply(trimmed):
@@ -1358,6 +1519,9 @@ func _on_npc_reply_ready(
 		GameState.record_initiation(channel, {"beat_id": beat_id}, spoken)
 		_pending_proactive_speech = {}
 		_append_companion_message(spoken)
+		_finish_proactive_approach()
+		if channel == "invite" and beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+			call_deferred("_maybe_show_story_beat", true)
 		return
 
 	if event == "player_chat" and _should_discard_player_chat_reply():
@@ -1370,7 +1534,8 @@ func _on_npc_reply_ready(
 	var display_text := text
 	var farm_reply_grounded := false
 	if event == "player_chat":
-		var sanitized := _sanitize_farm_hallucination(text)
+		display_text = _sanitize_sleep_hijack(_pending_chat_text, display_text)
+		var sanitized := _sanitize_farm_hallucination(display_text)
 		farm_reply_grounded = sanitized.strip_edges() != text.strip_edges()
 		display_text = sanitized
 	_append_companion_message(display_text)
@@ -1413,6 +1578,9 @@ func _on_npc_request_failed(request_id: int, event: String, _error: String) -> v
 		GameState.record_initiation(channel, {"beat_id": beat_id}, casual)
 		_pending_proactive_speech = {}
 		_append_companion_message(casual)
+		_finish_proactive_approach()
+		if channel == "invite" and beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+			call_deferred("_maybe_show_story_beat", true)
 		return
 	if event != "companion_feed":
 		return
@@ -1885,6 +2053,18 @@ func _field_has_no_crops() -> bool:
 	return int(summary.get("growing", 0)) <= 0 and int(summary.get("harvestable", 0)) <= 0
 
 
+func _sanitize_sleep_hijack(player_text: String, reply: String) -> String:
+	## 玩家说要睡，却回浇田 → 改口，避免睡觉幻觉成浇水。
+	if not IntentParser.looks_like_sleep_request(player_text):
+		return reply
+	var cleaned := reply.strip_edges()
+	if cleaned == "":
+		return "好，今天先到这儿。你也早点休息。"
+	if ("浇" in cleaned or "田" in cleaned) and not ("睡" in cleaned or "休息" in cleaned or "晚安" in cleaned):
+		return "好，今天先到这儿。你也早点休息。"
+	return cleaned
+
+
 func _sanitize_farm_hallucination(text: String) -> String:
 	## 田况与对话不一致时，把「我去浇/种/收/已买好」等幻觉换成实话，避免先胡说再纠正。
 	var cleaned := text.strip_edges()
@@ -2275,7 +2455,7 @@ func _show_toast(text: String) -> void:
 func _apply_ui_scale() -> void:
 	var font := UIFontTheme.get_font()
 	if font != null:
-		for label in [_hud_day, _hud_stats, _hud_stage, $HUD/Margin/VBox/HintLabel, _task_title, _task_body, _task_timer, _player_echo, _companion_sign, _continue_arrow, _toast]:
+		for label in [_hud_day, _hud_stats, _hud_stage, $HUD/Margin/VBox/HintLabel, _task_title, _task_body, _task_timer, _chat_date, _player_echo, _companion_sign, _continue_arrow, _toast]:
 			label.add_theme_font_override("font", font)
 		_chat_log.add_theme_font_override("normal_font", font)
 		_chat_input.add_theme_font_override("font", font)
@@ -2292,6 +2472,8 @@ func _apply_ui_scale() -> void:
 	_chat_log.add_theme_color_override("default_color", Color(0.22, 0.17, 0.13, 1.0))
 	_chat_log.add_theme_constant_override("line_separation", 8)
 	_player_echo.add_theme_font_size_override("font_size", 16)
+	_chat_date.add_theme_font_size_override("font_size", 15)
+	_chat_date.add_theme_color_override("font_color", Color(0.42, 0.34, 0.24, 1.0))
 	_companion_sign.add_theme_font_size_override("font_size", 22)
 	_companion_sign.add_theme_color_override("font_color", Color(0.28, 0.18, 0.10, 1.0))
 	_continue_arrow.add_theme_font_size_override("font_size", 18)
@@ -2388,6 +2570,11 @@ func _apply_cozy_theme() -> void:
 	_companion_sign.modulate = Color(1, 1, 1, 1)
 	_companion_sign.add_theme_color_override("font_color", Color(0.26, 0.14, 0.08, 1.0))
 	_companion_sign.add_theme_font_size_override("font_size", 24)
+	if _chat_date:
+		_chat_date.text = _get_chat_date_label()
+		_chat_date.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_chat_date.add_theme_color_override("font_color", Color(0.42, 0.34, 0.24, 1.0))
+		_chat_date.add_theme_font_size_override("font_size", 15)
 	_chat_log.add_theme_constant_override("line_separation", 8)
 	_player_echo.add_theme_color_override("font_color", Color(0.32, 0.26, 0.2, 1.0))
 	_player_echo.add_theme_font_size_override("font_size", 17)

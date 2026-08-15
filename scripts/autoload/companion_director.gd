@@ -56,15 +56,6 @@ func pick_speech() -> Dictionary:
 	if TaskSystem.is_busy():
 		return {}
 
-	var invite := StoryBeatDirector.try_invite(false)
-	if invite.is_empty() and GameState.time_of_day == GameState.TIME_EVENING:
-		invite = StoryBeatDirector.try_invite(true)
-	if not invite.is_empty():
-		if GameState.can_proactive_speech("invite") or StoryBeatDirector.has_blocking_today_beat():
-			return invite
-
-	if StoryBeatDirector.has_blocking_today_beat():
-		return {}
 	if GameState.proactive_period_used():
 		return {}
 	if GameState.proactive_count_today() >= MAX_DAY:
@@ -98,6 +89,15 @@ func collect_llm_extra(speech: Dictionary) -> Dictionary:
 	if leak_ctx.is_empty():
 		leak_ctx = LeakageEngine.peek_leak_context()
 	var beat_def := StoryRouteData.get_beat_def(beat_id) if beat_id != "" else {}
+	var beat_ctx: Dictionary = speech.get("beat_context", {})
+	if beat_ctx.is_empty():
+		if beat_id == "":
+			beat_id = str(StoryBeatDirector.get_today_beat_id()).strip_edges()
+		beat_ctx = StoryBeatDirector.get_beat_context_for_llm(beat_id)
+	elif beat_id == "":
+		beat_id = str(beat_ctx.get("beat_id", "")).strip_edges()
+	if beat_id != "" and beat_def.is_empty():
+		beat_def = StoryRouteData.get_beat_def(beat_id)
 	var previous: Array = GameState.get_recent_initiation_lines(8)
 	for turn in GameState.get_recent_chat_turns(12):
 		if not turn is Dictionary:
@@ -126,6 +126,12 @@ func collect_llm_extra(speech: Dictionary) -> Dictionary:
 		"beat_id": beat_id,
 		"beat_label": str(beat_def.get("node_label", "")),
 		"beat_emotion": str(beat_def.get("emotion", "")),
+		"beat_context": beat_ctx,
+		"beat_variant_id": str(beat_ctx.get("variant_id", beat_id)),
+		"affection_tier": str(beat_ctx.get("affection_tier", GameState.get_affection_tier())),
+		"beat_profile": str(beat_ctx.get("profile", "")),
+		"invite_tone": str(beat_ctx.get("invite_tone", "")),
+		"invite_goal": str(beat_ctx.get("invite_goal", _goal_for(speech, beat_id))),
 		"leak_context": leak_ctx,
 		"seen_nodes": GameState.get_story_nodes_seen(),
 		"previous_proactive": previous,
@@ -135,6 +141,10 @@ func collect_llm_extra(speech: Dictionary) -> Dictionary:
 		"relationship_stage": GameState.get_stage(),
 		"story_mode": StoryDirector.get_story_mode(),
 		"time_of_day": GameState.time_of_day,
+		"time_label": GameState.get_time_label(),
+		"day_period_label": GameState.get_day_period_label(),
+		"awaiting_sleep": GameState.is_awaiting_sleep(),
+		"time_context": GameState.get_time_context_for_llm(),
 		"weather": GameState.weather_today,
 		"recent_chat_turns": GameState.get_recent_chat_turns(12),
 		"companion_location": str(CompanionAgent.get_snapshot().get("location_name", "")),

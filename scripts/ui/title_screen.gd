@@ -2,24 +2,30 @@ extends Control
 
 const MAIN_SCENE := "res://scenes/main.tscn"
 const FARM_MAP_SCENE := preload("res://scenes/farm_map.tscn")
-const FOX_TEX := preload("res://Characters/Animals/fox2_16x20.png")
+const FOX_TEX := preload("res://Characters/Animals/fox1_16x20.png")
 const FOX_FRAME := Vector2i(16, 20)
 
-const WORLD_FOCUS := Vector2(1080, 500)
-const WORLD_ZOOM := Vector2(1.55, 1.55)
+## 封面构图：旧屋 + 廊下 + 树洞旁的小狸。不把商店/田埂拉进画框。
+const WORLD_FOCUS := Vector2(1120, 548)
+const WORLD_ZOOM := Vector2(2.05, 2.05)
+const COVER_MARKERS: Array[String] = ["人", "廊下", "树洞", "小狸"]
 const TITLE_MAP_BOUNDS := Rect2(64, 108, 520, 380)
-const TITLE_FRAME_MIN_SIZE := Vector2(760, 440)
-const TITLE_FRAME_PADDING := 120.0
-const TITLE_BACKDROP_COLOR := Color(0.34, 0.48, 0.28, 1.0)
-const CAMERA_COVER_OVERSCAN := 1.006
+const TITLE_FRAME_MIN_SIZE := Vector2(620, 360)
+const TITLE_FRAME_PADDING := 72.0
+const TITLE_BACKDROP_COLOR := Color(0.77, 0.87, 0.97, 1.0)
+const DAY_MODULATE := Color(1.0, 1.0, 0.98)
+const CAMERA_COVER_OVERSCAN := 1.012
+const FOX_BASE_SCALE := 2.0
+const TITLE_FONT_SIZE := 78
+const MENU_BUTTON_SIZE := Vector2(372, 93)
+const MENU_FONT_SIZE := 42
 
 var _menu_root: Control
 var _title_root: Control
-var _menu_panel: PanelContainer
+var _title_sign: Control
 var _continue_button: Button
 var _new_game_button: Button
 var _exit_button: Button
-var _save_hint_label: Label
 var _world_viewport_container: SubViewportContainer
 var _world_viewport: SubViewport
 var _world_camera: Camera2D
@@ -54,16 +60,13 @@ func _process(delta: float) -> void:
 	_time += delta
 	if _world_camera != null:
 		var drift := Vector2(
-			sin(_time * 0.28) * 4.0,
-			cos(_time * 0.21) * 5.0
+			sin(_time * 0.22) * 3.0,
+			cos(_time * 0.17) * 4.0
 		)
 		_world_camera.position = _clamp_camera_position(_camera_base + drift)
 		_world_camera.zoom = _camera_zoom
-	if _title_root != null:
-		_title_root.offset_top = sin(_time * 1.15) * 5.0
-		_title_root.offset_bottom = -sin(_time * 1.15) * 5.0
-	if _menu_panel != null:
-		_menu_panel.rotation = sin(_time * 0.65) * 0.004
+	if _title_sign != null:
+		_title_sign.rotation = sin(_time * 0.55) * 0.008
 	_update_title_fox()
 
 
@@ -71,19 +74,18 @@ func _update_title_fox() -> void:
 	if _title_fox == null or _fox_body == null:
 		return
 
-	var wag := sin(_time * 5.4)
-	var bounce := sin(_time * 2.2)
-	_title_fox.rotation = wag * 0.14
+	var wag := sin(_time * 4.6)
+	var bounce := sin(_time * 1.85)
+	_title_fox.rotation = wag * 0.08
 	_title_fox.position.x = float(_title_fox.get_meta("base_x", _title_fox.position.x))
-	_title_fox.position.y = float(_title_fox.get_meta("base_y", _title_fox.position.y)) + bounce * 4.0
-	var base_scale := float(_title_fox.get_meta("base_scale", 3.0))
-	var squash := 1.0 + sin(_time * 3.6) * 0.05
-	_title_fox.scale = Vector2(base_scale * squash, base_scale * (1.08 - squash * 0.08))
+	_title_fox.position.y = float(_title_fox.get_meta("base_y", _title_fox.position.y)) + bounce * 2.4
+	var squash := 1.0 + sin(_time * 2.8) * 0.035
+	_title_fox.scale = Vector2(FOX_BASE_SCALE * squash, FOX_BASE_SCALE * (1.05 - squash * 0.05))
 
 	var frame_col := 1
-	if wag > 0.38:
+	if wag > 0.42:
 		frame_col = 2
-	elif wag < -0.38:
+	elif wag < -0.42:
 		frame_col = 0
 	_fox_body.texture = SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, frame_col, 0)
 
@@ -110,7 +112,7 @@ func _build_world_background() -> void:
 	_add_title_world_backdrop(world)
 
 	var atmosphere := CanvasModulate.new()
-	atmosphere.color = Color(1.0, 0.94, 0.86, 1.0)
+	atmosphere.color = DAY_MODULATE
 	world.add_child(atmosphere)
 
 	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
@@ -198,7 +200,7 @@ func _compute_title_map_bounds(farm_map: Node2D) -> Rect2:
 func _compute_title_frame_rect(farm_map: Node2D, content_bounds: Rect2) -> Rect2:
 	var frame := Rect2()
 	var has_frame := false
-	for marker_name in ["小狸", "人", "树洞", "廊下", "商店", "田埂"]:
+	for marker_name in COVER_MARKERS:
 		var marker := farm_map.get_node_or_null(marker_name) as Node2D
 		if marker == null:
 			continue
@@ -284,12 +286,12 @@ func _spawn_title_fox(farm_map: Node2D) -> void:
 	_title_fox.name = "TitleFox"
 	var marker := farm_map.get_node_or_null("小狸") as Node2D
 	if marker != null:
-		_title_fox.position = marker.position
+		_title_fox.position = marker.position + Vector2(10, 14)
 	else:
-		_title_fox.position = FarmSetdress.POS_FOX
+		_title_fox.position = FarmSetdress.POS_FOX + Vector2(10, 14)
 	_title_fox.set_meta("base_x", _title_fox.position.x)
 	_title_fox.set_meta("base_y", _title_fox.position.y)
-	_title_fox.set_meta("base_scale", 3.2)
+	_title_fox.z_index = 6
 
 	var shadow := Sprite2D.new()
 	var shadow_img := Image.create(22, 8, false, Image.FORMAT_RGBA8)
@@ -299,7 +301,7 @@ func _spawn_title_fox(farm_map: Node2D) -> void:
 			var dx := (x - 11.0) / 11.0
 			var dy := (y - 4.0) / 4.0
 			if dx * dx + dy * dy <= 1.0:
-				shadow_img.set_pixel(x, y, Color(0, 0, 0, 0.24))
+				shadow_img.set_pixel(x, y, Color(0, 0, 0, 0.28))
 	shadow.texture = ImageTexture.create_from_image(shadow_img)
 	shadow.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	shadow.centered = true
@@ -314,23 +316,33 @@ func _spawn_title_fox(farm_map: Node2D) -> void:
 	_fox_body.offset = Vector2(-8, -18)
 	_title_fox.add_child(_fox_body)
 
-	_title_fox.scale = Vector2(3.2, 3.2)
+	_title_fox.scale = Vector2(FOX_BASE_SCALE, FOX_BASE_SCALE)
 	var actors := FarmSetdress.ensure_actors(farm_map)
 	actors.add_child(_title_fox)
 
 
 func _build_overlay() -> void:
-	var vignette := ColorRect.new()
+	var vignette := TextureRect.new()
 	vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
 	vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vignette.color = Color(0.05, 0.08, 0.12, 0.22)
+	vignette.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	vignette.stretch_mode = TextureRect.STRETCH_SCALE
+	vignette.texture = _make_cover_vignette()
+	vignette.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	add_child(vignette)
 
-	var warm := ColorRect.new()
-	warm.set_anchors_preset(Control.PRESET_FULL_RECT)
-	warm.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	warm.color = Color(1.0, 0.92, 0.78, 0.08)
-	add_child(warm)
+
+func _make_cover_vignette() -> Texture2D:
+	var img := Image.create(64, 36, false, Image.FORMAT_RGBA8)
+	for y in range(36):
+		for x in range(64):
+			var nx := (x / 63.0) * 2.0 - 1.0
+			var ny := (y / 35.0) * 2.0 - 1.0
+			var d := sqrt(nx * nx * 0.62 + ny * ny * 0.92)
+			var a := clampf((d - 0.48) / 0.82, 0.0, 1.0)
+			a = a * a
+			img.set_pixel(x, y, Color(0.12, 0.18, 0.28, a * 0.18))
+	return ImageTexture.create_from_image(img)
 
 
 func _build_menu() -> void:
@@ -339,85 +351,52 @@ func _build_menu() -> void:
 	_menu_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_menu_root)
 
+	_title_sign = _build_title_sign()
+	_title_sign.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_title_sign.anchor_left = 0.5
+	_title_sign.anchor_right = 0.5
+	_title_sign.offset_left = -420
+	_title_sign.offset_right = 420
+	_title_sign.offset_top = 28
+	_title_sign.offset_bottom = 132
+	_title_sign.pivot_offset = Vector2(420, 20)
+	_menu_root.add_child(_title_sign)
+
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_menu_root.add_child(center)
 
-	var stack := VBoxContainer.new()
-	stack.add_theme_constant_override("separation", 18)
-	stack.alignment = BoxContainer.ALIGNMENT_CENTER
-	center.add_child(stack)
+	var menu_stack := VBoxContainer.new()
+	menu_stack.add_theme_constant_override("separation", 24)
+	menu_stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	menu_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	center.add_child(menu_stack)
 
-	stack.add_child(_build_title_banner())
-
-	_menu_panel = PanelContainer.new()
-	_menu_panel.custom_minimum_size = Vector2(392, 360)
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.98, 0.95, 0.9, 0.94)
-	panel_style.border_color = Color(0.62, 0.48, 0.34, 0.75)
-	panel_style.set_border_width_all(3)
-	panel_style.set_corner_radius_all(28)
-	panel_style.shadow_color = Color(0.08, 0.06, 0.04, 0.28)
-	panel_style.shadow_size = 16
-	panel_style.shadow_offset = Vector2(0, 6)
-	panel_style.content_margin_left = 28
-	panel_style.content_margin_right = 28
-	panel_style.content_margin_top = 28
-	panel_style.content_margin_bottom = 22
-	_menu_panel.add_theme_stylebox_override("panel", panel_style)
-	stack.add_child(_menu_panel)
-
-	var panel_vbox := VBoxContainer.new()
-	panel_vbox.add_theme_constant_override("separation", 16)
-	panel_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	_menu_panel.add_child(panel_vbox)
-
-	_continue_button = _make_pill_button("继续")
-	_new_game_button = _make_pill_button("新游戏")
-	_exit_button = _make_pill_button("退出")
-	panel_vbox.add_child(_continue_button)
-	panel_vbox.add_child(_new_game_button)
-	panel_vbox.add_child(_exit_button)
+	_continue_button = _make_menu_button("继续")
+	_new_game_button = _make_menu_button("新游戏")
+	_exit_button = _make_menu_button("退出")
+	menu_stack.add_child(_continue_button)
+	menu_stack.add_child(_new_game_button)
+	menu_stack.add_child(_exit_button)
 
 	_continue_button.pressed.connect(_on_continue_pressed)
 	_new_game_button.pressed.connect(_on_new_game_pressed)
 	_exit_button.pressed.connect(_on_exit_pressed)
 
-	_save_hint_label = Label.new()
-	_save_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_save_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_save_hint_label.custom_minimum_size = Vector2(360, 0)
-	_save_hint_label.add_theme_font_size_override("font_size", 15)
-	_save_hint_label.add_theme_color_override("font_color", Color(0.4, 0.3, 0.22, 0.9))
-	panel_vbox.add_child(_save_hint_label)
 
-	await get_tree().process_frame
-	_menu_panel.pivot_offset = _menu_panel.size * 0.5
-
-
-func _build_title_banner() -> Control:
+func _build_title_sign() -> Control:
 	_title_root = Control.new()
-	_title_root.custom_minimum_size = Vector2(420, 96)
+	_title_root.custom_minimum_size = Vector2(840, 104)
 	_title_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_title_root.add_child(_make_title_text_block())
 
-	var underline := PanelContainer.new()
-	underline.custom_minimum_size = Vector2(360, 10)
-	var line_style := StyleBoxFlat.new()
-	line_style.bg_color = Color(1.0, 0.96, 0.82, 0.55)
-	line_style.set_corner_radius_all(5)
-	line_style.shadow_color = Color(0.45, 0.32, 0.18, 0.18)
-	line_style.shadow_size = 4
-	underline.add_theme_stylebox_override("panel", line_style)
-	underline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var title_holder := Control.new()
+	title_holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	title_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_holder.add_child(_make_title_text_block())
+	_title_root.add_child(title_holder)
 
-	var banner := VBoxContainer.new()
-	banner.add_theme_constant_override("separation", 10)
-	banner.alignment = BoxContainer.ALIGNMENT_CENTER
-	banner.add_child(_title_root)
-	banner.add_child(underline)
-	return banner
+	return _title_root
 
 
 func _make_title_text_block() -> Control:
@@ -428,36 +407,17 @@ func _make_title_text_block() -> Control:
 	var title_text := GameState.GAME_DISPLAY_NAME
 	var layers: Array[Dictionary] = [
 		{
-			"offset": Vector2(0, 8),
-			"color": Color(0.22, 0.14, 0.08, 0.55),
+			"offset": Vector2(0, 4),
+			"color": Color(0.18, 0.12, 0.08, 0.45),
 			"outline": 0,
-			"size": 74,
-		},
-		{
-			"offset": Vector2(0, 5),
-			"color": Color(0.48, 0.3, 0.16, 0.85),
-			"outline": 0,
-			"size": 74,
-		},
-		{
-			"offset": Vector2(0, 2),
-			"color": Color(0.72, 0.48, 0.24, 0.95),
-			"outline": 4,
-			"outline_color": Color(0.38, 0.24, 0.12),
-			"size": 74,
+			"size": TITLE_FONT_SIZE,
 		},
 		{
 			"offset": Vector2(0, 0),
-			"color": Color(1.0, 0.98, 0.9),
+			"color": Color(0.24, 0.16, 0.1),
 			"outline": 10,
-			"outline_color": Color(0.34, 0.22, 0.12),
-			"size": 74,
-		},
-		{
-			"offset": Vector2(-1, -2),
-			"color": Color(1.0, 1.0, 0.96, 0.42),
-			"outline": 0,
-			"size": 74,
+			"outline_color": Color(0.98, 0.95, 0.88, 0.95),
+			"size": TITLE_FONT_SIZE,
 		},
 	]
 
@@ -491,35 +451,37 @@ func _title_font() -> Font:
 	return UIFontTheme.get_font()
 
 
-func _make_pill_button(label_text: String) -> Button:
+func _make_menu_button(label_text: String) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(320, 58)
+	button.custom_minimum_size = MENU_BUTTON_SIZE
 	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	button.text = label_text
-	button.add_theme_font_size_override("font_size", 30)
+	button.add_theme_font_size_override("font_size", MENU_FONT_SIZE)
+	button.add_theme_font_override("font", _title_font())
 
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.93, 0.78, 0.54, 1.0)
-	normal.border_color = Color(0.58, 0.42, 0.26, 0.95)
-	normal.set_border_width_all(2)
+	normal.bg_color = Color(0.98, 0.95, 0.9, 0.94)
+	normal.border_color = Color(0.62, 0.48, 0.34, 0.75)
+	normal.set_border_width_all(3)
 	normal.set_corner_radius_all(24)
-	normal.content_margin_left = 24
-	normal.content_margin_right = 24
-	normal.shadow_color = Color(0.12, 0.08, 0.04, 0.18)
-	normal.shadow_size = 5
+	normal.content_margin_left = 28
+	normal.content_margin_right = 28
+	normal.shadow_color = Color(0.12, 0.08, 0.04, 0.14)
+	normal.shadow_size = 6
 	normal.shadow_offset = Vector2(0, 2)
 
 	var hover := normal.duplicate()
-	hover.bg_color = Color(0.98, 0.88, 0.64, 1.0)
+	hover.bg_color = Color(1.0, 0.98, 0.94, 0.98)
+	hover.border_color = Color(0.72, 0.56, 0.38, 0.9)
 	hover.shadow_size = 8
 
 	var pressed := normal.duplicate()
-	pressed.bg_color = Color(0.82, 0.66, 0.42, 1.0)
+	pressed.bg_color = Color(0.93, 0.88, 0.78, 1.0)
 	pressed.shadow_size = 2
 
 	var disabled := normal.duplicate()
-	disabled.bg_color = Color(0.86, 0.8, 0.72, 0.85)
-	disabled.border_color = Color(0.68, 0.6, 0.52, 0.6)
+	disabled.bg_color = Color(0.92, 0.9, 0.84, 0.72)
+	disabled.border_color = Color(0.72, 0.66, 0.58, 0.45)
 
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
@@ -529,10 +491,12 @@ func _make_pill_button(label_text: String) -> Button:
 	button.add_theme_color_override("font_color", Color(0.24, 0.16, 0.1))
 	button.add_theme_color_override("font_hover_color", Color(0.18, 0.12, 0.08))
 	button.add_theme_color_override("font_disabled_color", Color(0.46, 0.4, 0.34))
+	button.add_theme_color_override("font_outline_color", Color(0.98, 0.95, 0.88, 0.0))
+	button.add_theme_constant_override("outline_size", 0)
 
 	button.mouse_entered.connect(func() -> void:
 		button.pivot_offset = button.size * 0.5
-		button.scale = Vector2(1.04, 1.04)
+		button.scale = Vector2(1.05, 1.05)
 	)
 	button.mouse_exited.connect(func() -> void:
 		button.scale = Vector2.ONE
@@ -543,22 +507,11 @@ func _make_pill_button(label_text: String) -> Button:
 
 func _refresh_save_state() -> void:
 	GameState.ensure_save_migrated()
-	var has_save := GameState.has_save_file()
-	_continue_button.disabled = not has_save
-	if has_save:
-		if GameState.is_story_complete():
-			_save_hint_label.text = "十日已收束。重玩这十天，请开新游戏。"
-		elif GameState.IS_TEN_DAY_EDITION:
-			_save_hint_label.text = "存档：第 %d/%d 天" % [GameState.game_day, GameState.FINAL_GAME_DAY]
-		else:
-			_save_hint_label.text = "存档：第 %d 天 · 周目 %d" % [GameState.game_day, GameState.get_week_index()]
-	else:
-		_save_hint_label.text = "尚无存档，请选择「新游戏」"
+	_continue_button.disabled = not GameState.has_save_file()
 
 
 func _on_continue_pressed() -> void:
 	if not GameState.ensure_save_migrated():
-		_save_hint_label.text = "未找到存档，请选择「新游戏」"
 		_refresh_save_state()
 		return
 	GameState.continue_from_save()

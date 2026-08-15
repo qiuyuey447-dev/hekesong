@@ -28,8 +28,11 @@ const TREAT_LABELS := {
 
 
 func build_context(extra: Dictionary = {}) -> Dictionary:
-	var ctx := _base_context()
+	var max_lines := int(extra.get("journal_max_lines", 3))
+	var ctx := _base_context(max_lines)
 	for key in extra.keys():
+		if str(key) == "journal_max_lines":
+			continue
 		ctx[str(key)] = str(extra[key])
 	return ctx
 
@@ -118,7 +121,7 @@ func render_time_rhythm_hint(companion: String) -> String:
 	return "%s 轻声说：「%s」" % [companion, hint]
 
 
-func _base_context() -> Dictionary:
+func _base_context(max_lines: int = 3) -> Dictionary:
 	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
 	var promise_summary := str(promise.get("summary", "")).strip_edges()
 	if promise_summary == "":
@@ -128,7 +131,7 @@ func _base_context() -> Dictionary:
 	if GameState.companion_can_say_player_name() and GameState.has_player_name_set():
 		player = GameState.player_name.strip_edges()
 
-	var journal_lines := _collect_journal_lines(3)
+	var journal_lines := _collect_journal_lines(max_lines)
 	var ctx := {
 		"player_name": player,
 		"companion_name": GameState.companion_name,

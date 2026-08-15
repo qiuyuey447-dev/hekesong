@@ -101,6 +101,7 @@ func classify_message(text: String) -> Dictionary:
 
 
 func _build_classify_payload(text: String) -> Dictionary:
+	var time_ctx := GameState.get_time_context_for_llm()
 	return {
 		"event": "intent_classify",
 		"companion_id": str(NpcBridge.get_config_value("npc_id", "xiaoli")),
@@ -108,6 +109,10 @@ func _build_classify_payload(text: String) -> Dictionary:
 		"allowed_intents": ALLOWED_INTENTS,
 		"response_format": "json",
 		"intent_instruction": _intent_instruction(),
+		"time_of_day": GameState.time_of_day,
+		"time_label": GameState.get_time_label(),
+		"day_period_label": GameState.get_day_period_label(),
+		"time_context": time_ctx,
 		"world_snapshot": WorldSnapshot.capture({"react_type": "intent_classify"}),
 		"story_hint": StoryDirector.get_story_hint(),
 		"story_context": StoryDirector.get_story_context_for_llm(),

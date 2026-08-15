@@ -2,6 +2,7 @@ extends Node
 ## 小狸移动与任务执行：随机漫游、走到目标点、上报位置给 LLM。
 
 signal location_changed(snapshot: Dictionary)
+signal proactive_chase_shout
 
 const WORK_DURATION := 5.0
 const SHOP_WORK_DURATION := 2.5
@@ -11,8 +12,17 @@ const IDLE_STAND_MIN := 4.0
 const IDLE_STAND_MAX := 10.0
 const IDLE_STAND_CHANCE := 0.42
 const ARRIVE_DISTANCE := 6.0
+const PROACTIVE_NEAR_DISTANCE := 88.0
+const PROACTIVE_SHOUT_DISTANCE := 150.0
+const PROACTIVE_SHOUT_COOLDOWN := 5.0
+const PROACTIVE_FOLLOW_OFFSET := Vector2(0, 28.0)
 
+enum ProactiveMode { NONE, APPROACHING, FOLLOWING }
 enum Activity { IDLE, WALKING, WORKING }
+
+var _proactive_mode := ProactiveMode.NONE
+var _proactive_reached: Callable = Callable()
+var _proactive_shout_cooldown := 0.0
 
 var _companion: Node2D
 var _visual: Node
@@ -59,14 +69,61 @@ func setup(
 	location_changed.emit(get_snapshot())
 
 
+func is_proactive_active() -> bool:
+	return _proactive_mode != ProactiveMode.NONE
+
+
+func begin_proactive_approach(on_reached: Callable = Callable()) -> void:
+	_proactive_reached = on_reached
+	_proactive_shout_cooldown = 0.0
+	if not _ready or _snuggle_paused or TaskSystem.is_busy() or not _current_job.is_empty():
+		_begin_proactive_follow()
+		_fire_proactive_reached()
+		return
+	var player := _get_player()
+	if player == null:
+		_begin_proactive_follow()
+		_fire_proactive_reached()
+		return
+	if _companion.global_position.distance_to(player.global_position) <= PROACTIVE_NEAR_DISTANCE:
+		_begin_proactive_follow()
+		_fire_proactive_reached()
+		return
+	_proactive_mode = ProactiveMode.APPROACHING
+	_idle_stand_left = 0.0
+	_idle_cooldown = 999.0
+	if _visual != null and _visual.has_method("cancel_move"):
+		_visual.cancel_move()
+	_set_activity(Activity.WALKING, "找你")
+	_walk_to_player_for_proactive()
+
+
+func end_proactive_approach() -> void:
+	if _proactive_mode == ProactiveMode.NONE:
+		return
+	_proactive_mode = ProactiveMode.NONE
+	_proactive_reached = Callable()
+	_proactive_shout_cooldown = 0.0
+	if _visual != null and _visual.has_method("stop_follow"):
+		_visual.stop_follow()
+	elif _visual != null and _visual.has_method("cancel_move"):
+		_visual.cancel_move()
+	if _visual != null and _visual.has_method("hide_status_bubble"):
+		_visual.hide_status_bubble()
+	if _current_job.is_empty() and not TaskSystem.is_busy():
+		_set_activity(Activity.IDLE, "闲逛")
+		_idle_cooldown = randf_range(2.0, 4.0)
+
+
 func is_active() -> bool:
-	return _activity != Activity.IDLE or not _current_job.is_empty()
+	return _activity != Activity.IDLE or not _current_job.is_empty() or is_proactive_active()
 
 
 func set_snuggle_paused(paused: bool) -> void:
 	_snuggle_paused = paused
 	if not paused:
 		return
+	end_proactive_approach()
 	if _visual != null and _visual.has_method("cancel_move"):
 		_visual.cancel_move()
 	if _visual != null and _visual.has_method("hide_status_bubble"):
@@ -158,13 +215,14 @@ func _walk_to_target(
 	travel_label: String,
 	bubble_text: String,
 	on_arrived: Callable,
-	urgent: bool = true
+	urgent: bool = true,
+	arrive_distance: float = ARRIVE_DISTANCE
 ) -> void:
 	_set_activity(Activity.WALKING, travel_label)
 	if _visual != null and _visual.has_method("show_status_bubble"):
 		_visual.show_status_bubble(bubble_text)
 	if _visual != null and _visual.has_method("move_to"):
-		_visual.move_to(target, ARRIVE_DISTANCE, on_arrived, urgent)
+		_visual.move_to(target, arrive_distance, on_arrived, urgent)
 	else:
 		if _companion != null:
 			_companion.global_position = target
@@ -327,6 +385,10 @@ func _process(delta: float) -> void:
 	if _snuggle_paused:
 		return
 
+	if _proactive_mode != ProactiveMode.NONE:
+		_proactive_shout_cooldown = maxf(_proactive_shout_cooldown - delta, 0.0)
+		_tick_proactive_approach(delta)
+
 	_update_location_from_position()
 
 	if _activity == Activity.WORKING:
@@ -337,6 +399,9 @@ func _process(delta: float) -> void:
 		return
 
 	if _activity == Activity.WALKING:
+		return
+
+	if is_proactive_active():
 		return
 
 	if not _current_job.is_empty() or TaskSystem.is_busy():
@@ -432,3 +497,77 @@ func _build_pois() -> Array[Dictionary]:
 		{"id": "porch", "name": "廊下", "pos": FarmSetdress.POS_PORCH, "radius": 120.0},
 		{"id": "hollow", "name": "树洞", "pos": FarmSetdress.POS_HOLLOW, "radius": 100.0},
 	]
+
+
+func _get_player() -> Node2D:
+	var player := get_tree().get_first_node_in_group("player") as Node2D
+	return player
+
+
+func _walk_to_player_for_proactive() -> void:
+	var player := _get_player()
+	if player == null:
+		_begin_proactive_follow()
+		_fire_proactive_reached()
+		return
+	_walk_to_target(
+		player.global_position,
+		"找你",
+		"%s好像有话要说…" % GameState.companion_name,
+		func() -> void:
+			_begin_proactive_follow()
+			_fire_proactive_reached(),
+		true,
+		PROACTIVE_NEAR_DISTANCE * 0.55
+	)
+
+
+func _begin_proactive_follow() -> void:
+	if _proactive_mode == ProactiveMode.FOLLOWING:
+		return
+	_proactive_mode = ProactiveMode.FOLLOWING
+	var player := _get_player()
+	if player == null or _visual == null or not _visual.has_method("follow_node"):
+		return
+	if _visual.has_method("hide_status_bubble"):
+		_visual.hide_status_bubble()
+	_set_activity(Activity.WALKING, "跟着你")
+	_visual.follow_node(player, PROACTIVE_FOLLOW_OFFSET, ARRIVE_DISTANCE)
+
+
+func _fire_proactive_reached() -> void:
+	if _proactive_reached.is_valid():
+		var cb := _proactive_reached
+		_proactive_reached = Callable()
+		cb.call()
+
+
+func _tick_proactive_approach(_delta: float) -> void:
+	var player := _get_player()
+	if player == null:
+		return
+	var dist := _companion.global_position.distance_to(player.global_position)
+	if dist <= PROACTIVE_NEAR_DISTANCE:
+		if _proactive_mode == ProactiveMode.APPROACHING:
+			_begin_proactive_follow()
+			_fire_proactive_reached()
+		return
+	if _proactive_mode == ProactiveMode.APPROACHING:
+		if _visual != null and _visual.has_method("steer_to"):
+			_visual.steer_to(player.global_position)
+	_try_proactive_chase_shout()
+
+
+func _try_proactive_chase_shout() -> void:
+	if _proactive_shout_cooldown > 0.0:
+		return
+	var player := _get_player()
+	if player == null:
+		return
+	var dist := _companion.global_position.distance_to(player.global_position)
+	if dist < PROACTIVE_SHOUT_DISTANCE:
+		return
+	if player.has_method("is_moving") and not player.is_moving():
+		return
+	_proactive_shout_cooldown = PROACTIVE_SHOUT_COOLDOWN
+	proactive_chase_shout.emit()

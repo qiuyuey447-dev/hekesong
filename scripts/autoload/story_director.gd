@@ -186,8 +186,18 @@ func get_story_context_for_llm() -> Dictionary:
 		if recent_story.size() >= 3:
 			break
 
+	var time_ctx := GameState.get_time_context_for_llm()
+	var beat_id_for_ctx := pending_id
+	if beat_id_for_ctx == "":
+		beat_id_for_ctx = StoryBeatDirector.get_today_beat_id()
+	var beat_ctx := StoryBeatDirector.get_beat_context_for_llm(beat_id_for_ctx)
+	var sched := StoryBeatDirector.get_daily_schedule_snapshot()
 	return {
 		"game_day": GameState.game_day,
+		"time_of_day": str(time_ctx.get("time_of_day", GameState.time_of_day)),
+		"time_label": str(time_ctx.get("time_label", GameState.get_time_label())),
+		"day_period_label": str(time_ctx.get("day_period_label", GameState.get_day_period_label())),
+		"awaiting_sleep": bool(time_ctx.get("awaiting_sleep", false)),
 		"week_index": int(beat.get("week_index", GameState.get_week_index())),
 		"loop_day": int(beat.get("loop_day", GameState.get_loop_day())),
 		"beat_id": str(beat.get("beat_id", "")),
@@ -199,10 +209,16 @@ func get_story_context_for_llm() -> Dictionary:
 		"pending_beat_id": pending_id,
 		"pending_beat_brief": pending_brief,
 		"has_pending_beat": StoryBeatDirector.has_pending_today_beat(),
+		"beat_context": beat_ctx,
+		"affection_tier": str(beat_ctx.get("affection_tier", GameState.get_affection_tier())),
+		"scheduled_beat_id": str(sched.get("beat_id", "")),
+		"scheduled_period": str(sched.get("period", "")),
+		"invite_goal": str(beat_ctx.get("invite_goal", "")),
 		"recent_story_beats": recent_story,
 		"memory_revealed": GameState.has_revealed_memory(),
 		"story_route_locked": GameState.get_story_route(),
 		"player_name_context": GameState.get_player_name_context(),
+		"time_context": GameState.get_time_context_for_llm(),
 		"narrative_constraints": _narrative_constraints(),
 	}
 
@@ -262,6 +278,7 @@ func _narrative_constraints() -> Array[String]:
 			"当前田里没有在生长/可收的萝卜（空田 %d）。禁止说去浇水、正在浇水、浇完了；"
 			% empty
 			+ "若玩家提到浇水，应承认田是空的，并主动问要不要买种子、种上。"
+			+ "玩家要休息时勿推销浇田。"
 		)
 	elif unwatered <= 0:
 		constraints.append(
@@ -269,7 +286,10 @@ func _narrative_constraints() -> Array[String]:
 			% harvestable
 		)
 	else:
-		constraints.append("当前有 %d 块田待浇水，可主动提出帮忙浇。" % unwatered)
+		constraints.append(
+			"当前有 %d 块田待浇水；仅当玩家明确问田或委托时再提，勿在聊休息/剧情/睡觉时报田况或推销浇田。"
+			% unwatered
+		)
 
 	var seeds := int(GameState.get_item_count("turnip_seed"))
 	if empty <= 0:

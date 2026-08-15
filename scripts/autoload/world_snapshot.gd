@@ -9,6 +9,7 @@ var _companion_profile_cache: Dictionary = {}
 func capture(extra: Dictionary = {}) -> Dictionary:
 	var plots := GameState.get_plot_summary()
 	var market := GameState.get_market_snapshot()
+	var time_ctx := GameState.get_time_context_for_llm()
 	return {
 		"game_day": GameState.game_day,
 		"week_index": GameState.get_week_index(),
@@ -19,6 +20,9 @@ func capture(extra: Dictionary = {}) -> Dictionary:
 		"weather_tomorrow_label": GameState.get_weather_label(GameState.weather_tomorrow_hint),
 		"time_of_day": GameState.time_of_day,
 		"time_label": GameState.get_time_label(),
+		"day_period_label": str(time_ctx.get("day_period_label", "")),
+		"awaiting_sleep": bool(time_ctx.get("awaiting_sleep", false)),
+		"time_context": time_ctx,
 		"market": market,
 		"shop": GameState.get_shop_snapshot_for_llm(),
 		"inventory": GameState.get_inventory_snapshot_for_llm(),
