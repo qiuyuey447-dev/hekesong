@@ -64,6 +64,19 @@ func _run_ten_day_tests() -> void:
 	_test_ten_day_pure_narrative_lock()
 	_test_ten_day_chat_promise()
 	_test_ten_day_mid_profile_copy()
+	_test_status_inquiry_not_sleep()
+	_test_intent_classify_flow()
+	_test_personalized_story_steps()
+	_test_d7_pending_tail_cleared_on_complete()
+	_test_chat_archive_on_advance()
+	_test_ten_day_bad_early_flow_guards()
+	_test_ten_day_tier_copy_diff()
+	_test_ten_day_fallback_full_playthrough()
+	_test_player_notebook_dark_lines()
+	_test_player_notebook_d9_missing()
+	_test_player_notebook_awakening_reveal()
+	_test_persona_regression_suite()
+	_test_ten_day_e_polish()
 
 
 func _test_advance_day_writes_journal() -> void:
@@ -318,7 +331,9 @@ func _test_ten_day_d4_morning_telegraph() -> void:
 	GameState.game_day = 4
 	_assert(StoryRouteData.should_inject_morning_opening("P_N05"), "D4 injects morning telegraph")
 	var text := StoryRouteData.render_morning_opening(false, "P_N05")
-	_assert("存档坏了" in text or "弄丢" in text, "D4 morning telegraphs amnesia")
+	_assert("弄丢" in text, "D4 morning telegraphs lost name")
+	_assert("不是存档" in text or "失忆" in text, "D4 morning frames amnesia not save bug")
+	_assert(StoryNodeCopy.get_system("d4_amnesia_hint").strip_edges() != "", "D4 amnesia hint copy present")
 
 
 func _test_ten_day_promise_on_d3_beat() -> void:
@@ -605,6 +620,483 @@ func _test_ten_day_mid_profile_copy() -> void:
 	GameState.affection = 70
 	var d7_warm := StoryRouteData.render_body("NM_N16", "NM_N16")
 	_assert(d7_mid != d7_warm, "D7 mid differs from warm at high affection")
+
+
+func _test_status_inquiry_not_sleep() -> void:
+	_assert(not IntentParser.looks_like_sleep_request("熟了没"), "熟了没 is not sleep")
+	_assert(IntentParser.looks_like_status_inquiry("田怎么样"), "田怎么样 is status")
+	var parsed := IntentParser.parse("能收了吗")
+	_assert(str(parsed.get("intent", "")) == IntentParser.INTENT_CHECK_STATUS, "能收了吗 → check_status")
+	_assert(IntentParser.looks_like_stop_farm_chore("别浇了"), "别浇了 is stop chore")
+	var stop := IntentParser.parse("雨停再种")
+	_assert(str(stop.get("intent", "")) == IntentParser.INTENT_CHAT, "雨停再种 stays chat")
+
+
+func _test_intent_classify_flow() -> void:
+	var local := IntentParser.parse("帮我浇水")
+	var chat_api := {
+		"intent": IntentParser.INTENT_CHAT,
+		"plot_id": -1,
+		"confidence": 0.8,
+		"raw_text": "帮我浇水",
+	}
+	var merged := IntentParser.merge_intents(local, chat_api, "帮我浇水", true)
+	_assert(str(merged.get("intent", "")) == IntentParser.INTENT_CHAT, "API chat wins over local water")
+	var failed := IntentParser.merge_intents(local, {}, "帮我浇水", true)
+	_assert(str(failed.get("source", "")) == "classify_failed", "classify fail degrades to chat")
+	_assert(str(failed.get("intent", "")) == IntentParser.INTENT_CHAT, "classify fail intent is chat")
+	var classified := IntentParser.from_api_classify_response({
+		"intent": "chat",
+		"confidence": 0.9,
+		"reply": "我去浇水",
+	}, "田看起来怎样")
+	_assert(str(classified.get("intent", "")) == IntentParser.INTENT_CHAT, "classify parser ignores reply action")
+
+
+func _test_personalized_story_steps() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.append_day_journal({
+		"day": 5,
+		"summary": "廊下听雨",
+		"chat_summary": "萝卜熟了再看",
+		"highlights": ["聊天 · 萝卜熟了再看"],
+	})
+	var snippet := StoryRouteData.extract_chat_snippet_for_beat("NM_N02p")
+	_assert("萝卜" in snippet, "N02p snippet uses chat digest")
+	var fallback := NpcFallback.story_step_render({
+		"beat_id": "NM_N02p",
+		"personal_snippet": snippet,
+	})
+	_assert("本子" in fallback and "萝卜" in fallback, "N02p fallback weaves snippet")
+	GameState.affection = 40
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 6
+	var signals: Dictionary = GameState.long_term_memory.get("relationship_signals", {})
+	signals["chat_days"] = 2
+	GameState.long_term_memory["relationship_signals"] = signals
+	var beat := StoryBeatDirector.build_beat("NM_N02p")
+	var has_llm := false
+	for step in beat.get("steps", []):
+		if step is Dictionary and str(step.get("llm_render", "")) == "chat_digest":
+			has_llm = true
+	_assert(has_llm, "N02p chat track marks llm_render")
+
+
+func _test_d7_pending_tail_cleared_on_complete() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 7
+	GameState.time_of_day = GameState.TIME_MORNING
+	var beat := StoryBeatDirector.build_beat("NM_N16")
+	beat = StoryBeatDirector.take_displayable_beat(beat)
+	_assert(GameState.has_pending_story_beat_tail(), "D7 morning stashes night tail")
+	_assert(not StoryBeatDirector.should_complete_beat_after_panel("NM_N16"), "D7 daytime does not complete beat")
+	GameState.time_of_day = GameState.TIME_NIGHT
+	var tail := StoryBeatDirector.build_beat_tail_resume()
+	_assert(not tail.is_empty(), "D7 night resumes tail")
+	_assert(StoryBeatDirector.should_complete_beat_after_panel("NM_N16"), "D7 night tail can complete")
+	StoryBeatDirector.complete_beat("NM_N16")
+	_assert(not GameState.has_pending_story_beat_tail(), "complete clears pending tail")
+
+
+func _test_chat_archive_on_advance() -> void:
+	GameState.reset_for_new_game()
+	GameState.record_chat_turn("player", "今天有点累")
+	GameState.record_chat_turn("companion", "那先歇一会儿")
+	GameState.advance_day()
+	var archive: Variant = GameState.long_term_memory.get("chat_archive", [])
+	_assert(archive is Array and archive.size() == 1, "advance archives yesterday chat")
+	var history := GameState.get_chat_history_for_ui()
+	var found := false
+	for turn in history:
+		if turn is Dictionary and str(turn.get("text", "")).contains("今天有点累"):
+			found = true
+	_assert(found, "UI history includes archived player line")
+
+
+func _test_ten_day_bad_early_flow_guards() -> void:
+	GameState.reset_for_new_game()
+	GameState.mark_w2_expel_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_BAD_EARLY)
+	_assert(GameState.is_bad_early_path(), "expel flag marks bad early path")
+	GameState.game_day = 5
+	_assert(GameState.can_advance_day(), "D5 expel can still sleep to D6")
+	GameState.game_day = 6
+	_assert(not GameState.can_advance_day(), "D6+ expel cannot advance day")
+	_assert(not GameState.should_show_awakening(), "bad early never shows awakening")
+	_assert(not GameState.should_force_story_finale(), "finale waits until BE_N07")
+	GameState.mark_story_node_seen("BE_N07")
+	_assert(GameState.should_force_story_finale(), "BE_N07 seen forces bad early finale")
+
+
+func _test_ten_day_tier_copy_diff() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	var warm := StoryRouteData.render_body("P_N02", "P_N02_warm")
+	var mid := StoryRouteData.render_body("P_N02", "P_N02_mid")
+	var cold := StoryRouteData.render_body("P_N02", "P_N02_cold")
+	_assert(warm != mid and mid != cold and warm != cold, "D2 three-tier copy differs")
+	var n11_warm := StoryRouteData.render_body("P_N11", "P_N11_warm")
+	var n11_mid := StoryRouteData.render_body("P_N11", "P_N11_mid")
+	_assert(n11_warm != n11_mid, "D3 warm/mid copy differs")
+
+
+func _test_ten_day_fallback_full_playthrough() -> void:
+	print("  .. fallback full playthrough")
+	_test_fallback_speech_matrix()
+	_test_fallback_keep_path_d1_d10()
+	_test_fallback_expel_path_d1_d6()
+
+
+func _test_fallback_speech_matrix() -> void:
+	GameState.reset_for_new_game()
+	GameState.game_day = 1
+	var mem1 := MemoryService.get_context_for_event("session_start", {})
+	var greet1 := NpcFallback.greet(
+		GameState.get_stage(),
+		1,
+		0,
+		GameState.get_weather_label(),
+		mem1
+	)
+	_assert_fallback_line(greet1, "D1 session greet")
+
+	GameState.game_day = 4
+	var mem4 := MemoryService.get_context_for_event("player_chat", {})
+	var chat4 := NpcFallback.player_chat("你是谁", GameState.get_stage(), mem4, {})
+	_assert(
+		"想不起来" in chat4 or "不记得" in chat4 or "对不起" in chat4,
+		"D4 fallback stays amnesiac"
+	)
+	_assert_stranger_fallback_safe(chat4, "D4 chat")
+
+	var greet4 := NpcFallback.greet(
+		GameState.get_stage(),
+		4,
+		GameState.affection,
+		GameState.get_weather_label(),
+		mem4,
+		"清晨"
+	)
+	_assert_fallback_line(greet4, "D4 session greet")
+	_assert_stranger_fallback_safe(greet4, "D4 greet")
+
+	GameState.game_day = 6
+	GameState.long_term_memory["anchors"] = [{
+		"id": "test_anchor",
+		"summary": "廊下听雨",
+		"game_day": 2,
+		"importance": 0.8,
+	}]
+	var mem6 := MemoryService.get_context_for_event("player_chat", {})
+	var chat6 := NpcFallback.player_chat("今天怎么样", GameState.get_stage(), mem6, {})
+	_assert_fallback_line(chat6, "D6 leak chat")
+
+	var plant := NpcFallback.task_complete({"task": "plant", "plot_count": 2}, {})
+	_assert("种" in plant, "fallback plant complete has copy")
+	var harvest := NpcFallback.task_complete({"task": "harvest", "plot_count": 1}, {})
+	_assert("收" in harvest, "fallback harvest complete has copy")
+	var water := NpcFallback.task_complete({"task": "water", "plot_count": 3}, {})
+	_assert("浇" in water, "fallback water complete has copy")
+
+	var snapshot := WorldSnapshot.capture({})
+	for react_type in [
+		"world_weather_change",
+		"world_crop_ready",
+		"world_evening",
+		"story_nudge",
+		"persona_shift",
+	]:
+		var react := NpcFallback.companion_react(
+			react_type,
+			snapshot,
+			StoryDirector.get_story_hint(),
+			GameState.get_stage(),
+			mem6
+		)
+		_assert_fallback_line(react, "fallback react %s" % react_type)
+
+	var step := NpcFallback.story_step_render({
+		"personal_snippet": "廊下那刻很静",
+		"beat_id": "NM_N02p",
+	})
+	_assert("廊下" in step or step.strip_edges() != "", "fallback story_step_render")
+
+	var casual := NpcFallback.proactive_line({
+		"time_of_day": "morning",
+		"story_mode": str(mem4.get("story_mode", "stranger")),
+	})
+	_assert_fallback_line(casual, "fallback proactive stranger morning")
+
+	var feed := NpcFallback.companion_feed(
+		{"id": "turnip", "name": "萝卜"},
+		[],
+		false,
+		0
+	)
+	_assert_fallback_line(feed, "fallback companion_feed")
+
+	_assert(EndingDirector.get_awakening_steps(EndingDirector.ENDING_TRUE).size() >= 3, "awakening alias returns steps")
+
+
+func _test_fallback_keep_path_d1_d10() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	var prologue := ["P_N01", "P_N02", "P_N11", "P_N05", "P_N06p"]
+	for i in range(prologue.size()):
+		var day := i + 1
+		GameState.game_day = day
+		var beat_id: String = prologue[i]
+		_assert(StoryBeatDirector.get_today_beat_id() == beat_id, "fallback keep D%d beat" % day)
+		var body := StoryRouteData.render_body(beat_id, beat_id)
+		_assert(body.strip_edges() != "", "fallback keep D%d body" % day)
+		var mem := MemoryService.get_context_for_event("player_chat", {})
+		if day == 4:
+			_assert_stranger_fallback_safe(
+				NpcFallback.player_chat("你好", GameState.get_stage(), mem, {}),
+				"fallback keep D4 chat"
+			)
+		StoryBeatDirector.complete_beat(beat_id)
+		if beat_id == "P_N06p":
+			GameState.mark_w2_keep_choice()
+			StoryBeatDirector.refresh_story_route()
+
+	GameState.affection = 40
+	GameState.bond = 28
+	GameState.long_term_memory["memory_recovery"] = 0.55
+	GameState.fulfill_promise("萝卜熟了。约定还在。")
+	StoryBeatDirector.refresh_story_route()
+	for day in range(6, 10):
+		GameState.game_day = day
+		StoryBeatDirector.ensure_story_route_locked()
+		var beat_id := StoryBeatDirector.get_today_beat_id()
+		_assert(beat_id.strip_edges() != "", "fallback keep D%d spine" % day)
+		_assert_fallback_beat_playable(beat_id, "fallback keep D%d spine" % day)
+		StoryBeatDirector.complete_beat(beat_id)
+		if day == 7:
+			PlayerNotebookService.on_first_write_d7()
+
+	GameState.game_day = 10
+	_assert(GameState.should_show_awakening(), "fallback keep D10 awakening")
+	var ending := EndingDirector.resolve_ending(false)
+	_assert(ending != EndingDirector.ENDING_BAD_EARLY, "fallback keep not bad early")
+	EndingDirector.finalize_ending(ending)
+	_assert(GameState.is_story_complete(), "fallback keep D1-D10 completable")
+
+
+func _test_fallback_expel_path_d1_d6() -> void:
+	GameState.reset_for_new_game()
+	for day in range(1, 5):
+		GameState.game_day = day
+		var beat_id := StoryBeatDirector.get_today_beat_id()
+		_assert(beat_id.strip_edges() != "", "fallback expel D%d beat" % day)
+		StoryBeatDirector.complete_beat(beat_id)
+	GameState.game_day = 5
+	StoryBeatDirector.complete_beat("P_N06p")
+	GameState.mark_w2_expel_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_BAD_EARLY)
+	GameState.game_day = 6
+	var be_beat := StoryBeatDirector.get_today_beat_id()
+	_assert(be_beat == "BE_N07", "fallback expel D6 BE_N07")
+	_assert(
+		StoryRouteData.render_body("BE_N07", "BE_N07").strip_edges() != "",
+		"fallback expel D6 body"
+	)
+	StoryBeatDirector.complete_beat("BE_N07")
+	EndingDirector.finalize_ending(EndingDirector.ENDING_BAD_EARLY)
+	_assert(GameState.is_story_complete(), "fallback expel D1-D6 completable")
+
+
+func _assert_fallback_line(line: String, label: String) -> void:
+	_assert(line.strip_edges() != "", "%s non-empty" % label)
+
+
+func _assert_fallback_beat_playable(beat_id: String, label: String) -> void:
+	var beat := StoryBeatDirector.build_beat(beat_id)
+	var steps: Array = beat.get("steps", [])
+	_assert(not steps.is_empty(), "%s has steps" % label)
+	for step in steps:
+		if not step is Dictionary:
+			continue
+		var body := str(step.get("body", "")).strip_edges()
+		if body != "":
+			_assert(true, "%s has copy" % label)
+			return
+		var tpl := str(step.get("template", "")).strip_edges()
+		if tpl == "":
+			continue
+		var rendered := StoryRouteData.render_body(beat_id, tpl)
+		if rendered.strip_edges() != "":
+			_assert(true, "%s has copy" % label)
+			return
+	_assert(false, "%s has playable copy" % label)
+
+
+func _assert_stranger_fallback_safe(text: String, label: String) -> void:
+	for phrase in RelationshipDirector.get_stranger_ooc_phrases():
+		if phrase != "" and phrase in text:
+			_assert(false, "%s avoids stranger OOC (%s)" % [label, phrase])
+			return
+	for phrase in RelationshipDirector.get_stranger_intimate_phrases():
+		if phrase != "" and phrase in text:
+			_assert(false, "%s avoids stranger intimate (%s)" % [label, phrase])
+			return
+	_assert(true, "%s stranger-safe" % label)
+
+
+func _test_player_notebook_dark_lines() -> void:
+	GameState.reset_for_new_game()
+	PlayerNotebookService.on_beat_completed("P_N01")
+	var pages := PlayerNotebookService.get_pages_for_ui()
+	_assert(pages.size() >= 1, "D1 dark line adds question page")
+	_assert(str(pages[0].get("status", "")) == "question", "D1 page is question mark")
+	GameState.game_day = 2
+	PlayerNotebookService.on_beat_completed("P_N02")
+	var visible_count := 0
+	for page in PlayerNotebookService.get_pages_for_ui():
+		if str(page.get("status", "")) == "visible":
+			visible_count += 1
+	_assert(visible_count >= 1, "D2 adds visible rain page")
+	var excerpt := StorySlotService.slot("my_notebook_excerpt", StorySlotService.build_context())
+	_assert(excerpt != "", "my_notebook slot uses player notebook excerpt")
+
+
+func _test_player_notebook_d9_missing() -> void:
+	GameState.reset_for_new_game()
+	PlayerNotebookService.add_visible_page("第一页", 1, "deja_vu_d1")
+	PlayerNotebookService.add_visible_page("第二页", 2, "rain_moment_d2")
+	PlayerNotebookService.add_visible_page("第三页", 7, "first_write_d7")
+	PlayerNotebookService.on_day_advanced(9)
+	var missing_count := 0
+	for page in PlayerNotebookService.get_pages_for_ui():
+		if str(page.get("status", "")) == "missing":
+			missing_count += 1
+	_assert(missing_count >= 2, "D9+ marks earliest visible pages missing")
+	var kept := false
+	for page in PlayerNotebookService.get_pages_for_ui():
+		if str(page.get("text", "")).contains("第三页"):
+			kept = true
+	_assert(kept, "D7 first write page survives D9 missing")
+
+
+func _test_player_notebook_awakening_reveal() -> void:
+	GameState.reset_for_new_game()
+	PlayerNotebookService.on_beat_completed("P_N01")
+	var steps := EndingDirector.get_awakening_steps(EndingDirector.ENDING_TRUE)
+	var act2_body := str(steps[1].get("body", "")) if steps.size() > 1 else ""
+	_assert("眼熟" in act2_body, "awakening act2 includes player notebook reveal")
+	var again := PlayerNotebookService.reveal_for_awakening()
+	_assert(again.is_empty(), "awakening reveal only once via ending director")
+
+
+func _test_persona_regression_suite() -> void:
+	GameState.reset_for_new_game()
+	GameState.game_day = 6
+	var payload := {
+		"memory_context": MemoryService.get_context_for_event("player_chat", {}),
+		"story_mode": "leak",
+	}
+	var l3_bad := ResponseValidator.validate("player_chat", "上周我们一起浇过田。", payload, [])
+	_assert(not bool(l3_bad.get("ok", true)), "L3 episodic claim rejected without citation")
+	_assert(str(l3_bad.get("reason", "")) == "l3_episodic", "L3 rejection reason tagged")
+
+	GameState.game_day = 4
+	var stranger_payload := {
+		"memory_context": MemoryService.get_context_for_event("player_chat", {}),
+		"story_mode": "stranger",
+		"player_name": "",
+	}
+	var ooc := ResponseValidator.validate("player_chat", "我们以前一起浇过田。", stranger_payload, [])
+	_assert(not bool(ooc.get("ok", true)), "stranger OOC phrase rejected")
+	var intimate := ResponseValidator.validate("player_chat", "想你了，别走。", stranger_payload, [])
+	_assert(not bool(intimate.get("ok", true)), "stranger intimate phrase rejected")
+
+	GameState.long_term_memory["persona"] = {
+		"warm": 0.9, "strict": 0.5, "active": 0.5, "optimistic": 0.5, "dependent": 0.5,
+	}
+	GameState.regress_persona_toward_baseline(0.02)
+	var warm := float(GameState.get_persona_vector().get("warm", 0.5))
+	_assert(warm < 0.9, "persona regresses toward baseline")
+
+	GameState.game_day = 7
+	GameState.long_term_memory["persona"] = {
+		"warm": 0.65, "strict": 0.5, "active": 0.5, "optimistic": 0.5, "dependent": 0.5,
+	}
+	GameState.long_term_memory["persona_shift_announced"] = []
+	var shift := GameState.peek_persona_shift()
+	_assert(not shift.is_empty(), "persona shift detected when delta >= 0.12")
+	_assert(str(shift.get("dimension", "")) == "warm", "persona shift picks warm dimension")
+
+	var literary := ResponseValidator.validate("player_chat", "雨帘后面，心里发紧。", payload, [])
+	_assert(not bool(literary.get("ok", true)), "literary phrase rejected in chat")
+
+
+func _test_ten_day_e_polish() -> void:
+	print("  .. E polish")
+	_assert(
+		StoryNodeCopy.get_system("blocking_story_beat").strip_edges() != "",
+		"blocking hint uses narrative copy"
+	)
+	_assert(
+		"任务" not in StoryNodeCopy.get_system("blocking_story_beat"),
+		"blocking hint avoids task wording"
+	)
+	_assert(StoryNodeCopy.get_system("sleep_prompt_title") == "夜深了", "sleep prompt narrative title")
+
+	GameState.reset_for_new_game()
+	GameState.game_day = 2
+	GameState.weather_today = GameState.WEATHER_RAIN
+	_assert(GameState.can_proactive_speech("ambient"), "rain morning allows one ambient")
+	GameState.consume_proactive_speech("ambient")
+	_assert(not GameState.can_proactive_speech("ambient"), "ambient capped at one per day")
+	var ambient := NpcFallback.ambient_sidewrite(GameState.WEATHER_RAIN)
+	_assert("廊" in ambient or "雨" in ambient, "rain ambient mentions porch or rain")
+
+	var font := UIFontTheme.get_font()
+	_assert(font != null, "UIFontTheme font loaded for Web/Desktop")
+	_assert(FileAccess.file_exists("res://assets/fonts/ZCOOLKuaiLe-Regular.ttf"), "primary CJK font file present")
+
+	GameState.reset_for_new_game()
+	GameState.register_farm_plots(4)
+	_assert(GameState.plant_turnip(1), "farm plant regression")
+	GameState.mark_plot_watered(1)
+	var plot: Dictionary = GameState.get_plot(1)
+	_assert(bool(plot.get("watered", false)), "farm water regression")
+
+	for day in range(1, 11):
+		GameState.game_day = day
+		var weather := GameState.resolve_weather_for_day(day)
+		_assert(weather in [GameState.WEATHER_RAIN, GameState.WEATHER_SUN], "D%d weather resolves" % day)
+
+	for day in [4, 5]:
+		GameState.reset_for_new_game()
+		GameState.game_day = day
+		if day == 5:
+			GameState.set_player_display_name("阿松")
+		var payload := {
+			"memory_context": MemoryService.get_context_for_event("player_chat", {}),
+			"story_mode": StoryDirector.get_story_mode(),
+			"player_name": GameState.get_player_display_name(),
+		}
+		_assert(str(payload.get("story_mode", "")) == "stranger", "D%d API guard stranger mode" % day)
+		for phrase in ["又见面了", "还记得", "欢迎回来"]:
+			var sample := "嗯，%s。" % phrase
+			var check := ResponseValidator.validate("player_chat", sample, payload, [])
+			_assert(not bool(check.get("ok", true)), "D%d rejects OOC phrase: %s" % [day, phrase])
+		if day == 5 and GameState.get_player_display_name() != "":
+			var name_check := ResponseValidator.validate(
+				"player_chat",
+				"阿松，又见面了。",
+				payload,
+				[]
+			)
+			_assert(not bool(name_check.get("ok", true)), "D5 stranger rejects player name in chat")
 
 
 func _seed_true_ending_stats() -> void:

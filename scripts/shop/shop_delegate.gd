@@ -52,7 +52,7 @@ static func parse_seed_purchase_quantity(text: String) -> int:
 
 static func looks_like_plant_now(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_plant_declined(normalized):
 		return false
 	return normalized.contains("种") and not normalized.contains("种子") and not normalized.contains("买")
 
@@ -83,15 +83,59 @@ static func is_affirmative_reply(text: String) -> bool:
 
 static func is_negative_reply(text: String) -> bool:
 	var trimmed := text.strip_edges()
-	return trimmed in [
+	if trimmed in [
 		"不用", "不要", "不用了", "算了", "不用谢", "我自己来",
-		"我自己浇", "我自己种", "我自己买", "先不用",
-	]
+		"我自己浇", "我自己种", "我自己买", "先不用", "别", "先别",
+		"不用浇", "不用种", "不用买", "不用收", "别浇了", "别种了", "别买了",
+	]:
+		return true
+	return looks_like_chore_declined(trimmed)
+
+
+static func looks_like_chore_declined(text: String) -> bool:
+	return (
+		looks_like_water_declined(text)
+		or looks_like_plant_declined(text)
+		or looks_like_harvest_declined(text)
+		or looks_like_shop_declined(text)
+	)
+
+
+static func looks_like_water_declined(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "")
+	for phrase in ["别浇", "不用浇", "先别浇", "不要浇", "别去浇", "先别去浇"]:
+		if phrase in compact:
+			return true
+	return false
+
+
+static func looks_like_plant_declined(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "")
+	for phrase in ["别种", "不用种", "先别种", "不要种", "雨停再种", "别去种"]:
+		if phrase in compact:
+			return true
+	return false
+
+
+static func looks_like_harvest_declined(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "")
+	for phrase in ["别收", "不用收", "先别收", "不要收", "别去收"]:
+		if phrase in compact:
+			return true
+	return false
+
+
+static func looks_like_shop_declined(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "")
+	for phrase in ["别买", "不用买", "先别买", "不要买", "别买了", "不用买了"]:
+		if phrase in compact:
+			return true
+	return false
 
 
 static func looks_like_plant_commitment(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_plant_declined(normalized):
 		return false
 	for phrase in [
 		"我现在就去种", "这就去种", "马上去种", "去田里种", "去种上", "帮你种上",
@@ -106,7 +150,7 @@ static func looks_like_plant_commitment(text: String) -> bool:
 static func looks_like_shop_seed_commitment(text: String) -> bool:
 	## 小狸口头答应去买萝卜种子（未必带「商店」二字）。
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_shop_declined(normalized):
 		return false
 	if not ("种子" in normalized and "买" in normalized):
 		return false
@@ -166,7 +210,7 @@ static func looks_like_water_offer(text: String) -> bool:
 
 static func looks_like_water_commitment(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_water_declined(normalized):
 		return false
 	for phrase in [
 		"我现在就去浇", "这就去浇", "马上去浇", "去浇田", "去浇地", "帮你浇",
@@ -188,7 +232,7 @@ static func looks_like_water_commitment(text: String) -> bool:
 
 static func looks_like_harvest_commitment(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_harvest_declined(normalized):
 		return false
 	for phrase in [
 		"我现在就去收", "这就去收", "马上去收", "去收萝卜", "帮你收", "我去收",
@@ -230,7 +274,7 @@ static func looks_like_sleep_commitment(text: String) -> bool:
 
 static func looks_like_completed_water_claim(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty() or not ("浇" in normalized):
+	if normalized.is_empty() or not ("浇" in normalized) or looks_like_water_declined(normalized):
 		return false
 	for phrase in [
 		"浇完了", "已经浇", "刚浇完", "浇好了", "都浇过了", "已经帮你浇",
@@ -242,7 +286,7 @@ static func looks_like_completed_water_claim(text: String) -> bool:
 
 static func looks_like_completed_plant_claim(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_plant_declined(normalized):
 		return false
 	for phrase in [
 		"种完了", "已经种", "刚种完", "种好了", "都种上了", "已经帮你种",
@@ -254,7 +298,7 @@ static func looks_like_completed_plant_claim(text: String) -> bool:
 
 static func looks_like_completed_shop_claim(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_shop_declined(normalized):
 		return false
 	for phrase in [
 		"买好了", "已经买", "已购买", "帮你买了", "种子买好", "刚买好",
@@ -267,7 +311,7 @@ static func looks_like_completed_shop_claim(text: String) -> bool:
 
 static func looks_like_completed_harvest_claim(text: String) -> bool:
 	var normalized := text.strip_edges()
-	if normalized.is_empty():
+	if normalized.is_empty() or looks_like_harvest_declined(normalized):
 		return false
 	for phrase in [
 		"收完了", "已经收", "刚收完", "都收好了", "已经帮你收", "摘完了",

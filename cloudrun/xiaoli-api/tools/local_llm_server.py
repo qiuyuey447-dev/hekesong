@@ -363,20 +363,39 @@ def _prompt_forbidden(payload: dict[str, Any]) -> str:
 def _prompt_persona_tone(payload: dict[str, Any]) -> str:
     mem = payload.get("memory_context") or {}
     persona = mem.get("persona_vector") or {}
+    behavior = mem.get("behavior_inferred") or {}
     stage_tone = str(payload.get("stage_tone", "")).strip()
     parts = [stage_tone] if stage_tone else []
     if isinstance(persona, dict) and persona:
         bits = []
-        for key in ("warm", "strict", "optimistic", "active"):
+        for key in ("warm", "strict", "optimistic", "active", "dependent"):
             if key in persona:
                 bits.append(f"{key}={persona.get(key)}")
         if bits:
-            parts.append("persona " + ", ".join(bits))
+            parts.append("persona（仅调语气，禁作具体往事引用） " + ", ".join(bits))
+    if isinstance(behavior, dict) and behavior:
+        parts.append(
+            "行为倾向（仅调语气，禁作具体往事引用） "
+            + json.dumps(behavior, ensure_ascii=False)
+        )
     boundaries = mem.get("story_boundaries") or {}
     tier = str(boundaries.get("recovery_tier", "")).strip()
     if tier:
         parts.append(f"recovery_tier={tier}")
     return " · ".join(p for p in parts if p)
+
+
+def _prompt_l3_tone_hints(payload: dict[str, Any]) -> str:
+    mem = payload.get("memory_context") or {}
+    prefs = mem.get("long_term_prefs") or {}
+    if not isinstance(prefs, dict) or not prefs:
+        return ""
+    return (
+        "玩家习惯倾向（L3 语义层：只影响语气与态度，"
+        "禁止当作已发生的共同经历、具体日期或聊天内容引用；"
+        "具体往事只能来自「可引用记忆」）："
+        + json.dumps(prefs, ensure_ascii=False)
+    )
 
 
 def _prompt_citable_memories(payload: dict[str, Any]) -> str:
@@ -415,6 +434,8 @@ INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
 
 
 def looks_like_sleep_request(message: str) -> bool:
+    if looks_like_status_inquiry(message):
+        return False
     text = message.strip().replace(" ", "").replace("　", "")
     if not text:
         return False
@@ -428,6 +449,33 @@ def looks_like_sleep_request(message: str) -> bool:
     if text in sleep_phrases:
         return True
     return any(p in text for p in sleep_phrases if len(p) >= 2)
+
+
+def looks_like_status_inquiry(message: str) -> bool:
+    text = message.strip().replace(" ", "").replace("　", "")
+    if not text:
+        return False
+    phrases = (
+        "熟了没", "熟了吗", "能收了吗", "能收吗", "可以收了吗", "收了没",
+        "田怎么样", "田里怎么样", "田里怎样", "长好了没", "长好了吗",
+        "看看田", "田况", "能收了没",
+    )
+    if any(p in text for p in phrases):
+        return True
+    return ("田" in text or "苗" in text or "萝卜" in text) and ("怎么样" in text or "怎样了" in text)
+
+
+def looks_like_stop_farm_chore(message: str) -> bool:
+    text = message.strip().replace(" ", "").replace("　", "")
+    if not text:
+        return False
+    phrases = (
+        "别浇", "不用浇", "先别浇", "不要浇", "别去浇",
+        "别种", "不用种", "先别种", "不要种", "雨停再种",
+        "别收", "不用收", "先别收", "不要收",
+        "别买", "不用买", "先别买", "不要买", "别买了", "不用买了",
+    )
+    return any(p in text for p in phrases)
 
 
 def looks_like_shop_request(message: str) -> bool:
@@ -462,6 +510,10 @@ def guess_intent(message: str) -> tuple[str, float]:
     text = message.strip().lower()
     if not text:
         return "chat", 0.5
+    if looks_like_stop_farm_chore(message):
+        return "chat", 0.95
+    if looks_like_status_inquiry(message):
+        return "check_status", 0.92
     if looks_like_shop_request(message):
         return "open_shop", 0.92
     if looks_like_plant_request(message):
@@ -549,6 +601,7 @@ STORY_LLM_SPEECH_EVENTS = frozenset({
     "morning_sidewrite",
     "story_beat",
     "companion_react",
+    "story_step_render",
 })
 
 
@@ -617,7 +670,7 @@ def _mock_stranger_reply(payload: dict[str, Any]) -> dict[str, Any]:
         reply = "……刚那段话让我有点乱。你能再说一遍吗？"
     elif "你好" in player_message or player_message.lower() in ("hi", "hello"):
         reply = "……你好。抱歉，我一时想不起是否见过你。"
-    elif "我是谁" in player_message or "认识我" in player_message or "记得我" in player_message:
+    elif "我是谁" in player_message or "你是谁" in player_message or "认识我" in player_message or "记得我" in player_message:
         reply = "……你问我认不认识你？老实说，我脑子里只有一些很模糊的画面。"
     else:
         reply = random.choice(STRANGER_CHAT_FALLBACKS)
@@ -853,6 +906,12 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
             reply = "刚走完这一段……我心里有点话。你想说点什么吗？"
         base = {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
         return ensure_relationship_fields(base, payload)
+
+    if event == "story_step_render":
+        snippet = str(payload.get("personal_snippet", "")).strip() or "你说过的那句"
+        companion = str(payload.get("companion_name", "小狸"))
+        reply = f"{companion} 从怀里摸出本子，指尖停在一行字上，停了停：「……我记得是——『{snippet}』」"
+        return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
 
     if event == "day_journal_summarize":
         return mock_day_journal_summarize(payload)
@@ -1130,6 +1189,7 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 禁止主动报售价、行情、大盘、手头几包种子。说话必须符合你现在的位置和正在做的事。",
         "- 玩家说睡觉、睡吧、下一天、晚安：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",
+        "- persona_vector、long_term_prefs、behavior_inferred 仅影响语气；禁止当作已发生的共同经历、具体日期或统计习惯引用。具体往事只能来自「可引用记忆」。",
     ]
     if chat_mode:
         lines.append("- 闲聊时像在场的人；不必每句都提田、天气或行情。")
@@ -1438,9 +1498,9 @@ def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str
                 lines.append("地块：" + " ".join(detail_bits))
 
     if not chat_mode:
-        prefs = mem.get("long_term_prefs") or {}
-        if prefs:
-            lines.append(f"玩家偏好：{json.dumps(prefs, ensure_ascii=False)}")
+        l3_hint = _prompt_l3_tone_hints(payload)
+        if l3_hint:
+            lines.append(l3_hint)
         citable_prompt = str(mem.get("citable_prompt", "")).strip()
         if citable_prompt:
             lines.append("可引用记忆：\n" + citable_prompt)
@@ -1521,7 +1581,7 @@ def prefers_json_mode(event: str) -> bool:
     if event == "day_journal_summarize":
         return True
     # 多轮/口语事件走纯文本，避免 json_object 空响应与机械 JSON 腔。
-    if event in ("player_chat", "session_start", "companion_react", "companion_casual", "companion_proactive", "morning_sidewrite", "task_complete", "story_beat", "companion_feed"):
+    if event in ("player_chat", "session_start", "companion_react", "companion_casual", "companion_proactive", "morning_sidewrite", "task_complete", "story_beat", "story_step_render", "companion_feed"):
         return False
     return event == "intent_classify"
 
@@ -1531,6 +1591,23 @@ def apply_local_intent(data: dict[str, Any], payload: dict[str, Any]) -> dict[st
     if not isinstance(local, dict):
         local = {}
     player_message = str(payload.get("player_message", ""))
+    if looks_like_stop_farm_chore(player_message):
+        data["intent"] = "chat"
+        data["plot_id"] = -1
+        data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
+        return data
+    if looks_like_status_inquiry(player_message):
+        data["intent"] = "check_status"
+        data["plot_id"] = -1
+        data["confidence"] = max(0.92, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
+        reply = str(data.get("reply", "")).strip()
+        field_markers = ("田", "苗", "萝卜", "熟", "浇", "收")
+        sleep_markers = ("睡", "休息", "晚安")
+        if reply and any(m in reply for m in sleep_markers) and not any(m in reply for m in field_markers):
+            data["reply"] = "我先帮你看看田。熟了的话我会说。"
+        return data
     if looks_like_sleep_request(player_message):
         data["intent"] = "sleep"
         data["plot_id"] = -1
@@ -1606,6 +1683,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "小狸可代做：浇水 water/water_all、种萝卜 plant/plant_all、收萝卜 harvest/harvest_all、去商店 open_shop 等；",
             "收到委托后会先走到目标地点再执行。",
             "仅帮卖 sell 用 refuse；种萝卜用 plant，不要 refuse plant。",
+            "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat。",
+            "明确让小狸去浇/种/收/买/睡觉才用对应 action。",
             "参考 world_snapshot.companion 的位置、状态与 capabilities。",
             "不要输出 reply 字段。",
             '示例：{"intent":"harvest","plot_id":-1,"confidence":0.9}',
@@ -1632,6 +1711,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"当前关系语气：{stage_tone}" if stage_tone else "",
             _player_chat_tone_hint(payload),
             _prompt_persona_tone(payload),
+            _prompt_l3_tone_hints(payload),
             f"世界观：{worldview_brief}" if worldview_brief else "",
             "[背景事实（相关时才用，勿硬塞）]",
             _scene_brief(payload, chat_mode=True, topic=topic),
@@ -1684,6 +1764,21 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             {"role": "user", "content": "（刚走完这段剧情，请主动和玩家说几句话，邀请对方回应）"},
         ], 0.85
 
+    if event == "story_step_render":
+        snippet = str(payload.get("personal_snippet", "")).strip()
+        system = "\n".join([
+            _prompt_story_progress(payload),
+            persona,
+            _beat_context_line(payload),
+            "任务=把玩家真实说过的一句织进旁白。不要编造没发生的事，不要整段念信纸，不要系统腔。",
+            f"个性化素材：「{snippet}」" if snippet else "没有明确素材时，只写本子上有一行很轻的字。",
+            "输出 JSON：reply 为旁白正文（可含小狸一句），intent=chat。",
+        ])
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "请写这一页信纸旁白。"},
+        ], 0.7
+
     if event == "session_start":
         system = "\n".join([
             _prompt_story_progress(payload),
@@ -1691,6 +1786,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"当前关系语气：{stage_tone}" if stage_tone else "",
             _worldview_line(payload),
             "陌生化模式：像不认识玩家，礼貌但疏远。" if story_mode == "stranger" else "",
+            "陌生化是剧情设定（她真的失忆），不是存档坏了或系统出错；不要安慰玩家「数据没问题」，像活在一个失忆的人身边那样开口。" if story_mode == "stranger" else "",
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
             "这是玩家新的一天开场。用 1～2 句口语自然打招呼；"
@@ -1849,6 +1945,16 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
     if event == "companion_react":
         react_facts = payload.get("react_facts") or {}
         milestone_id = str(react_facts.get("milestone_id", "")).strip()
+        react_type = str(payload.get("react_type", "")).strip()
+        persona_shift_rule = ""
+        if react_type == "persona_shift":
+            dim = str(react_facts.get("dimension", "")).strip()
+            direction = str(react_facts.get("direction", "")).strip()
+            persona_shift_rule = (
+                "这是性格漂移的自觉察：她发现自己某一方面变了，"
+                "用一句短口语说出来，例如「我以前好像不这样」。"
+                f"漂移维度={dim}，方向={direction}。不要解释原因，不要数值，不要客服腔。"
+            )
         system = "\n".join([
             _prompt_story_progress(payload),
             persona,
@@ -1858,7 +1964,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "这是小狸主动搭话，像顺口提醒，不要像系统通知。",
             "须符合当日 beat_context 与 story_mode；玩家未问田时不要推销浇田。",
             *_story_speech_context_lines(payload),
-            f"触发类型：{payload.get('react_type', '')}",
+            f"触发类型：{react_type or payload.get('react_type', '')}",
+            persona_shift_rule,
             "世界事实：",
             _scene_brief(payload),
         ])
@@ -1967,7 +2074,7 @@ def coerce_llm_payload(content: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not text:
         raise RuntimeError("LLM 返回空 content")
 
-    conversational = event in ("player_chat", "session_start", "companion_react", "companion_casual", "companion_proactive", "morning_sidewrite", "task_complete", "story_beat", "companion_feed")
+    conversational = event in ("player_chat", "session_start", "companion_react", "companion_casual", "companion_proactive", "morning_sidewrite", "task_complete", "story_beat", "story_step_render", "companion_feed")
 
     try:
         data = parse_llm_json(text)

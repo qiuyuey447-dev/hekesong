@@ -274,7 +274,9 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 			var n16_title := "名字与约定" if GameState.IS_TEN_DAY_EDITION else "叫出名字"
 			steps = [{"title": n16_title, "template": beat_id}]
 			if GameState.IS_TEN_DAY_EDITION:
-				steps.append(companion_night_choice_step("夜深了。你可以过去坐下，也可以先回屋。"))
+				var night_step := companion_night_choice_step("夜深了。你可以过去坐下，也可以先回屋。")
+				night_step["period_gate"] = [GameState.TIME_EVENING, GameState.TIME_NIGHT]
+				steps.append(night_step)
 				if fragment != "":
 					steps.append({"title": "名字", "template": "F07", "kind": "fragment"})
 		"N11p":
@@ -334,7 +336,7 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 				steps.append({"title": "信的后半", "template": "%s_b" % beat_id})
 				steps.append({"title": "信的后半", "template": "F09", "kind": "fragment"})
 			else:
-				steps.append({"title": "信（未完成）", "template": "%s_b" % beat_id})
+				steps.append({"title": "信", "template": "%s_b" % beat_id})
 		"N20c":
 			emotion = "前夜" if GameState.IS_TEN_DAY_EDITION else ("前夕" if prefix != "BL" else "雾夜")
 			var n20c_title := "前夜" if GameState.IS_TEN_DAY_EDITION else "明天"
@@ -515,21 +517,58 @@ func _render_n16_line(beat_id: String, route_tone: String) -> String:
 
 func _render_n02p_chat_line(_beat_id: String) -> String:
 	var companion := StorySlotService.slot("companion_name")
+	var snippet := extract_chat_snippet_for_beat(_beat_id)
+	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
+	if routed.strip_edges() != "":
+		return routed % [companion, snippet]
+	return "%s 从怀里摸出本子，指尖停在一行字上，停了停：「……我记得是——『%s』」" % [companion, snippet]
+
+
+func extract_chat_snippet_for_beat(_beat_id: String) -> String:
 	var yesterday := GameState.get_yesterday_journal_entry()
-	var snippet := ""
-	var highlights: Variant = yesterday.get("highlights", [])
-	if highlights is Array and not highlights.is_empty():
-		snippet = str(highlights[0]).strip_edges()
+	var snippet := str(yesterday.get("chat_summary", "")).strip_edges()
+	if snippet == "":
+		var highlights: Variant = yesterday.get("highlights", [])
+		if highlights is Array:
+			for raw in highlights:
+				var line := str(raw).strip_edges()
+				if line == "":
+					continue
+				if line.begins_with("主线"):
+					continue
+				snippet = line
+				break
 	if snippet == "":
 		snippet = str(yesterday.get("summary", "")).strip_edges()
 	if snippet == "":
 		snippet = GameState.last_day_summary.strip_edges()
 	if snippet == "":
+		for turn in GameState.get_recent_chat_turns(8):
+			if not turn is Dictionary:
+				continue
+			if str(turn.get("role", "")) != "player":
+				continue
+			snippet = str(turn.get("text", "")).strip_edges()
+			if snippet != "":
+				break
+	if snippet == "":
 		snippet = "你说过的话，她本子上有一行，字迹比正文轻。"
-	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
-	if routed.strip_edges() != "":
-		return routed % [companion, snippet]
-	return "%s 从怀里摸出本子，指着其中一行：「……你好像说过这个。我记下了。」\n\n那行写着：「%s」" % [companion, snippet]
+	return normalize_personal_snippet(snippet)
+
+
+func normalize_personal_snippet(text: String) -> String:
+	var cleaned := text.strip_edges()
+	for prefix in ["你说：", "你说:", "聊天 · ", "聊天·"]:
+		if cleaned.begins_with(prefix):
+			cleaned = cleaned.substr(prefix.length()).strip_edges()
+	cleaned = cleaned.trim_prefix("「").trim_prefix("『").trim_suffix("」").trim_suffix("』").strip_edges()
+	if cleaned.length() > 28:
+		cleaned = cleaned.substr(0, 28).strip_edges() + "…"
+	return cleaned
+
+
+func render_n02p_chat_line(beat_id: String) -> String:
+	return _render_n02p_chat_line(beat_id)
 
 
 func _is_n20c_tier_key(key: String) -> bool:

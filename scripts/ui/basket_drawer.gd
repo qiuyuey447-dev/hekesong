@@ -152,7 +152,7 @@ func refresh() -> void:
 		_sleep_button.text = "立马睡觉" if GameState.is_awaiting_sleep() else "睡觉"
 		_sleep_button.disabled = false
 	else:
-		_sleep_button.text = "还不到睡"
+		_sleep_button.text = "天还亮着"
 		_sleep_button.disabled = true
 	if _day_chip:
 		_day_chip.text = GameState.get_day_period_label()

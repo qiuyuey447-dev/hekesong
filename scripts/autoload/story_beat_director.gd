@@ -343,6 +343,8 @@ func get_pending_session_beat(include_yesterday_echo: bool = false) -> Dictionar
 	var beat_id := get_today_beat_id()
 	if beat_id == "" or is_beat_seen(beat_id):
 		return {}
+	if GameState.get_pending_story_beat_tail_id() == beat_id:
+		return {}
 	return build_beat(beat_id, include_yesterday_echo)
 
 
@@ -386,6 +388,151 @@ func build_beat(beat_id: String, include_yesterday_echo: bool = false) -> Dictio
 	return beat
 
 
+func split_steps_by_period_gate(raw_steps: Array) -> Dictionary:
+	var now_steps: Array = []
+	var later_steps: Array = []
+	var deferred := false
+	var period := GameState.time_of_day
+	for raw in raw_steps:
+		if not raw is Dictionary:
+			continue
+		var step: Dictionary = raw.duplicate(true)
+		if deferred or not _period_gate_allows(step, period):
+			deferred = true
+			later_steps.append(step)
+		else:
+			now_steps.append(step)
+	return {"now": now_steps, "later": later_steps}
+
+
+func _period_gate_allows(step: Dictionary, period: String) -> bool:
+	var gate: Variant = step.get("period_gate", "")
+	if gate is Array:
+		if gate.is_empty():
+			return true
+		return period in gate
+	var gate_text := str(gate).strip_edges()
+	if gate_text == "":
+		return true
+	return gate_text == period
+
+
+func take_displayable_beat(beat: Dictionary) -> Dictionary:
+	if beat.is_empty():
+		return {}
+	var beat_id := str(beat.get("id", "")).strip_edges()
+	var split := split_steps_by_period_gate(beat.get("steps", []))
+	var now_steps: Array = split.get("now", [])
+	var later_steps: Array = split.get("later", [])
+	if later_steps.is_empty():
+		if GameState.get_pending_story_beat_tail_id() == beat_id:
+			GameState.clear_pending_story_beat_tail()
+	else:
+		GameState.set_pending_story_beat_tail(beat_id, later_steps)
+	if now_steps.is_empty():
+		return {}
+	beat["steps"] = now_steps
+	beat["has_pending_tail"] = not later_steps.is_empty()
+	return beat
+
+
+func build_beat_tail_resume() -> Dictionary:
+	var beat_id := GameState.get_pending_story_beat_tail_id()
+	if beat_id == "":
+		return {}
+	var stored := GameState.get_pending_story_beat_tail_steps()
+	if stored.is_empty():
+		GameState.clear_pending_story_beat_tail()
+		return {}
+	var split := split_steps_by_period_gate(stored)
+	var now_steps: Array = split.get("now", [])
+	var later_steps: Array = split.get("later", [])
+	if now_steps.is_empty():
+		return {}
+	if later_steps.is_empty():
+		GameState.set_pending_story_beat_tail(beat_id, [])
+	else:
+		GameState.set_pending_story_beat_tail(beat_id, later_steps)
+	_refresh_n16_night_choice_copy(now_steps, beat_id)
+	var def := StoryRouteData.get_beat_def(beat_id)
+	return {
+		"id": beat_id,
+		"tail_resume": true,
+		"has_pending_tail": not later_steps.is_empty(),
+		"steps": now_steps,
+		"node_label": str(def.get("node_label", "")),
+		"emotion": str(def.get("emotion", "")),
+	}
+
+
+func should_complete_beat_after_panel(beat_id: String) -> bool:
+	if GameState.get_pending_story_beat_tail_id() != beat_id:
+		return true
+	return GameState.get_pending_story_beat_tail_steps().is_empty()
+
+
+func prepare_beat_for_display(beat: Dictionary) -> Dictionary:
+	if beat.is_empty():
+		return beat
+	var beat_id := str(beat.get("id", "")).strip_edges()
+	var steps: Array = beat.get("steps", [])
+	for i in range(steps.size()):
+		if not steps[i] is Dictionary:
+			continue
+		var step: Dictionary = steps[i]
+		if str(step.get("llm_render", "")).strip_edges() != "chat_digest":
+			continue
+		var rendered := await _render_personalized_step(beat_id, step)
+		if rendered.strip_edges() != "":
+			step["body"] = rendered
+			steps[i] = step
+	beat["steps"] = steps
+	return beat
+
+
+func _render_personalized_step(beat_id: String, step: Dictionary) -> String:
+	var snippet := StoryRouteData.extract_chat_snippet_for_beat(beat_id)
+	var extra := {
+		"beat_id": beat_id,
+		"render_kind": "chat_digest",
+		"personal_snippet": snippet,
+		"step_template": str(step.get("template", "")),
+		"beat_context": get_beat_context_for_llm(beat_id),
+	}
+	if not NpcBridge.is_api_enabled():
+		return NpcFallback.story_step_render(extra)
+	var request_id := NpcBridge.request_event("story_step_render", extra)
+	var text := await _await_npc_text(request_id, 8.0)
+	if text.strip_edges() == "":
+		return NpcFallback.story_step_render(extra)
+	return text.strip_edges()
+
+
+func _await_npc_text(request_id: int, timeout_sec: float) -> String:
+	var state := {"done": false, "text": ""}
+	var on_ready := func(rid: int, _event: String, reply: String, _fallback: bool) -> void:
+		if rid == request_id:
+			state["done"] = true
+			state["text"] = reply
+	NpcBridge.reply_ready.connect(on_ready)
+	var elapsed := 0.0
+	while not bool(state["done"]) and elapsed < timeout_sec:
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+	if NpcBridge.reply_ready.is_connected(on_ready):
+		NpcBridge.reply_ready.disconnect(on_ready)
+	return str(state.get("text", ""))
+
+
+func _refresh_n16_night_choice_copy(steps: Array, beat_id: String) -> void:
+	if not beat_id.ends_with("_N16"):
+		return
+	var hint := _n16_night_choice_hint(str(resolve_beat_variant(beat_id).get("profile", "mid")))
+	for step in steps:
+		if step is Dictionary and str(step.get("kind", "")) == "choice":
+			step["body"] = hint
+
+
 func complete_beat(beat_id: String) -> void:
 	if GameState.has_pending_absence():
 		GameState.mark_absence_shown()
@@ -398,6 +545,8 @@ func complete_beat(beat_id: String) -> void:
 		GameState.clear_pending_invite_beat()
 	if GameState.get_deferred_story_beat() == beat_id:
 		GameState.clear_deferred_story_beat()
+	if GameState.get_pending_story_beat_tail_id() == beat_id:
+		GameState.clear_pending_story_beat_tail()
 	mark_schedule_fired()
 	RelationshipDirector.record_story_node(beat_id)
 	var def := StoryRouteData.get_beat_def(beat_id)
@@ -422,6 +571,7 @@ func complete_beat(beat_id: String) -> void:
 		0.8,
 		{"node": node_label, "beat_id": beat_id, "route": get_active_route(), "game_day": GameState.game_day}
 	)
+	PlayerNotebookService.on_beat_completed(beat_id)
 
 
 func refresh_story_route() -> void:
@@ -635,6 +785,7 @@ const STORY_LLM_SPEECH_EVENTS := [
 	"morning_sidewrite",
 	"story_beat",
 	"companion_react",
+	"story_step_render",
 ]
 
 const PERIOD_ORDER := [
@@ -1008,21 +1159,16 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 				steps.insert(insert_idx, {
 					"title": "聊过的字",
 					"template": "%s_chat" % beat_id,
+					"llm_render": "chat_digest",
 				})
 	elif beat_id.ends_with("_N16"):
 		var profile := str(variant.get("profile", "mid"))
-		var night_hint := ""
-		match profile:
-			"warm":
-				night_hint = "夜里，树洞那边灯还亮着。你可以过去坐一会儿，也可以先回屋。"
-			"cold":
-				night_hint = "夜深了。树洞那边有风。你可以过去坐一会儿，也可以先回屋。"
-			_:
-				night_hint = "夜深了。树洞那边有光。你可以过去坐一会儿，也可以先回屋。"
+		var night_hint := _n16_night_choice_hint(profile)
 		if night_hint != "":
 			for step in steps:
 				if str(step.get("kind", "")) == "choice":
 					step["body"] = night_hint
+					step["period_gate"] = [GameState.TIME_EVENING, GameState.TIME_NIGHT]
 	elif beat_id.ends_with("_N15"):
 		var profile := str(variant.get("profile", "mid"))
 		if profile == "warm":
@@ -1061,6 +1207,23 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 				elif tpl == "%s_b" % beat_id:
 					step["template"] = "%s_b_%s" % [beat_id, profile]
 	return steps
+
+
+func _n16_night_choice_hint(profile: String) -> String:
+	var evening := GameState.time_of_day == GameState.TIME_EVENING
+	match profile:
+		"warm":
+			if evening:
+				return "傍晚，树洞那边灯亮了。你可以过去坐一会儿，也可以先回屋。"
+			return "夜里，树洞那边灯还亮着。你可以过去坐一会儿，也可以先回屋。"
+		"cold":
+			if evening:
+				return "天色暗了。树洞那边有风。你可以过去坐一会儿，也可以先回屋。"
+			return "夜深了。树洞那边有风。你可以过去坐一会儿，也可以先回屋。"
+		_:
+			if evening:
+				return "傍晚，树洞那边有光。你可以过去坐一会儿，也可以先回屋。"
+			return "夜深了。树洞那边有光。你可以过去坐一会儿，也可以先回屋。"
 
 
 func _period_weights_for_tier(tier: String) -> Dictionary:

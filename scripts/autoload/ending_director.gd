@@ -251,6 +251,10 @@ func _ending_text(key: String) -> String:
 	return StorySlotService.apply(raw, StorySlotService.build_context())
 
 
+func get_awakening_steps(ending_id: String) -> Array[Dictionary]:
+	return get_d35_awakening_steps(ending_id)
+
+
 func get_d35_awakening_steps(ending_id: String) -> Array[Dictionary]:
 	var journal_lines := _pick_journal_lines(3)
 	var act2_body := _awakening_act2_body(journal_lines)
@@ -317,6 +321,9 @@ func _awakening_act2_body(journal_lines: Array[String]) -> String:
 		body_lines.append(StoryNodeCopy.get_awakening("act2_journal_fallback"))
 	else:
 		body_lines.append("\n".join(journal_lines))
+	var question_lines := PlayerNotebookService.reveal_for_awakening()
+	if not question_lines.is_empty():
+		body_lines.append("\n".join(question_lines))
 	return "\n\n".join(body_lines)
 
 

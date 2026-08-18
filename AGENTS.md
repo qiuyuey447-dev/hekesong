@@ -10,4 +10,4 @@
 
 **剧情搭话**：凡与当日叙事相关的主动开口须走 LLM，且带齐 `beat_context`（见交接铁律 §2-7、策划 §4.5.5）；改变体须双端同步 `local_llm_server.py`。
 
-院子摆设是运行时生成（`scripts/world/farm_setdress.gd`）。用 F5 验收，不要只看 `scenes/farm_map.tscn`。
+院子摆设已烘成静态场景，`scenes/farm_map.tscn` 即所见（2026-08-17 起 `FarmSetdress.apply()` 不再调用）。改完仍用 F5 验收。

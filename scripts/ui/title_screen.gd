@@ -118,7 +118,12 @@ func _build_world_background() -> void:
 	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
 	_farm_map = farm_map
 	world.add_child(farm_map)
-	FarmSetdress.apply(farm_map)
+	# 院子已经烘进 farm_map.tscn，只补一个商店台子——游戏里那位置由 Shop 实体接管。
+	var stall := Node2D.new()
+	stall.name = "ShopStall"
+	stall.position = FarmSetdress.marker_position(farm_map, "商店", FarmSetdress.POS_SHOP)
+	FarmSetdress.ensure_actors(farm_map).add_child(stall)
+	FarmSetdress.build_shop_stall(stall)
 
 	_spawn_title_fox(farm_map)
 	_configure_title_camera(farm_map)

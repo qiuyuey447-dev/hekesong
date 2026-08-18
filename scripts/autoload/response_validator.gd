@@ -19,6 +19,17 @@ const CHAT_LIKE_EVENTS := [
 	"task_complete",
 ]
 
+const L3_EPISODIC_PHRASES := [
+	"上周",
+	"上回",
+	"那天",
+	"记得那次",
+	"我们以前",
+	"你第一次",
+	"还记得那次",
+	"以前你",
+]
+
 const LITERARY_PHRASES := [
 	"雨帘",
 	"隔着雾",
@@ -79,6 +90,8 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 		var citation := _validate_chat_citations(cited_ids, payload)
 		if not bool(citation.get("ok", true)):
 			return citation
+		if _violates_l3_episodic_claim(cleaned, cited_ids, payload):
+			return {"ok": false, "reason": "l3_episodic"}
 		if _is_internal_metadata_reply(cleaned):
 			return {"ok": false, "reason": "metadata_leak"}
 
@@ -99,6 +112,34 @@ func is_stranger_ooc_reply(text: String, payload: Dictionary) -> bool:
 	if story_mode != "stranger":
 		return false
 	return not bool(_validate_story_mode_reply(text, payload).get("ok", true))
+
+
+func _violates_l3_episodic_claim(text: String, cited_ids: Array, payload: Dictionary) -> bool:
+	if not cited_ids.is_empty():
+		return false
+	var memory_context: Dictionary = payload.get("memory_context", {})
+	var story_mode := str(memory_context.get("story_mode", payload.get("story_mode", "")))
+	if story_mode == "stranger":
+		return false
+	for phrase in L3_EPISODIC_PHRASES:
+		if phrase in text:
+			return true
+	return _mentions_pref_as_fact(text, memory_context)
+
+
+func _mentions_pref_as_fact(text: String, memory_context: Dictionary) -> bool:
+	var prefs: Variant = memory_context.get("long_term_prefs", {})
+	if prefs is not Dictionary or prefs.is_empty():
+		return false
+	if str(prefs.get("time_rhythm", "")) == "dusk":
+		if ("傍晚" in text or "黄昏" in text) and ("总" in text or "习惯" in text or "一向" in text):
+			return true
+	if str(prefs.get("pace", "")) == "slow":
+		if "慢慢来" in text and ("总" in text or "一直" in text or "老是" in text):
+			return true
+	if "最喜欢" in text and "萝卜" in text:
+		return true
+	return false
 
 
 func _validate_chat_citations(cited_ids: Array, payload: Dictionary) -> Dictionary:

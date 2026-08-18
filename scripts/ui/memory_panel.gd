@@ -6,10 +6,8 @@ var _summary_label: Label
 var _journal_label: RichTextLabel
 var _memory_label: RichTextLabel
 var _anchor_label: RichTextLabel
+var _player_notebook_label: RichTextLabel
 var _fragment_label: RichTextLabel
-var _memory_toggle: Button
-var _fact_toggle: Button
-var _d35_button: Button
 
 
 func _ready() -> void:
@@ -48,23 +46,37 @@ func refresh() -> void:
 			_journal_label.append_text("第 %d 天\n%s\n\n" % [day_n, summary])
 
 	_memory_label.text = ""
+	var pages: Array = MemoryService.get_anchor_pages()
+	var wrote := false
+	if not pages.is_empty():
+		var page_no := 1
+		for page_raw in pages:
+			if not page_raw is Dictionary:
+				continue
+			var page: Dictionary = page_raw
+			var line := str(page.get("summary", "")).strip_edges()
+			if line == "":
+				continue
+			var day_n := int(page.get("game_day", 0))
+			if bool(page.get("pinned", false)):
+				_memory_label.append_text("[i]第 %d 页 · 留住了[/i]" % page_no)
+			else:
+				_memory_label.append_text("第 %d 页" % page_no)
+			if day_n > 0:
+				_memory_label.append_text("（第 %d 天）" % day_n)
+			_memory_label.append_text("\n%s\n\n" % line)
+			page_no += 1
+			wrote = true
 	var long_term: Dictionary = snapshot.get("long_term_memory", {})
 	var promise: Dictionary = long_term.get("promise", {})
 	if not promise.is_empty():
 		_memory_label.append_text("约定\n%s\n\n" % str(promise.get("summary", "")))
+		wrote = true
 	var name := GameState.get_player_display_name()
 	if name != "":
 		_memory_label.append_text("名字\n%s\n\n" % name)
-	var wrote := false
-	for entry in long_term.get("anchors", []):
-		var line := str(entry.get("summary", "")).strip_edges()
-		if line == "":
-			continue
-		if not wrote:
-			_memory_label.append_text("记下的\n")
-			wrote = true
-		_memory_label.append_text("· %s\n" % line)
-	if _memory_label.text.strip_edges() == "":
+		wrote = true
+	if not wrote:
 		_memory_label.append_text("本子还空着。日子过了，字会来。")
 
 	_fragment_label.text = ""
@@ -73,6 +85,23 @@ func refresh() -> void:
 			_fragment_label.append_text("%s\n" % line)
 		else:
 			_fragment_label.append_text("%s\n" % line)
+
+	_player_notebook_label.text = ""
+	var player_pages: Array = PlayerNotebookService.get_pages_for_ui()
+	if player_pages.is_empty():
+		_player_notebook_label.append_text("还没写下什么。")
+	else:
+		for page_raw in player_pages:
+			if not page_raw is Dictionary:
+				continue
+			var page: Dictionary = page_raw
+			var line := str(page.get("text", "")).strip_edges()
+			if line == "":
+				continue
+			var day_n := int(page.get("game_day", 0))
+			if day_n > 0:
+				_player_notebook_label.append_text("（第 %d 天）\n" % day_n)
+			_player_notebook_label.append_text("%s\n\n" % line)
 
 
 func _build_styles() -> void:
@@ -93,9 +122,9 @@ func _build_styles() -> void:
 
 func _build_shell() -> void:
 	anchors_preset = Control.PRESET_CENTER
-	offset_left = -520.0
+	offset_left = -680.0
 	offset_top = -320.0
-	offset_right = 520.0
+	offset_right = 680.0
 	offset_bottom = 320.0
 
 	var margin := MarginContainer.new()
@@ -110,7 +139,7 @@ func _build_shell() -> void:
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "她的本子"
+	title.text = "记忆与本子"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Color(0.42, 0.3, 0.18))
@@ -128,41 +157,12 @@ func _build_shell() -> void:
 	_journal_label = _make_rich_box("日记")
 	columns.add_child(_wrap_box("这些日子", _journal_label))
 	_memory_label = _make_rich_box("本子")
-	columns.add_child(_wrap_box("写进去的", _memory_label))
+	columns.add_child(_wrap_box("她的本子", _memory_label))
+	_player_notebook_label = _make_rich_box("我的本子")
+	columns.add_child(_wrap_box("我的本子", _player_notebook_label))
 	_fragment_label = _make_rich_box("记起的片段")
 	columns.add_child(_wrap_box("记起的片段", _fragment_label))
 	_anchor_label = _memory_label
-
-	var toggles := HBoxContainer.new()
-	toggles.alignment = BoxContainer.ALIGNMENT_CENTER
-	toggles.add_theme_constant_override("separation", 10)
-	toggles.visible = OS.is_debug_build()
-	root.add_child(toggles)
-
-	_memory_toggle = Button.new()
-	_memory_toggle.custom_minimum_size = Vector2(0, 44)
-	_memory_toggle.add_theme_font_size_override("font_size", 20)
-	_memory_toggle.pressed.connect(func() -> void:
-		MemoryService.set_debug_disable_memory(not MemoryService.debug_disable_memory)
-		refresh()
-	)
-	toggles.add_child(_memory_toggle)
-
-	_fact_toggle = Button.new()
-	_fact_toggle.custom_minimum_size = Vector2(0, 44)
-	_fact_toggle.add_theme_font_size_override("font_size", 20)
-	_fact_toggle.pressed.connect(func() -> void:
-		ResponseValidator.set_debug_disable_fact_lock(not ResponseValidator.debug_disable_fact_lock)
-		refresh()
-	)
-	toggles.add_child(_fact_toggle)
-
-	_d35_button = Button.new()
-	_d35_button.text = "调试 · 跳到终章日"
-	_d35_button.custom_minimum_size = Vector2(0, 44)
-	_d35_button.add_theme_font_size_override("font_size", 20)
-	_d35_button.pressed.connect(_on_jump_d35_pressed)
-	toggles.add_child(_d35_button)
 
 	var close_button := Button.new()
 	close_button.text = "关闭"
@@ -170,11 +170,6 @@ func _build_shell() -> void:
 	close_button.add_theme_font_size_override("font_size", 22)
 	close_button.pressed.connect(close)
 	root.add_child(close_button)
-
-
-func _on_jump_d35_pressed() -> void:
-	GameState.debug_jump_to_d35()
-	refresh()
 
 
 func _wrap_box(title: String, content: RichTextLabel) -> PanelContainer:
@@ -207,7 +202,7 @@ func _wrap_box(title: String, content: RichTextLabel) -> PanelContainer:
 
 func _make_rich_box(_name: String) -> RichTextLabel:
 	var rich := RichTextLabel.new()
-	rich.custom_minimum_size = Vector2(280, 360)
+	rich.custom_minimum_size = Vector2(220, 360)
 	rich.bbcode_enabled = true
 	rich.scroll_active = true
 	rich.fit_content = false

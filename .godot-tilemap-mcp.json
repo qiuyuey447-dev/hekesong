@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Ekaitzsegurola/godot-tilemap-mcp/main/schemas/project-profile.schema.json",
+  "version": 1,
+  "layer_roles": {
+    "ground": ["*/草地", "*/沙地"],
+    "details": ["*/河流树木家园", "*/家", "*/商店以及附属品"],
+    "plots": ["*/田"]
+  },
+  "protected_layers": ["*/田"],
+  "limits": {
+    "max_cells_per_edit": 20000,
+    "max_render_pixels": 16777216
+  },
+  "extensions": {
+    "hekesong_iron_rules": {
+      "do_not_terrain_connect_entire_grass": true,
+      "do_not_erase_river_world_x_lt": 720,
+      "do_not_punch_field_fence_world_x_gte": 1448,
+      "working_plots_only_right_three_rows": true,
+      "runtime_setdress": "scripts/world/farm_setdress.gd",
+      "verify_with": "F5 + existing Godot MCP screenshot"
+    }
+  }
+}

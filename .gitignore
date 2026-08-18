@@ -30,3 +30,6 @@ Thumbs.db
 *.swp
 *.swo
 .cursor/
+
+# Godot MCP runtime cache (screenshots / temp)
+addons/godot_mcp/cache/

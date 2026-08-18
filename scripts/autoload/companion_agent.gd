@@ -12,10 +12,10 @@ const IDLE_STAND_MIN := 4.0
 const IDLE_STAND_MAX := 10.0
 const IDLE_STAND_CHANCE := 0.42
 const ARRIVE_DISTANCE := 6.0
-const PROACTIVE_NEAR_DISTANCE := 88.0
-const PROACTIVE_SHOUT_DISTANCE := 150.0
+const PROACTIVE_NEAR_DISTANCE := 56.0
+const PROACTIVE_SHOUT_DISTANCE := 120.0
 const PROACTIVE_SHOUT_COOLDOWN := 5.0
-const PROACTIVE_FOLLOW_OFFSET := Vector2(0, 28.0)
+const PROACTIVE_FOLLOW_OFFSET := Vector2(0, 20.0)
 
 enum ProactiveMode { NONE, APPROACHING, FOLLOWING }
 enum Activity { IDLE, WALKING, WORKING }
@@ -307,6 +307,24 @@ func _prepare_for_job() -> bool:
 			_visual.hide_status_bubble()
 		_set_activity(Activity.IDLE, "待命")
 	return true
+
+
+func has_current_job() -> bool:
+	return not _current_job.is_empty()
+
+
+func cancel_current_job() -> void:
+	if _current_job.is_empty() and _activity == Activity.IDLE:
+		return
+	if _visual != null and _visual.has_method("cancel_move"):
+		_visual.cancel_move()
+	if _visual != null and _visual.has_method("hide_status_bubble"):
+		_visual.hide_status_bubble()
+	_current_job = {}
+	_work_left = 0.0
+	_set_activity(Activity.IDLE, "闲逛")
+	_idle_cooldown = randf_range(2.0, 4.0)
+	TaskSystem.cancel_from_agent()
 
 
 func skip_current_job() -> void:

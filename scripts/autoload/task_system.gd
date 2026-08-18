@@ -11,7 +11,30 @@ var _target_plot_ids: Array[int] = []
 
 
 func is_busy() -> bool:
+	reconcile_stale_task()
 	return current_task != TaskType.NONE
+
+
+func cancel_task() -> void:
+	if current_task == TaskType.NONE:
+		return
+	CompanionAgent.cancel_current_job()
+	current_task = TaskType.NONE
+	_target_plot_ids.clear()
+
+
+func cancel_from_agent() -> void:
+	current_task = TaskType.NONE
+	_target_plot_ids.clear()
+
+
+func reconcile_stale_task() -> void:
+	if current_task == TaskType.NONE:
+		return
+	if CompanionAgent.has_current_job():
+		return
+	current_task = TaskType.NONE
+	_target_plot_ids.clear()
 
 
 func start_water_all_task() -> bool:

@@ -46,6 +46,10 @@ func should_fallback(local_intent: Dictionary) -> bool:
 	var raw_for_sleep := str(local_intent.get("raw_text", "")).strip_edges()
 	if IntentParser.is_explicit_sleep_utterance(raw_for_sleep):
 		return false
+	if IntentParser.looks_like_status_inquiry(raw_for_sleep):
+		return false
+	if IntentParser.looks_like_stop_farm_chore(raw_for_sleep):
+		return false
 	if IntentParser.is_action_intent(local_intent):
 		if float(local_intent.get("confidence", 0.0)) >= IntentParser.API_SKIP_CONFIDENCE:
 			return false
@@ -53,7 +57,7 @@ func should_fallback(local_intent: Dictionary) -> bool:
 	var raw := str(local_intent.get("raw_text", "")).strip_edges()
 	if raw.is_empty():
 		return false
-	return _looks_like_hidden_command(raw)
+	return IntentParser.looks_like_ambiguous_command(raw)
 
 
 func _looks_like_hidden_command(text: String) -> bool:
@@ -126,8 +130,9 @@ func _intent_instruction() -> String:
 		+ "intent 只能从 allowed_intents 中选。"
 		+ "玩家在委托做事时用 action intent；纯聊天用 chat。"
 		+ "小狸可代做：浇水 water/water_all、种萝卜 plant/plant_all、收萝卜 harvest/harvest_all、去商店 open_shop、出售萝卜 open_market 等；"
-		+ "收到委托后会在地图上走过去执行。"
-		+ "卖萝卜用 open_market；种萝卜用 plant，不要 refuse plant。"
+		+ "仅帮卖 sell 用 refuse；种萝卜用 plant，不要 refuse plant。"
+		+ "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat。"
+		+ "明确让小狸去浇/种/收/买/睡觉才用对应 action。"
 		+ "参考 world_snapshot.companion 的位置、状态与 capabilities。"
 		+ "示例：{\"intent\":\"harvest\",\"plot_id\":-1,\"confidence\":0.92,\"refuse_kind\":\"\"}"
 	)
@@ -164,7 +169,7 @@ func _on_http_completed(
 
 	if result == HTTPRequest.RESULT_SUCCESS and response_code >= 200 and response_code < 300:
 		var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
-		intent = IntentParser.from_api_response(parsed, text)
+		intent = IntentParser.from_api_classify_response(parsed, text)
 		success = not intent.is_empty()
 
 	_pending_classify[request_key] = {

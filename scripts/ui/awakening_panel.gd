@@ -39,7 +39,7 @@ func _ready() -> void:
 
 func open() -> void:
 	_ending_id = EndingDirector.resolve_ending(false)
-	_steps = EndingDirector.get_d35_awakening_steps(_ending_id)
+	_steps = EndingDirector.get_awakening_steps(_ending_id)
 	_step_index = 0
 	_page_index = 0
 	visible = true

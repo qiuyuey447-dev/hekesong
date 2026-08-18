@@ -9,7 +9,7 @@ const CONFIG_RES_PATH := "res://config/npc_config.json"
 const CONFIG_USER_PATH := "user://npc_config.json"
 const PERSONA_PATH := "res://config/xiaoli_persona.json"
 const LLM_FAILURE_REPLY := "……我刚才没听清，你再说一遍好吗？"
-const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "story_beat"]
+const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "story_beat", "story_step_render"]
 
 var _http: HTTPRequest
 var _persona: Dictionary = {}
@@ -225,6 +225,9 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"refused": bool(extra.get("refused", false)),
 		"previous_feed_replies": extra.get("previous_replies", []),
 		"feed_pester_count": int(extra.get("pester_count", 0)),
+		"personal_snippet": str(extra.get("personal_snippet", "")),
+		"render_kind": str(extra.get("render_kind", "")),
+		"step_template": str(extra.get("step_template", "")),
 		"sprout_tier": int(extra.get("sprout_tier", 0)),
 		"sprout_word": str(extra.get("sprout_word", "")),
 		"proactive_intent": str(extra.get("proactive_intent", "")),
@@ -279,6 +282,8 @@ func _player_chat_intent_instruction() -> String:
 		+ "代买种子时游戏会另问数量并自动执行，reply 不要声称已购买、已花费金币、已种好或已浇完。"
 		+ "若口头答应去浇/种/收/买种子/出售/睡觉，请同时返回对应 action intent，便于游戏执行。"
 		+ "玩家说睡觉/晚安/休息/下一天：必须 intent=sleep，先答应休息，禁止转去报田况或推销浇水。"
+		+ "玩家问田况/熟了没/能不能收：必须 intent=check_status，禁止误判为 sleep。"
+		+ "讨论浇田或商店、尚未明确委托时用 chat；明确让你去浇/种/收/买才用 action。"
 		+ "禁止在 reply 中提及「点击」「点农田」「派活」等 UI 操作；用「要不要我帮你浇/种/收」自然询问。"
 		+ "主动说话必须符合你现在的位置和正在做的事，禁止报行情。"
 	)
@@ -295,13 +300,29 @@ func _resolve_story_hint(event: String, extra: Dictionary) -> String:
 
 
 func _get_stage_tone(stage: String) -> String:
+	var base := ""
 	var stages: Variant = _persona.get("stages", {})
 	if stages is Dictionary and stages.has(stage):
 		var stage_data: Dictionary = stages[stage]
-		return str(stage_data.get("tone", ""))
-	if stage == "awaken" and stages is Dictionary and stages.has("bond"):
-		return str(stages["bond"].get("tone", ""))
-	return ""
+		base = str(stage_data.get("tone", ""))
+	elif stage == "awaken" and stages is Dictionary and stages.has("bond"):
+		base = str(stages["bond"].get("tone", ""))
+	var phase := _get_phase_tone()
+	if phase == "":
+		return base
+	if base == "":
+		return phase
+	return "%s · %s" % [base, phase]
+
+
+## D1～D3 亲密度还低，关系阶段会给出「拘谨」调，会把前期该有的贫嘴压没。
+## 这里按叙事相位覆盖：D4 起交回 story_mode（陌生化 / 渗漏 / 觉醒）。
+func _get_phase_tone() -> String:
+	if not GameState.IS_TEN_DAY_EDITION:
+		return ""
+	if StoryDirector.get_story_mode() != "normal" or GameState.game_day > 3:
+		return ""
+	return "前期基调：贫嘴，带点小腹黑——占廊下干处还说是给他留的、蹭吃的先夸再要、被戳穿就拿「我记性不好」耍赖，占完自己先心虚地笑一下。玩笑短、冷、一句就收，不油不梗。她是真的会忘，不许演成装傻。"
 
 
 func _build_headers() -> PackedStringArray:
@@ -413,12 +434,14 @@ func _fallback_for_event(event: String, extra: Dictionary) -> String:
 				bool(extra.get("refused", false)),
 				int(extra.get("pester_count", 0))
 			)
+		"story_step_render":
+			return NpcFallback.story_step_render(extra)
 		_:
 			return "嗯，我在。"
 
 
 func _fallback_morning_sidewrite(extra: Dictionary) -> String:
-	return _fallback_companion_casual(extra)
+	return NpcFallback.ambient_sidewrite(str(extra.get("weather", GameState.weather_today)))
 
 
 func _fallback_companion_casual(extra: Dictionary) -> String:
@@ -551,7 +574,7 @@ func _on_http_completed(
 			call_deferred("_pump_api_queue")
 			return
 		var reason := str(validation.get("reason", ""))
-		if reason == "literary" or reason == "action_mismatch":
+		if reason == "literary" or reason == "action_mismatch" or reason == "l3_episodic":
 			var literary_fallback := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, literary_fallback, true)
 			call_deferred("_pump_api_queue")

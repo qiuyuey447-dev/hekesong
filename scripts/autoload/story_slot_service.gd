@@ -215,7 +215,10 @@ func _notebook_excerpt() -> String:
 
 
 func _my_notebook_excerpt() -> String:
-	## 玩家「偷偷记她」的本子摘录：优先取对她的观察 / 与她相关的高亮，与 {notebook_excerpt} 区分开。
+	## 玩家「偷偷记她」的本子摘录：优先取 PlayerNotebookService 可见页。
+	var from_nb := PlayerNotebookService.latest_visible_excerpt()
+	if from_nb != "":
+		return from_nb
 	var her_line := _notebook_excerpt()
 	var companion := GameState.companion_name
 	# ① journal 里 LLM 提炼的「companion_feel」——对她的观察，最贴题

@@ -33,12 +33,17 @@ extends CanvasLayer
 @onready var _story_beat_panel: StoryBeatPanel = $StoryBeatPanel
 @onready var _ending_panel: PanelContainer = $EndingPanel
 @onready var _name_prompt_panel: PanelContainer = $NamePromptPanel
+@onready var _story_choice_panel: PanelContainer = $StoryChoicePanel
 
+var _notebook_eviction_active: bool = false
 var _basket_drawer: BasketDrawer
 var _basket_button: Button
 var _coin_bubble: Label
 var _top_status: Label
 var _pending_morning_sidewrite: bool = false
+var _session_start_retries: int = 0
+var _pending_react_type: String = ""
+var _pending_react_facts: Dictionary = {}
 var _pending_proactive_speech: Dictionary = {}
 var _proactive_chase_spoken: Array = []
 var _last_sprout_tier_seen: int = -1
@@ -116,10 +121,15 @@ func _ready() -> void:
 	GameState.day_advanced.connect(_on_day_advanced)
 	GameState.sleep_prompt_requested.connect(_on_sleep_prompt_requested)
 	GameState.week_reset.connect(_on_week_reset)
+	GameState.milestone_trigger.connect(_on_milestone_trigger)
+	GameState.companion_world_event.connect(_on_companion_world_event)
 	StoryBeatDirector.scheduled_beat_due.connect(_on_scheduled_story_beat)
 	CompanionAgent.proactive_chase_shout.connect(_on_companion_chase_shout)
 	NpcBridge.reply_ready.connect(_on_npc_reply_ready)
 	NpcBridge.request_failed.connect(_on_npc_request_failed)
+	MemoryService.anchor_eviction_pending.connect(_on_anchor_eviction_pending)
+	if _story_choice_panel.has_signal("chosen"):
+		_story_choice_panel.chosen.connect(_on_story_choice_chosen)
 
 	_confirm_button.pressed.connect(_on_confirm_pressed)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
@@ -162,6 +172,8 @@ func _ready() -> void:
 	call_deferred("_maybe_show_awakening")
 	call_deferred("_maybe_show_story_beat")
 	call_deferred("_maybe_show_name_prompt_after_load")
+	call_deferred("_maybe_resume_pending_eviction")
+	call_deferred("_maybe_trigger_persona_shift")
 
 
 func _process(_delta: float) -> void:
@@ -241,6 +253,54 @@ func _on_time_changed(time_of_day: String) -> void:
 		_hint("夜幕降临了。")
 	elif time_of_day == GameState.TIME_EVENING:
 		_hint("天色渐晚。")
+		call_deferred("_maybe_remind_story_invite")
+	call_deferred("_maybe_resume_beat_tail")
+
+
+## 傍晚补一次轻邀请：她白天已经开过口，但玩家还没去听。
+func _maybe_remind_story_invite() -> void:
+	if _story_beat_blocked or _story_choice_blocked or _npc_busy:
+		return
+	if _is_gameplay_locked() or GameState.is_story_complete():
+		return
+	if _story_beat_panel.visible:
+		return
+	if not GameState.can_proactive_speech("invite"):
+		return
+	var speech := StoryBeatDirector.try_invite(true)
+	if speech.is_empty():
+		return
+	CompanionDirector.mark_delivered(speech)
+	_request_proactive_speech(speech)
+
+
+func _on_milestone_trigger(_milestone_id: String, facts: Dictionary) -> void:
+	_request_companion_react("story_nudge", facts)
+
+
+func _on_companion_world_event(event_type: String, facts: Dictionary) -> void:
+	if event_type != "crop_became_ready":
+		return
+	_request_companion_react("world_crop_ready", facts)
+
+
+## 反应口：世界发生了事她才出声，单独计池，不占叙事口与生活口。
+func _request_companion_react(react_type: String, facts: Dictionary) -> void:
+	if _npc_busy or _is_gameplay_locked() or GameState.is_story_complete():
+		return
+	if GameState.is_night() or StoryDirector.is_stranger_mode():
+		return
+	if _story_beat_panel.visible or _story_beat_blocked or _story_choice_blocked:
+		return
+	if not GameState.can_proactive_speech("react"):
+		return
+	GameState.consume_proactive_speech("react")
+	_pending_react_type = react_type
+	_pending_react_facts = facts.duplicate(true)
+	_request_companion_line("companion_react", {
+		"react_type": react_type,
+		"react_facts": _pending_react_facts,
+	})
 
 
 func _refresh_hud() -> void:
@@ -271,7 +331,7 @@ func _refresh_hud() -> void:
 	# 旧 HUD 数值行保留节点但不展示（已收进篮子）。
 	_hud_stats.text = ""
 	_hud_stage.text = ""
-	_next_day_button.text = "睡觉" if GameState.can_manual_sleep() else "还不到睡"
+	_next_day_button.text = "睡觉" if GameState.can_manual_sleep() else "天还亮着"
 	if _basket_drawer:
 		_basket_drawer.refresh()
 	_maybe_announce_sprout_growth()
@@ -516,7 +576,7 @@ func _on_day_opening_finished() -> void:
 func _can_begin_sleep(show_hints: bool) -> bool:
 	if TaskSystem.is_busy():
 		if show_hints:
-			_hint("她还在忙，等一下再睡。")
+			_system_hint("blocking_companion_busy")
 		return false
 	if GameState.is_story_complete():
 		if show_hints:
@@ -524,12 +584,12 @@ func _can_begin_sleep(show_hints: bool) -> bool:
 		return false
 	if not GameState.can_manual_sleep():
 		if show_hints:
-			_hint("还不到睡的时候。")
+			_system_hint("blocking_daylight")
 		return false
 	if GameState.game_day >= GameState.FINAL_GAME_DAY:
 		if not GameState.has_seen_awakening():
 			if show_hints:
-				_hint("她好像还有话想说。")
+				_system_hint("blocking_story_finale")
 			call_deferred("_maybe_show_awakening")
 			return false
 		if not GameState.is_story_complete():
@@ -542,7 +602,7 @@ func _can_begin_sleep(show_hints: bool) -> bool:
 		return false
 	if GameState.must_finish_awakening_today():
 		if show_hints:
-			_hint("她好像还有话想说。")
+			_system_hint("blocking_story_finale")
 		call_deferred("_maybe_show_awakening")
 		return false
 	if StoryBeatDirector.has_unseen_weekend_night_beat():
@@ -557,7 +617,7 @@ func _can_begin_sleep(show_hints: bool) -> bool:
 		if StoryBeatDirector.should_force_schedule_now():
 			call_deferred("_maybe_show_story_beat", true)
 		elif show_hints:
-			_hint("她今天还有话要说，再等等。")
+			_system_hint("blocking_story_beat")
 		return false
 	if GameState.should_show_week_wrap():
 		StoryBeatDirector.prepare_day_end()
@@ -634,27 +694,53 @@ func _maybe_announce_sprout_growth() -> void:
 	_last_sprout_tier_seen = tier
 
 
-func _maybe_request_morning_sidewrite() -> void:
-	if _is_gameplay_locked() or _npc_busy:
+## 每天清晨她自己先开一句口（走 LLM，带昨日日志与缺席回归），
+## 与信纸里的「清晨」正文互不替代：信纸是叙事，这一句是她本人。
+func _maybe_request_session_start() -> void:
+	if not _pending_morning_sidewrite:
 		return
-	if GameState.is_story_complete():
+	if GameState.is_story_complete() or GameState.should_show_awakening():
 		_pending_morning_sidewrite = false
 		return
-	if _story_beat_blocked or _story_choice_blocked or _name_prompt_blocked:
-		return
-	if not CompanionDirector.should_offer_ambient():
+	## D1 是登门，开场交给 P_N01；D10 整天归觉醒。
+	if GameState.game_day <= 1 or GameState.is_pure_narrative_day():
 		_pending_morning_sidewrite = false
+		return
+	if _story_choice_blocked or _name_prompt_blocked:
+		_pending_morning_sidewrite = false
+		return
+	if _npc_busy or _is_gameplay_locked() or _story_beat_blocked:
+		_session_start_retries += 1
+		if _session_start_retries > 20:
+			_pending_morning_sidewrite = false
+			return
+		get_tree().create_timer(1.0).timeout.connect(
+			_maybe_request_session_start, CONNECT_ONE_SHOT
+		)
 		return
 	_pending_morning_sidewrite = false
-	CompanionDirector.schedule_consider(0.4, "period")
+	_session_start_retries = 0
+	_request_companion_line("session_start", {
+		"include_yesterday_echo": true,
+		"include_absence_comeback": GameState.has_pending_absence(),
+	})
 
 
 func _request_ambient_sidewrite() -> void:
-	_request_proactive_speech({
-		"channel": "casual",
-		"line": "",
-		"beat_id": "",
-	})
+	if not CompanionDirector.should_offer_ambient():
+		return
+	var extra := CompanionDirector.collect_llm_extra({"channel": "ambient"})
+	extra["proactive_goal"] = "雨天廊下。一句环境侧写，像自言自语。不邀请、不报价、不催任务，最多一句。"
+	extra["weather"] = GameState.weather_today
+	_set_npc_busy(true)
+	NpcBridge.request_event("morning_sidewrite", extra)
+
+
+func _maybe_request_ambient_sidewrite() -> void:
+	if _npc_busy or _story_beat_panel.visible:
+		call_deferred("_maybe_request_ambient_sidewrite")
+		return
+	_request_ambient_sidewrite()
 
 
 func _request_casual_chat() -> void:
@@ -668,18 +754,26 @@ func _request_casual_chat() -> void:
 func _request_proactive_speech(speech: Dictionary) -> void:
 	_pending_proactive_speech = speech.duplicate(true)
 	_begin_proactive_approach_for_speech()
-	var extra := CompanionDirector.collect_llm_extra(speech)
+
+
+func _deliver_pending_proactive_speech() -> void:
+	if _pending_proactive_speech.is_empty():
+		return
+	var extra := CompanionDirector.collect_llm_extra(_pending_proactive_speech)
 	if _basket_drawer:
 		extra["sprout_word"] = _basket_drawer.get_sprout_word()
 	_request_companion_line("companion_proactive", extra)
 
 
 func _begin_proactive_approach_for_speech() -> void:
-	if CompanionAgent.is_proactive_active():
-		return
 	_proactive_chase_spoken.clear()
-	_hint("小狸好像有话对你说")
-	CompanionAgent.begin_proactive_approach()
+	_hint(StoryNodeCopy.get_system("proactive_nudge"))
+	if CompanionAgent.is_proactive_active():
+		_deliver_pending_proactive_speech()
+		return
+	CompanionAgent.begin_proactive_approach(func() -> void:
+		_deliver_pending_proactive_speech()
+	)
 
 
 func _finish_proactive_approach() -> void:
@@ -810,9 +904,28 @@ func _maybe_show_story_beat(force_open: bool = false) -> void:
 	_pending_beat_yesterday_echo = false
 	if beat_id in ["P_N05", "BE_N05"] and not GameState.has_revealed_memory():
 		GameState.mark_w2_stranger_seen()
+	beat = StoryBeatDirector.take_displayable_beat(beat)
+	if beat.is_empty():
+		return
+	beat = await StoryBeatDirector.prepare_beat_for_display(beat)
 	_story_beat_blocked = true
 	GameState.clear_pending_invite_beat()
 	StoryBeatDirector.mark_schedule_fired()
+	_story_beat_panel.open(beat)
+
+
+func _maybe_resume_beat_tail() -> void:
+	if _story_choice_blocked or _story_beat_blocked or GameState.is_story_complete():
+		return
+	if _story_beat_panel.visible or _awakening_panel.visible or _ending_panel.visible:
+		return
+	if GameState.time_of_day not in [GameState.TIME_EVENING, GameState.TIME_NIGHT]:
+		return
+	var beat := StoryBeatDirector.build_beat_tail_resume()
+	if beat.is_empty():
+		return
+	beat = await StoryBeatDirector.prepare_beat_for_display(beat)
+	_story_beat_blocked = true
 	_story_beat_panel.open(beat)
 
 
@@ -850,15 +963,19 @@ func _on_story_beat_finished(beat_id: String) -> void:
 		var snuggle_beat := _companion_snuggle_pending_beat_id
 		_companion_snuggle_pending_beat_id = ""
 		if beat_id.strip_edges() != "":
-			StoryBeatDirector.complete_beat(beat_id)
-			_debug_note("主线完成：%s" % beat_id)
+			if StoryBeatDirector.should_complete_beat_after_panel(beat_id):
+				StoryBeatDirector.complete_beat(beat_id)
+				_debug_note("主线完成：%s" % beat_id)
 		_story_beat_blocked = false
 		_begin_companion_snuggle(snuggle_beat)
 		return
 
 	if beat_id.strip_edges() != "":
-		StoryBeatDirector.complete_beat(beat_id)
-		_debug_note("主线完成：%s" % beat_id)
+		if StoryBeatDirector.should_complete_beat_after_panel(beat_id):
+			StoryBeatDirector.complete_beat(beat_id)
+			_debug_note("主线完成：%s" % beat_id)
+			if beat_id == "BE_N07":
+				call_deferred("_play_ending", EndingDirector.ENDING_BAD_EARLY)
 	_story_beat_blocked = false
 	var companion_line := _pending_companion_night_line.strip_edges()
 	_pending_companion_night_line = ""
@@ -898,7 +1015,6 @@ func _handle_w2_beat_choice(choice_id: String) -> void:
 		"w2_expel_confirm":
 			_apply_w2_expel_choice()
 			_story_beat_panel.finish_now()
-			call_deferred("_play_ending", EndingDirector.ENDING_BAD_EARLY)
 		"w2_expel_cancel":
 			_story_beat_panel.show_step_at(1)
 
@@ -946,6 +1062,8 @@ func _on_companion_snuggle_finished(beat_id: String) -> void:
 	var farewell := StoryRouteData.render_companion_night_farewell(beat_id)
 	if farewell.strip_edges() != "":
 		_append_companion_message(farewell)
+	if GameState.game_day == 7 and beat_id.ends_with("_N16"):
+		PlayerNotebookService.on_first_write_d7()
 	if _try_show_post_snuggle_fragment(beat_id):
 		return
 	call_deferred("_finish_night_after_snuggle")
@@ -1129,14 +1247,14 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 
 func on_door_clicked() -> void:
 	CompanionDirector.notify_player_active()
-	_hint("外面的事先放一放，先把田照顾好。")
+	_hint("旧屋今天不用进。田埂上还有她在。")
 
 
 func on_shop_clicked() -> void:
 	if _blocks_farm_chores(true):
 		return
 	if TaskSystem.is_busy():
-		_hint("她还在忙，等一下。")
+		_hint("她还在走动。")
 		return
 	if _feed_panel.visible:
 		_feed_panel.close()
@@ -1201,6 +1319,86 @@ func _on_memory_pressed() -> void:
 	if _market_panel.visible:
 		_market_panel.close()
 	_memory_panel.open()
+
+
+func _maybe_resume_pending_eviction() -> void:
+	if not MemoryService.has_pending_eviction():
+		return
+	if _is_gameplay_locked() or _story_beat_panel.visible or _npc_busy:
+		call_deferred("_maybe_resume_pending_eviction")
+		return
+	_show_notebook_eviction(MemoryService.get_pending_eviction_candidates())
+
+
+func _on_anchor_eviction_pending(candidates: Array) -> void:
+	call_deferred("_show_notebook_eviction", candidates)
+
+
+func _show_notebook_eviction(candidates: Array) -> void:
+	if candidates.size() < 2:
+		return
+	if _is_gameplay_locked() or _story_beat_panel.visible:
+		call_deferred("_show_notebook_eviction", candidates)
+		return
+	_notebook_eviction_active = true
+	_story_choice_blocked = true
+	var choices: Array = []
+	for raw in candidates:
+		if not raw is Dictionary:
+			continue
+		var entry: Dictionary = raw
+		var summary := str(entry.get("summary", "")).strip_edges()
+		if summary.length() > 36:
+			summary = summary.substr(0, 36) + "…"
+		choices.append({
+			"id": str(entry.get("id", "")),
+			"label": summary if summary != "" else "这一页",
+		})
+	if choices.size() < 2:
+		_notebook_eviction_active = false
+		_story_choice_blocked = false
+		return
+	if _story_choice_panel.has_method("open"):
+		_story_choice_panel.open({
+			"title": "她的本子",
+			"body": "本子写满了。\n\n%s 翻来翻去，停在两页之间。\n\n「……我得划掉一条。」" % GameState.companion_name,
+			"choices": choices,
+		})
+
+
+func _on_story_choice_chosen(choice_id: String) -> void:
+	if not _notebook_eviction_active:
+		return
+	_notebook_eviction_active = false
+	_story_choice_blocked = false
+	var erased_summary := ""
+	for entry in MemoryService.get_pending_eviction_candidates():
+		if str(entry.get("id", "")) == choice_id:
+			erased_summary = str(entry.get("summary", "")).strip_edges()
+			break
+	MemoryService.resolve_eviction(choice_id)
+	if erased_summary != "":
+		if erased_summary.length() > 28:
+			erased_summary = erased_summary.substr(0, 28) + "…"
+		_append_companion_message("……划掉了。「%s」——以后想不起来，别怪我。" % erased_summary)
+	else:
+		_append_companion_message("……划掉了。以后想不起来，别怪我。")
+
+
+func _maybe_trigger_persona_shift() -> void:
+	if _npc_busy or _is_gameplay_locked() or GameState.is_story_complete():
+		return
+	if StoryDirector.is_stranger_mode() or GameState.is_night():
+		return
+	if _story_beat_panel.visible or _story_choice_panel.visible:
+		call_deferred("_maybe_trigger_persona_shift")
+		return
+	if not GameState.can_proactive_speech("react"):
+		return
+	var shift := GameState.peek_persona_shift()
+	if shift.is_empty():
+		return
+	_request_companion_react("persona_shift", shift)
 
 
 func _on_feed_requested(item_id: String) -> void:
@@ -1301,6 +1499,7 @@ func _on_day_advanced() -> void:
 
 
 func _handle_day_advanced_content() -> void:
+	_restore_chat_history()
 	if GameState.game_day >= (5 if GameState.IS_TEN_DAY_EDITION else 10):
 		StoryBeatDirector.ensure_story_route_locked()
 	if not GameState.IS_TEN_DAY_EDITION and GameState.game_day in [22, 29]:
@@ -1313,15 +1512,17 @@ func _handle_day_advanced_content() -> void:
 		return
 	_pending_beat_yesterday_echo = true
 	_pending_morning_sidewrite = true
+	_session_start_retries = 0
 	StoryBeatDirector.refresh_daily_schedule()
 	if StoryBeatDirector.has_pending_night_beat():
 		_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
 	call_deferred("_maybe_show_story_beat")
+	call_deferred("_maybe_request_session_start")
 
 
 func _on_week_reset(week_index: int) -> void:
 	if week_index == 2:
-		_hint("新的一周。她看你的眼神，好像有点不一样。")
+		_hint("她看你的眼神，好像有点不一样。")
 
 
 func _on_chat_send_pressed() -> void:
@@ -1369,7 +1570,7 @@ func open_shop_from_companion() -> void:
 	if _blocks_farm_chores(true):
 		return
 	if TaskSystem.is_busy():
-		_hint("她还在忙，等一下。")
+		_hint("她还在走动。")
 		return
 	if _feed_panel.visible:
 		_feed_panel.close()
@@ -1384,7 +1585,7 @@ func open_memory_from_companion() -> void:
 	if _is_gameplay_locked():
 		return
 	if TaskSystem.is_busy():
-		_hint("她还在忙，等一下。")
+		_hint("她还在走动。")
 		return
 	if _feed_panel.visible:
 		_feed_panel.close()
@@ -1399,7 +1600,7 @@ func sleep_from_companion() -> void:
 	if _is_gameplay_locked() and not (_day_cycle_overlay != null and _day_cycle_overlay.is_prompt_visible()):
 		return
 	if TaskSystem.is_busy():
-		_hint("她还在忙，等一下再睡。")
+		_system_hint("blocking_companion_busy")
 		return
 	if GameState.is_awaiting_sleep():
 		if _day_cycle_overlay.is_prompt_visible():
@@ -1427,9 +1628,25 @@ func _send_chat_async(text: String) -> void:
 	_chat_input.clear()
 	GameState.record_player_chat(trimmed)
 
+	if MemoryService.looks_like_pin_request(trimmed):
+		var pin_result := MemoryService.pin_from_player_chat(trimmed)
+		if bool(pin_result.get("ok", false)):
+			var pinned_summary := str(pin_result.get("summary", "")).strip_edges()
+			if pinned_summary != "":
+				_append_companion_message("写进本子了——「%s」。" % pinned_summary)
+			else:
+				_append_companion_message("写进本子了。")
+			return
+
+	if IntentParser.looks_like_stop_farm_chore(trimmed):
+		if _try_cancel_active_chore_from_chat():
+			_pending_chat_text = ""
+			_append_companion_message("好。那我先停下手上的。")
+			return
+
 	if IntentParser.looks_like_sleep_request(trimmed):
 		if _has_unfinished_story_beat_today():
-			_hint("她还有话要说，再等等。")
+			_system_hint("blocking_sleep_story")
 			return
 		sleep_from_companion()
 		return
@@ -1455,15 +1672,16 @@ func _send_chat_async(text: String) -> void:
 	_skip_player_chat_reply = false
 
 	var local_intent := IntentParser.parse(trimmed)
+	var classify_attempted := IntentBridge.should_fallback(local_intent)
 	var api_intent := {}
-	if IntentBridge.should_fallback(local_intent):
+	if classify_attempted:
 		_set_npc_busy(true)
 		_chat_input.placeholder_text = "……"
 		api_intent = await IntentBridge.classify_message(trimmed)
 		_set_npc_busy(false)
 
 	_pending_chat_intent = IntentParser.resolve_misclassified_refuse(
-		IntentParser.merge_intents(local_intent, api_intent, trimmed)
+		IntentParser.merge_intents(local_intent, api_intent, trimmed, classify_attempted)
 	)
 
 	var guard := PersonaGuard.check_intent(_pending_chat_intent)
@@ -1505,17 +1723,41 @@ func _on_npc_reply_ready(
 
 	if event == "companion_react":
 		_set_npc_busy(false)
+		var reacted := text.strip_edges()
+		var react_type := _pending_react_type
+		var react_facts := _pending_react_facts
+		_pending_react_type = ""
+		_pending_react_facts = {}
+		if react_type == "persona_shift":
+			GameState.mark_persona_shift_announced(str(react_facts.get("dimension", "")))
+		if reacted != "" and reacted != "……":
+			_append_companion_message(reacted)
 		return
 
 	if event == "story_beat":
 		_set_npc_busy(false)
 		return
 
+	if event == "story_step_render":
+		return
+
 	if event == "day_journal_summarize":
 		_set_npc_busy(false)
 		return
 
-	if event == "morning_sidewrite" or event == "companion_casual" or event == "companion_proactive":
+	if event == "morning_sidewrite":
+		_set_npc_busy(false)
+		var ambient_line := text.strip_edges()
+		if ambient_line == "" or ambient_line == "……":
+			ambient_line = _ambient_sidewrite_fallback()
+		if ambient_line.strip_edges() != "":
+			if GameState.can_proactive_speech("ambient"):
+				GameState.consume_proactive_speech("ambient", {"kind": "rain_porch"})
+			GameState.record_initiation("ambient", {"kind": "rain_porch"}, ambient_line)
+			_append_companion_message(ambient_line)
+		return
+
+	if event == "companion_casual" or event == "companion_proactive":
 		_set_npc_busy(false)
 		var spoken := text.strip_edges()
 		if spoken == "" or spoken == "……":
@@ -1541,6 +1783,7 @@ func _on_npc_reply_ready(
 	var farm_reply_grounded := false
 	if event == "player_chat":
 		display_text = _sanitize_sleep_hijack(_pending_chat_text, display_text)
+		display_text = _sanitize_unrequested_sleep_push(_pending_chat_text, display_text)
 		var sanitized := _sanitize_farm_hallucination(display_text)
 		farm_reply_grounded = sanitized.strip_edges() != text.strip_edges()
 		display_text = sanitized
@@ -1550,6 +1793,8 @@ func _on_npc_reply_ready(
 	if event == "session_start" and bool(_pending_session_absence):
 		GameState.mark_absence_shown()
 		_pending_session_absence = false
+	if event == "session_start":
+		call_deferred("_maybe_request_ambient_sidewrite")
 
 	if event == "player_chat":
 		_apply_relationship_delta(request_id, event, _pending_chat_text, used_fallback)
@@ -1571,12 +1816,22 @@ func _on_npc_reply_ready(
 				_try_execute_companion_followthrough(display_text, chat_api_intent)
 		else:
 			NpcBridge.take_chat_intent(request_id)
+		_maybe_show_d4_amnesia_hint(_pending_chat_text)
 		_pending_chat_text = ""
 		return
 
 
 func _on_npc_request_failed(request_id: int, event: String, _error: String) -> void:
-	if event == "morning_sidewrite" or event == "companion_casual" or event == "companion_proactive":
+	if event == "morning_sidewrite":
+		_set_npc_busy(false)
+		var ambient_line := _ambient_sidewrite_fallback()
+		if ambient_line.strip_edges() != "":
+			if GameState.can_proactive_speech("ambient"):
+				GameState.consume_proactive_speech("ambient", {"kind": "rain_porch"})
+			GameState.record_initiation("ambient", {"kind": "rain_porch"}, ambient_line)
+			_append_companion_message(ambient_line)
+		return
+	if event == "companion_casual" or event == "companion_proactive":
 		_set_npc_busy(false)
 		var casual := _casual_fallback_line()
 		var channel := str(_pending_proactive_speech.get("channel", "casual"))
@@ -1587,6 +1842,30 @@ func _on_npc_request_failed(request_id: int, event: String, _error: String) -> v
 		_finish_proactive_approach()
 		if channel == "invite" and beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
 			call_deferred("_maybe_show_story_beat", true)
+		return
+	if event == "companion_react":
+		_set_npc_busy(false)
+		var react_type := _pending_react_type
+		var react_facts := _pending_react_facts
+		_pending_react_type = ""
+		_pending_react_facts = {}
+		if react_type == "":
+			return
+		var snapshot := WorldSnapshot.capture({
+			"react_type": react_type,
+			"react_facts": react_facts,
+		})
+		var local := NpcFallback.companion_react(
+			react_type,
+			snapshot,
+			StoryDirector.get_story_hint(),
+			GameState.get_stage(),
+			MemoryService.get_context_for_event("companion_react", {})
+		)
+		if local.strip_edges() != "":
+			_append_companion_message(local)
+		if react_type == "persona_shift":
+			GameState.mark_persona_shift_announced(str(react_facts.get("dimension", "")))
 		return
 	if event != "companion_feed":
 		return
@@ -1731,13 +2010,11 @@ func _show_citation_feedback(request_id: int, used_fallback: bool) -> void:
 	var line := MemoryService.build_citation_feedback(cited_ids)
 	if line == "":
 		return
+	## 渗漏期去掉括号，让「想起来」直接混进她的话里；其余日子保留括号做旁注。
 	if _should_show_leak_citation():
 		_append_companion_message(_format_leak_citation(line))
 		return
-	## 记忆引用属于调试信息，不进玩家可见层。
-	if not SHOW_LLM_DEBUG:
-		return
-	_debug_note(line)
+	_append_companion_message(line)
 
 
 func _should_show_leak_citation() -> bool:
@@ -2096,6 +2373,30 @@ func _sanitize_sleep_hijack(player_text: String, reply: String) -> String:
 	return cleaned
 
 
+func _sanitize_unrequested_sleep_push(player_text: String, reply: String) -> String:
+	## 玩家问田况，LLM 却催睡觉 → 去掉纯睡话段落。
+	if not IntentParser.looks_like_status_inquiry(player_text):
+		return reply
+	var cleaned := reply.strip_edges()
+	if cleaned == "":
+		return cleaned
+	var sleep_only := true
+	for marker in ["田", "苗", "萝卜", "熟", "浇", "收"]:
+		if marker in cleaned:
+			sleep_only = false
+			break
+	if sleep_only and ("睡" in cleaned or "休息" in cleaned or "晚安" in cleaned):
+		return "我先帮你看看田。熟了的话我会说。"
+	return cleaned
+
+
+func _try_cancel_active_chore_from_chat() -> bool:
+	if not TaskSystem.is_busy() and not CompanionAgent.has_current_job():
+		return false
+	TaskSystem.cancel_task()
+	return true
+
+
 func _sanitize_farm_hallucination(text: String) -> String:
 	## 田况与对话不一致时，把「我去浇/种/收/已买好」等幻觉换成实话，避免先胡说再纠正。
 	var cleaned := text.strip_edges()
@@ -2450,6 +2751,36 @@ func _on_nudge_later_pressed() -> void:
 		GameState.record_initiation("nudge_dismissed", {"react_type": react_type}, "玩家选择稍后")
 	_hide_nudge_bar()
 	_append_companion_message("好，你先忙。我等会儿再说。")
+
+
+func _ambient_sidewrite_fallback() -> String:
+	return NpcFallback.ambient_sidewrite(GameState.weather_today)
+
+
+func _system_hint(key: String) -> void:
+	var line := StoryNodeCopy.get_system(key).strip_edges()
+	if line != "":
+		_hint(line)
+
+
+func _looks_like_identity_question(text: String) -> bool:
+	for kw in ["你是谁", "我是谁", "认识我", "记得我", "不记得", "见过我", "见过你"]:
+		if kw in text:
+			return true
+	return false
+
+
+func _maybe_show_d4_amnesia_hint(player_text: String) -> void:
+	if GameState.game_day not in [4, 5]:
+		return
+	if not StoryDirector.is_stranger_mode():
+		return
+	if bool(GameState.get_ending_flags().get("d4_amnesia_hint_shown", false)):
+		return
+	if not _looks_like_identity_question(player_text):
+		return
+	GameState.set_ending_flag("d4_amnesia_hint_shown", true)
+	_system_hint("d4_amnesia_hint")
 
 
 func _hint(text: String) -> void:

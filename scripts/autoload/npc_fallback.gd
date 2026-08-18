@@ -5,6 +5,7 @@ class_name NpcFallback
 const FALLBACK_GREET_FIRST := [
 	"泥我先拍拍。田我可以浇。——你这垄，是不是走歪了？",
 	"我先去认田。认完再认你。顺序不能反。",
+	"树洞我看过了。挺好。没人跟我抢吧？",
 ]
 
 const FALLBACK_STRANGER_CHAT := [
@@ -28,7 +29,7 @@ const FALLBACK_GREET_YESTERDAY_ECHO := [
 const FALLBACK_GREET_RETURN := [
 	"你来了。垄我看过了。有点歪。",
 	"早。田还在。我尾巴没进泥。今天表现好。",
-	"……我在廊下。干的那边给你留了。",
+	"……我在廊下。干的那边给你留了。留了一半。",
 ]
 
 const FALLBACK_TASK_WATER := [
@@ -91,6 +92,35 @@ const FALLBACK_REACT_IDLE := [
 	"我在呢。要不要我先去看看田？",
 ]
 
+const FALLBACK_AMBIENT_RAIN := [
+	"雨还在廊檐下滴。她没撑伞，就站在那儿看田。",
+	"廊下躲雨正好。她把水壶搁在脚边，没急着动。",
+	"雨声把田埂衬得很静。她靠着廊柱，尾巴尖轻轻晃。",
+]
+
+const FALLBACK_REACT_PERSONA_SHIFT := {
+	"warm": [
+		"……我好像比以前多嘴一点。不对，是比以前肯多说一点。",
+		"我以前好像不这样。",
+	],
+	"strict": [
+		"……我是不是管得太细了。我以前好像不这样。",
+		"刚才那句话，不像我。",
+	],
+	"active": [
+		"……我怎么老想找事做。我以前好像不这样。",
+		"闲不住。这算是新毛病吧。",
+	],
+	"optimistic": [
+		"……我好像太爱往好了想。我以前没这么嘴硬。",
+		"刚才那句，是不是太满了点。",
+	],
+	"dependent": [
+		"……我是不是太黏人了。我以前好像不这样。",
+		"你不来，我竟有点坐不住。怪。",
+	],
+}
+
 ## 主动闲聊：按剧情态 × 亲密度，不报价、不报田块数。
 const FALLBACK_CASUAL_STRANGER := {
 	"morning": [
@@ -140,16 +170,16 @@ const FALLBACK_CASUAL_AWAKEN := {
 const FALLBACK_CASUAL_TIER := [
 	{
 		"morning": [
-			"……你还在。田也在。我先去看看垄歪不歪。",
-			"早。我还不太会找话说。红薯有的话，可以找话。",
+			"……你还在。田也在。我先去看看垄歪不歪——歪的话，算你教的。",
+			"早。我还不太会找话说。灶上有红薯的话，就好找了。",
 		],
 		"noon": [
-			"我在这儿。你忙你的，我看着就好。",
-			"田里风轻轻的。要不要我帮你做点什么？",
+			"我在这儿。你忙你的，我看着就好。看着也算干活吧。",
+			"田里风轻轻的。要不要我帮你做点什么？——不重的那种。",
 		],
 		"evening": [
-			"傍晚风有点凉。你要是累了，就先歇歇。",
-			"今天过得怎么样……不说也行。我在。",
+			"傍晚风有点凉。廊下干的那块我先坐着。你来了我让你。",
+			"今天过得怎么样……不说也行。反正我记性不好，说了也可能忘。",
 		],
 	},
 	{
@@ -269,6 +299,12 @@ static func pick_random(pool: Array) -> String:
 	if pool.is_empty():
 		return ""
 	return pool[randi() % pool.size()]
+
+
+static func ambient_sidewrite(weather: String = "") -> String:
+	if weather == GameState.WEATHER_RAIN or GameState.weather_today == GameState.WEATHER_RAIN:
+		return pick_random(FALLBACK_AMBIENT_RAIN)
+	return "……风从廊下过来。她没说话，只是看着田。"
 
 
 static func casual_chat(
@@ -466,9 +502,7 @@ static func greet(
 	if game_day <= 1 and affection == 0 and not include_absence_comeback:
 		return pick_random(FALLBACK_GREET_FIRST)
 
-	var week_index := int(memory_context.get("week_index", 1))
-	var loop_day := int(memory_context.get("loop_day", 1))
-	if week_index == 2 and loop_day == 1 and not bool(memory_context.get("revealed", false)):
+	if _is_stranger_amnesia(memory_context):
 		return "……你是谁？我不记得了。我怎么会在这里。"
 
 	if include_absence_comeback and str(memory_context.get("story_mode", "")) != "stranger":
@@ -483,7 +517,7 @@ static func greet(
 			yesterday_clause = "在家园里忙了一天"
 		return pick_random(FALLBACK_GREET_YESTERDAY_ECHO) % yesterday_clause
 
-	if week_index >= 2 and not bool(memory_context.get("revealed", false)):
+	if _is_stranger_amnesia(memory_context):
 		if str(memory_context.get("story_mode", "")) == "stranger":
 			return pick_random(FALLBACK_GREET_STRANGER_W2)
 		return "你来了。今天是%s。这田……好像不是头一回见。" % sky
@@ -503,8 +537,16 @@ static func task_complete(game_facts: Dictionary, _market: Dictionary) -> String
 		"water":
 			var count := int(game_facts.get("plot_count", 1))
 			return pick_random(FALLBACK_TASK_WATER) % count
+		"plant":
+			var planted := int(game_facts.get("plot_count", 1))
+			return "种好了。空垄上现在有 %d 块新苗。" % planted
+		"harvest":
+			var harvested := int(game_facts.get("plot_count", 1))
+			return "收回来了。筐里多了 %d 块田的萝卜。" % harvested
+		"shop":
+			return "商店到了。你看，要不要买点种子。"
 		_:
-			return "任务完成了。"
+			return "这件事我记下了。"
 
 
 static func player_chat(
@@ -561,18 +603,9 @@ static func player_chat(
 		return "今天%s，明天大概是%s。田里的情况我会帮你看。" % [today, tomorrow]
 	if "喜欢" in text or "慢慢来" in text or "记住" in text:
 		return pick_random(FALLBACK_CHAT_PREFERENCE)
-	if str(memory_context.get("story_mode", "")) == "stranger":
+	if _is_stranger_amnesia(memory_context):
 		return stranger_chat(text, memory_context)
-	var week_index := int(memory_context.get("week_index", 1))
-	var loop_day := int(memory_context.get("loop_day", 1))
-	if week_index == 2 and loop_day == 1 and not bool(memory_context.get("revealed", false)):
-		if "我是谁" in text or "不认识" in text or "记得我" in text:
-			return "……你说我们见过？对不起。我想不起来。"
-		if "小狸" in text and ("认识" in text or "记得" in text or "一起" in text):
-			return "你叫我的名字……好像对。可我还是想不起来，在这里做过什么。"
-		if "萝卜" in text or "田" in text:
-			return "这田看着熟。也许你来过。我说不清是什么时候。"
-	if week_index >= 3 and not bool(memory_context.get("revealed", false)):
+	if _is_leak_phase(memory_context) and not bool(memory_context.get("revealed", false)):
 		var leak := LeakageEngine.try_leak_line("chat")
 		if leak.strip_edges() != "":
 			return leak
@@ -588,10 +621,8 @@ static func player_chat(
 
 
 static func stranger_chat(text: String, memory_context: Dictionary) -> String:
-	var week_index := int(memory_context.get("week_index", 1))
-	var loop_day := int(memory_context.get("loop_day", 1))
-	if week_index == 2 and loop_day == 1 and not bool(memory_context.get("revealed", false)):
-		if "我是谁" in text or "不认识" in text or "记得我" in text:
+	if _is_stranger_amnesia(memory_context):
+		if "我是谁" in text or "你是谁" in text or "不认识" in text or "记得我" in text:
 			return "……你说我们见过？对不起。我想不起来。"
 		if "小狸" in text and ("认识" in text or "记得" in text or "一起" in text):
 			return "你叫我的名字……好像对。可我还是想不起来，在这里做过什么。"
@@ -599,7 +630,7 @@ static func stranger_chat(text: String, memory_context: Dictionary) -> String:
 			return "这田看着熟。也许你来过。我说不清是什么时候。"
 	if "你好" in text or "hi" in text.to_lower() or "hello" in text.to_lower():
 		return "……你好。抱歉，我想不起有没有见过你。"
-	if _asks_prior_acquaintance(text) or "我是谁" in text or "记得我" in text:
+	if _asks_prior_acquaintance(text) or "我是谁" in text or "你是谁" in text or "记得我" in text:
 		return _prior_acquaintance_reply(memory_context)
 	if "留下" in text or "帮工" in text or "农场" in text:
 		return "……你愿意说的话，我听。但我还不确定我们是什么关系。"
@@ -664,8 +695,20 @@ static func companion_react(
 			if leak.strip_edges() != "":
 				return leak
 			return _story_nudge_line(story_hint, snapshot, stage, memory_context)
+		"persona_shift":
+			return _persona_shift_line(react_facts)
 		_:
 			return pick_random(FALLBACK_REACT_IDLE)
+
+
+static func _persona_shift_line(react_facts: Dictionary) -> String:
+	var dim := str(react_facts.get("dimension", "")).strip_edges()
+	if dim == "":
+		return "……我以前好像不这样。"
+	var lines: Variant = FALLBACK_REACT_PERSONA_SHIFT.get(dim, [])
+	if lines is Array and not lines.is_empty():
+		return pick_random(lines)
+	return "……我以前好像不这样。"
 
 
 static func _story_nudge_line(
@@ -689,28 +732,30 @@ static func _story_nudge_line(
 
 	var week := int(snapshot.get("week_index", 1))
 	var day := int(snapshot.get("loop_day", 1))
+	var story_day := (week - 1) * 7 + day
 	var plots: Dictionary = snapshot.get("plots", {})
 	var unwatered := int(plots.get("unwatered_growing", 0))
+	var revealed := bool(memory_context.get("revealed", false))
 
-	if week == 1 and day in [2, 3, 4] and unwatered > 0:
-		return "这周还在熟悉萝卜田，有 %d 块田还没浇水。" % unwatered
+	if story_day in [2, 3] and unwatered > 0:
+		return "萝卜田我才刚摸熟，还有 %d 块没浇水。" % unwatered
 
-	if week == 1 and day == 7:
-		return "今天是这周的最后一天了，我们把萝卜田和这一周的收成都看看吧。"
+	if story_day == 4 and unwatered > 0:
+		return "……我还不清楚这儿的规矩。有 %d 块田没浇水，要我去吗？" % unwatered
 
-	if week == 2 and day == 1 and not bool(memory_context.get("revealed", false)):
-		return "……抱歉，我还在想你是谁。先把手边的田顾好吧。"
+	if story_day == 7:
+		return "今天的活快干完了。萝卜田，我们再一起看一眼吧。"
 
-	if week == 2 and day == 2 and not bool(memory_context.get("revealed", false)):
-		return "又是新的一周…看见你和这片田，我心里总有点熟悉的感觉。"
+	if story_day == 8 and not revealed:
+		return "本子上的日期我怎么也对不上。先把手边的田顾好吧。"
 
-	if week >= 3 and not bool(memory_context.get("revealed", false)):
+	if story_day == 9 and not revealed:
+		return "明天，我想把好多事一件件跟你讲清楚。今天先把田照看好。"
+
+	if story_day >= 10 and not revealed:
 		var prefs: Dictionary = memory_context.get("long_term_prefs", {})
 		if prefs.has("fav_crop"):
-			return "我还记得你喜欢萝卜。这周也一起把田照顾好。"
-
-	if week == 5 and day == 1:
-		return "新的一周开始了。有很多话想说，但先把手边的田顾好吧。"
+			return "我还记得你喜欢萝卜。今天也一起把田照顾好。"
 
 	if story_hint.strip_edges() != "":
 		return pick_random(FALLBACK_REACT_STORY) % story_hint
@@ -737,6 +782,37 @@ static func story_beat_followup(beat_id: String, emotion: String, _node_label: S
 			if stage == GameState.STAGE_BOND:
 				return "%s，刚走完这一段，我心里有点话。方便和我说说吗？" % companion
 			return "刚才那件事……我还在回味。你想说点什么吗？"
+
+
+static func story_step_render(extra: Dictionary) -> String:
+	var companion := GameState.companion_name
+	var snippet := StoryRouteData.normalize_personal_snippet(str(extra.get("personal_snippet", "")))
+	if snippet == "":
+		snippet = StoryRouteData.extract_chat_snippet_for_beat(str(extra.get("beat_id", "")))
+	if snippet == "":
+		snippet = "你说过的那句，字迹比正文轻。"
+	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
+	if routed.strip_edges() != "":
+		return routed % [companion, snippet]
+	return "%s 从怀里摸出本子，指尖停在一行字上，停了停：「……我记得是——『%s』」" % [companion, snippet]
+
+
+static func _is_stranger_amnesia(memory_context: Dictionary) -> bool:
+	if str(memory_context.get("story_mode", "")) == "stranger":
+		return true
+	if GameState.IS_TEN_DAY_EDITION:
+		return GameState.game_day in [4, 5]
+	var week_index := int(memory_context.get("week_index", 1))
+	var loop_day := int(memory_context.get("loop_day", 1))
+	return week_index == 2 and loop_day == 1 and not bool(memory_context.get("revealed", false))
+
+
+static func _is_leak_phase(memory_context: Dictionary) -> bool:
+	if str(memory_context.get("story_mode", "")) == "leak":
+		return true
+	if GameState.IS_TEN_DAY_EDITION:
+		return GameState.game_day in [6, 7, 8]
+	return false
 
 
 static func _asks_prior_acquaintance(text: String) -> bool:

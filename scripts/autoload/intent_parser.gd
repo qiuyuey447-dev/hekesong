@@ -63,6 +63,18 @@ func parse(text: String) -> Dictionary:
 	if trimmed.is_empty():
 		return result
 
+	if looks_like_stop_farm_chore(trimmed):
+		result["intent"] = INTENT_CHAT
+		result["confidence"] = 0.95
+		result["matched_terms"] = ["stop_chore"]
+		return result
+
+	if looks_like_status_inquiry(trimmed):
+		result["intent"] = INTENT_CHECK_STATUS
+		result["confidence"] = 0.92
+		result["matched_terms"] = ["status_inquiry"]
+		return result
+
 	if looks_like_shop_purchase(trimmed):
 		result["intent"] = INTENT_OPEN_SHOP
 		result["confidence"] = 0.95
@@ -130,6 +142,8 @@ func is_explicit_sleep_utterance(text: String) -> bool:
 
 
 func looks_like_sleep_request(text: String) -> bool:
+	if looks_like_status_inquiry(text):
+		return false
 	if is_explicit_sleep_utterance(text):
 		return true
 	var normalized := _compact(_normalize(text))
@@ -142,6 +156,37 @@ func looks_like_sleep_request(text: String) -> bool:
 		"睡觉", "晚安", "休息了", "休息吧", "困了", "入眠",
 	]:
 		if phrase in normalized:
+			return true
+	return false
+
+
+func looks_like_status_inquiry(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	for phrase in [
+		"熟了没", "熟了吗", "能收了吗", "能收吗", "可以收了吗", "收了没",
+		"田怎么样", "田里怎么样", "田里怎样", "长好了没", "长好了吗",
+		"看看田", "田况", "能收了没",
+	]:
+		if phrase in compact:
+			return true
+	if ("田" in compact or "苗" in compact or "萝卜" in compact) and ("怎么样" in compact or "怎样了" in compact):
+		return true
+	return false
+
+
+func looks_like_stop_farm_chore(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	for phrase in [
+		"别浇", "不用浇", "先别浇", "不要浇", "别去浇",
+		"别种", "不用种", "先别种", "不要种", "雨停再种",
+		"别收", "不用收", "先别收", "不要收",
+		"别买", "不用买", "先别买", "不要买", "别买了", "不用买了",
+	]:
+		if phrase in compact:
 			return true
 	return false
 
@@ -179,7 +224,32 @@ func resolve_misclassified_refuse(intent: Dictionary) -> Dictionary:
 	return fixed
 
 
-func merge_intents(local_intent: Dictionary, api_intent: Dictionary, raw_text: String) -> Dictionary:
+func merge_intents(
+	local_intent: Dictionary,
+	api_intent: Dictionary,
+	raw_text: String,
+	classified_by_api: bool = false
+) -> Dictionary:
+	if looks_like_stop_farm_chore(raw_text):
+		return {
+			"intent": INTENT_CHAT,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": 0.95,
+			"raw_text": raw_text,
+			"matched_terms": ["stop_chore"],
+			"source": "local",
+		}
+	if looks_like_status_inquiry(raw_text):
+		return {
+			"intent": INTENT_CHECK_STATUS,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": 0.92,
+			"raw_text": raw_text,
+			"matched_terms": ["status_inquiry"],
+			"source": "local",
+		}
 	if looks_like_sleep_request(raw_text):
 		return {
 			"intent": INTENT_SLEEP,
@@ -190,6 +260,24 @@ func merge_intents(local_intent: Dictionary, api_intent: Dictionary, raw_text: S
 			"matched_terms": ["sleep_guard"],
 			"source": "local",
 		}
+
+	if classified_by_api:
+		if api_intent.is_empty():
+			if is_action_intent(local_intent) or looks_like_ambiguous_command(raw_text):
+				return {
+					"intent": INTENT_CHAT,
+					"refuse_kind": "",
+					"plot_id": -1,
+					"confidence": 0.4,
+					"raw_text": raw_text,
+					"matched_terms": ["classify_failed"],
+					"source": "classify_failed",
+				}
+		elif str(api_intent.get("intent", "")) == INTENT_CHAT:
+			var chat_from_api := api_intent.duplicate(true)
+			chat_from_api["raw_text"] = raw_text
+			chat_from_api["source"] = "api"
+			return chat_from_api
 
 	if str(local_intent.get("intent", "")) == INTENT_REFUSE:
 		if is_action_intent(api_intent):
@@ -263,6 +351,45 @@ func from_api_response(parsed: Variant, raw_text: String) -> Dictionary:
 		result["plot_id"] = _extract_plot_id(raw_text, _normalize(raw_text))
 
 	return _sanitize_intent(result)
+
+
+func from_api_classify_response(parsed: Variant, raw_text: String) -> Dictionary:
+	## /classify 只认 intent 字段，不把 chat reply 当指令。
+	if typeof(parsed) == TYPE_STRING:
+		var as_string := str(parsed).strip_edges()
+		if as_string.begins_with("{"):
+			parsed = JSON.parse_string(as_string)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return {}
+	var data: Dictionary = parsed
+	if data.has("intent") or data.has("action"):
+		pass
+	elif data.has("data") and data["data"] is Dictionary:
+		data = data["data"]
+	var intent_key := _normalize_intent_key(str(data.get("intent", data.get("action", ""))))
+	if intent_key == "":
+		intent_key = INTENT_CHAT
+	return {
+		"intent": intent_key if intent_key in ACTION_INTENTS or intent_key == INTENT_CHAT or intent_key == INTENT_REFUSE else INTENT_CHAT,
+		"refuse_kind": str(data.get("refuse_kind", "")),
+		"plot_id": int(data.get("plot_id", -1)),
+		"confidence": clampf(float(data.get("confidence", 0.75)), 0.0, 1.0),
+		"raw_text": raw_text,
+		"matched_terms": ["classify:%s" % intent_key],
+		"source": "api",
+	}
+
+
+func looks_like_ambiguous_command(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "" or looks_like_stop_farm_chore(text):
+		return false
+	if not _has_delegate_cue(text) and not _has_delegate_cue(compact):
+		return false
+	for keyword in ["浇水", "浇田", "收萝卜", "去商店", "买种子", "种萝卜", "睡觉", "去睡"]:
+		if keyword in compact:
+			return true
+	return false
 
 
 func _should_prefer_local(local_intent: Dictionary) -> bool:

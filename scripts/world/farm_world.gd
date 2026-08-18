@@ -62,9 +62,8 @@ func _ready() -> void:
 	add_to_group("pixel_world")
 	y_sort_enabled = false
 	_setup_layers()
-	FarmSetdress.sync_markers(_farm_map)
+	# 院子已经烘进 farm_map.tscn，标记点和摆设都以场景为准，不再运行时生成。
 	_ensure_entities()
-	FarmSetdress.apply(_farm_map, _actors())
 	_spawn_player()
 	_setup_camera_limits()
 	call_deferred("_setup_camera_limits")

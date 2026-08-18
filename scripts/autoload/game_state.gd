@@ -104,6 +104,7 @@ var short_term_memory: Array[Dictionary] = []
 var recent_chat_turns: Array[Dictionary] = []
 const MAX_CHAT_TURNS := 48
 const MAX_TODAY_CHAT := 32
+const MAX_ARCHIVED_CHAT_DAYS := 9
 var today_chat_log: Array[Dictionary] = []
 var feeds_today: int = 0
 var feed_pester_count: int = 0
@@ -567,6 +568,60 @@ func drift_persona(delta: Dictionary) -> void:
 	memory_changed.emit()
 
 
+## 每日向基线 0.5 轻回归：漂移须持续行为维持，一次性偏转不会锁死人设。
+func regress_persona_toward_baseline(rate: float = 0.02) -> void:
+	var persona: Dictionary = long_term_memory.get("persona", _default_persona())
+	var changed := false
+	for key in persona.keys():
+		var current := float(persona[key])
+		var next := current + (0.5 - current) * rate
+		var snapped_next := snappedf(clampf(next, 0.0, 1.0), 0.01)
+		if not is_equal_approx(snapped_next, current):
+			persona[key] = snapped_next
+			changed = true
+	if changed:
+		long_term_memory["persona"] = persona
+		memory_changed.emit()
+
+
+## 某一维 persona 偏离基线足够远且尚未开口提过 → 返回待触发的 shift（不立即标记）。
+func peek_persona_shift() -> Dictionary:
+	if is_story_complete() or StoryDirector.is_stranger_mode():
+		return {}
+	var announced: Array = long_term_memory.get("persona_shift_announced", [])
+	var persona := get_persona_vector()
+	var best_key := ""
+	var best_delta := 0.0
+	for key in ["warm", "strict", "active", "optimistic", "dependent"]:
+		if key in announced:
+			continue
+		var value := float(persona.get(key, 0.5))
+		var delta := absf(value - 0.5)
+		if delta >= 0.12 and delta > best_delta:
+			best_delta = delta
+			best_key = key
+	if best_key == "":
+		return {}
+	var value := float(persona.get(best_key, 0.5))
+	return {
+		"dimension": best_key,
+		"value": value,
+		"direction": "high" if value > 0.5 else "low",
+	}
+
+
+func mark_persona_shift_announced(dimension: String) -> void:
+	dimension = dimension.strip_edges()
+	if dimension == "":
+		return
+	var announced: Array = long_term_memory.get("persona_shift_announced", [])
+	if dimension in announced:
+		return
+	announced.append(dimension)
+	long_term_memory["persona_shift_announced"] = announced
+	memory_changed.emit()
+
+
 func drift_behavior_inferred(delta: Dictionary) -> void:
 	var behavior: Dictionary = long_term_memory.get("behavior_inferred", _default_behavior_inferred())
 	if delta.has("risk"):
@@ -713,6 +768,8 @@ func _proactive_rec() -> Dictionary:
 			"count": 0,
 			"period": "",
 			"channels": [],
+			"channel_counts": {},
+			"period_channels": [],
 			"invite_beat": "",
 			"invite_spoken": false,
 			"invite_reminded": false,
@@ -726,13 +783,40 @@ func _save_proactive_rec(data: Dictionary) -> void:
 	memory_changed.emit()
 
 
+## 主动开口按频道分池：叙事口（invite / leak）优先，不会被生活闲聊挤掉当天的剧情邀请。
+const PROACTIVE_CHANNEL_LIMITS := {
+	"invite": 2,
+	"leak": 1,
+	"casual": 3,
+	"ambient": 1,
+	"react": 2,
+}
+const PROACTIVE_TOTAL_LIMIT := 5
+## 只有生活口与反应口受「每时段一次」约束；叙事口不受时段限制。
+const PROACTIVE_PERIOD_GATED := ["casual", "react"]
+
+
 func proactive_count_today() -> int:
 	return int(_proactive_rec().get("count", 0))
 
 
-func proactive_period_used() -> bool:
+func proactive_channel_count(channel: String) -> int:
+	var counts: Variant = _proactive_rec().get("channel_counts", {})
+	if counts is Dictionary:
+		return int(counts.get(channel, 0))
+	return 0
+
+
+func proactive_period_used(channel: String = "") -> bool:
 	var rec := _proactive_rec()
-	return str(rec.get("period", "")) == time_of_day and int(rec.get("count", 0)) > 0
+	if str(rec.get("period", "")) != time_of_day:
+		return false
+	if channel == "":
+		return int(rec.get("count", 0)) > 0
+	var used: Variant = rec.get("period_channels", [])
+	if used is Array:
+		return channel in used
+	return false
 
 
 func proactive_had_channel(channel: String) -> bool:
@@ -745,12 +829,11 @@ func proactive_had_channel(channel: String) -> bool:
 func can_proactive_speech(channel: String) -> bool:
 	if is_story_complete():
 		return false
-	if proactive_period_used():
+	if proactive_count_today() >= PROACTIVE_TOTAL_LIMIT:
 		return false
-	if proactive_count_today() >= 2:
+	if proactive_channel_count(channel) >= int(PROACTIVE_CHANNEL_LIMITS.get(channel, 2)):
 		return false
-	# 闲聊与剧情邀请可错开时段：早上推剧情、傍晚闲聊，或反过来。
-	if channel == "leak" and proactive_had_channel("leak"):
+	if channel in PROACTIVE_PERIOD_GATED and proactive_period_used(channel):
 		return false
 	return true
 
@@ -759,7 +842,23 @@ func consume_proactive_speech(channel: String, extra: Dictionary = {}) -> void:
 	var rec := _proactive_rec()
 	rec["day"] = game_day
 	rec["count"] = int(rec.get("count", 0)) + 1
+	var period_changed := str(rec.get("period", "")) != time_of_day
 	rec["period"] = time_of_day
+	var period_channels: Array = []
+	if not period_changed:
+		var prev: Variant = rec.get("period_channels", [])
+		if prev is Array:
+			period_channels = prev.duplicate()
+	if channel != "" and channel not in period_channels:
+		period_channels.append(channel)
+	rec["period_channels"] = period_channels
+	var counts: Dictionary = {}
+	var raw_counts: Variant = rec.get("channel_counts", {})
+	if raw_counts is Dictionary:
+		counts = raw_counts.duplicate()
+	if channel != "":
+		counts[channel] = int(counts.get(channel, 0)) + 1
+	rec["channel_counts"] = counts
 	var channels: Array = []
 	var raw: Variant = rec.get("channels", [])
 	if raw is Array:
@@ -776,9 +875,12 @@ func consume_proactive_speech(channel: String, extra: Dictionary = {}) -> void:
 		rec["pending_invite"] = str(extra.get("pending_invite", ""))
 	if extra.has("extra_channel"):
 		var extra_ch := str(extra.get("extra_channel", "")).strip_edges()
-		if extra_ch != "" and extra_ch not in channels:
-			channels.append(extra_ch)
+		if extra_ch != "":
+			if extra_ch not in channels:
+				channels.append(extra_ch)
+			counts[extra_ch] = int(counts.get(extra_ch, 0)) + 1
 		rec["channels"] = channels
+		rec["channel_counts"] = counts
 	_save_proactive_rec(rec)
 
 
@@ -1000,12 +1102,18 @@ func is_pure_narrative_day() -> bool:
 	return must_finish_awakening_today()
 
 
+func is_bad_early_path() -> bool:
+	return bool(get_ending_flags().get("w2_chose_expel", false))
+
+
 func should_force_story_finale() -> bool:
 	if is_story_complete():
 		return false
+	if is_bad_early_path():
+		return is_story_node_seen("BE_N07") or (IS_TEN_DAY_EDITION and game_day >= 6 and is_story_node_seen("BE_N07"))
 	if game_day > FINAL_GAME_DAY:
 		return true
-	# 仅第五周觉醒日之后兜底收束；旧存档 awakening_seen 不应阻断序章节点。
+	# 仅终章日觉醒之后兜底收束；旧存档 awakening_seen 不应阻断序章节点。
 	if game_day >= FINAL_GAME_DAY and has_seen_awakening() and not is_story_complete():
 		return true
 	return false
@@ -1091,6 +1199,8 @@ func _weather_word_from_summary(summary: String) -> String:
 
 
 func should_show_awakening() -> bool:
+	if is_bad_early_path():
+		return false
 	return is_awakening_day() and not bool(long_term_memory.get("awakening_seen", false))
 
 
@@ -1103,9 +1213,9 @@ func mark_awakening_complete(skipped: bool) -> void:
 	long_term_memory["revealed"] = true
 	set_ending_flag("f10_skipped", skipped)
 	add_memory_recovery(0.08)
-	var summary := "第十天，小狸想起来了。"
+	var summary := "第十天，她把话说完了——忘的，从来不只是她。"
 	if skipped:
-		summary = "第十天，你跳过了觉醒闪回，但小狸仍记下了这一刻。"
+		summary = "第十天，你跳过了觉醒闪回，但这一天仍被记了下来。"
 	record_memory_event(
 		"awakening",
 		summary,
@@ -1139,7 +1249,11 @@ func is_story_complete() -> bool:
 
 
 func can_advance_day() -> bool:
-	return not is_story_complete() and game_day < FINAL_GAME_DAY
+	if is_story_complete():
+		return false
+	if is_bad_early_path() and game_day >= 6:
+		return false
+	return game_day < FINAL_GAME_DAY
 
 
 func reset_for_new_game() -> void:
@@ -1251,6 +1365,9 @@ func _default_long_term_memory() -> Dictionary:
 			"f10_skipped": false,
 		},
 		"player_name_set": false,
+		"pending_story_beat_tail_id": "",
+		"pending_story_beat_tail_steps": [],
+		"chat_archive": [],
 	}
 
 
@@ -1303,6 +1420,37 @@ func clear_deferred_story_beat() -> void:
 	save_game()
 
 
+func set_pending_story_beat_tail(beat_id: String, steps: Array) -> void:
+	long_term_memory["pending_story_beat_tail_id"] = beat_id.strip_edges()
+	var stored: Array = []
+	for step in steps:
+		if step is Dictionary:
+			stored.append(step.duplicate(true))
+	long_term_memory["pending_story_beat_tail_steps"] = stored
+	save_game()
+
+
+func get_pending_story_beat_tail_id() -> String:
+	return str(long_term_memory.get("pending_story_beat_tail_id", "")).strip_edges()
+
+
+func get_pending_story_beat_tail_steps() -> Array:
+	var raw: Variant = long_term_memory.get("pending_story_beat_tail_steps", [])
+	if raw is Array:
+		return raw.duplicate(true)
+	return []
+
+
+func clear_pending_story_beat_tail() -> void:
+	long_term_memory["pending_story_beat_tail_id"] = ""
+	long_term_memory["pending_story_beat_tail_steps"] = []
+	save_game()
+
+
+func has_pending_story_beat_tail() -> bool:
+	return get_pending_story_beat_tail_id() != "" and not get_pending_story_beat_tail_steps().is_empty()
+
+
 func record_companionship_night(week: int) -> void:
 	var key := "companionship_w%d" % week
 	var flags := get_ending_flags()
@@ -1325,6 +1473,7 @@ func mark_w2_keep_choice() -> void:
 	set_ending_flag("w2_chose_keep", true)
 	set_ending_flag("w2_chose_expel", false)
 	add_memory_recovery(0.05)
+	PlayerNotebookService.on_w2_keep_choice()
 
 
 func should_show_w2_keep_choice() -> bool:
@@ -2040,18 +2189,48 @@ func record_chat_turn(role: String, text: String) -> void:
 
 
 func get_chat_history_for_ui(limit: int = MAX_CHAT_TURNS) -> Array[Dictionary]:
-	## 供话区重建：优先用跨天 recent，空则回退今日日志。
-	if not recent_chat_turns.is_empty():
+	## 归档（最多 9 天）+ 今日；继续游戏时应能看到跨日对话。
+	var merged: Array[Dictionary] = []
+	var archive: Variant = long_term_memory.get("chat_archive", [])
+	if archive is Array:
+		for raw_day in archive:
+			if not raw_day is Dictionary:
+				continue
+			var turns: Variant = raw_day.get("turns", [])
+			if not turns is Array:
+				continue
+			for turn in turns:
+				if turn is Dictionary:
+					merged.append(turn.duplicate(true))
+	for turn in today_chat_log:
+		if turn is Dictionary:
+			merged.append(turn.duplicate(true))
+	if merged.is_empty() and not recent_chat_turns.is_empty():
 		var count := mini(limit, recent_chat_turns.size())
 		return recent_chat_turns.slice(recent_chat_turns.size() - count, recent_chat_turns.size())
-	if today_chat_log.is_empty():
-		return []
-	var today_count := mini(limit, today_chat_log.size())
-	return today_chat_log.slice(today_chat_log.size() - today_count, today_chat_log.size())
+	if merged.size() > limit:
+		return merged.slice(merged.size() - limit, merged.size())
+	return merged
 
 
 func snapshot_today_chat_log() -> Array[Dictionary]:
 	return today_chat_log.duplicate(true)
+
+
+func archive_today_chat_log() -> void:
+	var turns := snapshot_today_chat_log()
+	if turns.is_empty():
+		return
+	var archive: Variant = long_term_memory.get("chat_archive", [])
+	if not archive is Array:
+		archive = []
+	archive.append({
+		"game_day": game_day,
+		"turns": turns,
+	})
+	while archive.size() > MAX_ARCHIVED_CHAT_DAYS:
+		archive.remove_at(0)
+	long_term_memory["chat_archive"] = archive
 
 
 func clear_today_chat_log() -> void:
@@ -2172,6 +2351,7 @@ func advance_day() -> void:
 	last_day_summary = str(journal_entry.get("summary", ""))
 	append_day_journal(journal_entry)
 	DayJournalService.request_llm_enrich(journal_entry, chat_snapshot)
+	archive_today_chat_log()
 	clear_today_chat_log()
 	reset_daily_plots()
 	game_day += 1
@@ -2185,6 +2365,8 @@ func advance_day() -> void:
 	_awaiting_sleep = false
 	roll_market_for_weather(weather_today)
 	_maybe_trigger_reveal()
+	regress_persona_toward_baseline()
+	PlayerNotebookService.on_day_advanced(game_day)
 	day_advanced.emit()
 	time_changed.emit(time_of_day)
 	atmosphere_changed.emit()
@@ -2309,6 +2491,10 @@ func _ensure_long_term_defaults() -> void:
 		long_term_memory["last_play_unix"] = 0
 	if not long_term_memory.has("anchors"):
 		long_term_memory["anchors"] = []
+	if not long_term_memory.has("pending_eviction"):
+		long_term_memory["pending_eviction"] = {}
+	if not long_term_memory.has("persona_shift_announced"):
+		long_term_memory["persona_shift_announced"] = []
 	if not long_term_memory.has("week_summaries"):
 		long_term_memory["week_summaries"] = []
 	if not long_term_memory.has("promise"):
@@ -2359,6 +2545,12 @@ func _ensure_long_term_defaults() -> void:
 		}
 	if not long_term_memory.has("player_name_set"):
 		long_term_memory["player_name_set"] = false
+	if not long_term_memory.has("pending_story_beat_tail_id"):
+		long_term_memory["pending_story_beat_tail_id"] = ""
+	if not long_term_memory.has("pending_story_beat_tail_steps"):
+		long_term_memory["pending_story_beat_tail_steps"] = []
+	if not long_term_memory.has("chat_archive"):
+		long_term_memory["chat_archive"] = []
 	_sanitize_player_name_legacy()
 	_sanitize_story_progress()
 

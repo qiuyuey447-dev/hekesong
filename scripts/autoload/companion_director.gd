@@ -4,7 +4,6 @@ extends Node
 
 const CONSIDER_DELAY := 1.7
 const IDLE_CONSIDER_SECONDS := 22.0
-const MAX_DAY := 2
 
 var _idle_seconds: float = 0.0
 var _consider_tween: Tween = null
@@ -54,11 +53,6 @@ func pick_speech() -> Dictionary:
 	if GameState.is_story_complete():
 		return {}
 	if TaskSystem.is_busy():
-		return {}
-
-	if GameState.proactive_period_used():
-		return {}
-	if GameState.proactive_count_today() >= MAX_DAY:
 		return {}
 
 	if GameState.can_proactive_speech("leak"):
@@ -178,7 +172,15 @@ func mark_delivered(speech: Dictionary) -> void:
 
 
 func should_offer_ambient() -> bool:
-	return _should_offer_casual("period") and GameState.time_of_day == GameState.TIME_MORNING
+	if not GameState.can_proactive_speech("ambient"):
+		return false
+	if GameState.time_of_day != GameState.TIME_MORNING:
+		return false
+	if GameState.weather_today != GameState.WEATHER_RAIN:
+		return false
+	if StoryDirector.is_stranger_mode() or GameState.is_pure_narrative_day():
+		return false
+	return true
 
 
 func _goal_for(speech: Dictionary, beat_id: String) -> String:

@@ -47,6 +47,8 @@ CompanionDirector="*res://scripts/autoload/companion_director.gd"
 CompanionAgent="*res://scripts/autoload/companion_agent.gd"
 UIFontTheme="*res://scripts/autoload/ui_theme.gd"
 BgmDirector="*res://scripts/autoload/bgm_director.gd"
+MCPRuntime="*res://addons/godot_mcp/runtime/mcp_runtime.gd"
+PlayerNotebookService="*res://scripts/autoload/player_notebook_service.gd"
 
 [display]
 
@@ -58,6 +60,10 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/size/min_width=1280
 window/size/min_height=720
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")
 
 [gui]
 

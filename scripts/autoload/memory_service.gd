@@ -2,6 +2,7 @@ extends Node
 ## 记忆检索与引用校验（XL-C0～C1）。
 
 signal memory_updated
+signal anchor_eviction_pending(candidates: Array)
 
 const MAX_CITABLE := 3
 const ANCHOR_CAP := 12
@@ -21,6 +22,7 @@ func get_context_for_event(event: String, extra: Dictionary = {}) -> Dictionary:
 		"story_mode": story_mode,
 		"story_boundaries": boundaries,
 		"persona_vector": GameState.long_term_memory.get("persona", {}).duplicate(true),
+		"behavior_inferred": GameState.get_behavior_inferred(),
 		"long_term_prefs": _prefs_snapshot(),
 		"promise": _promise_snapshot(),
 		"citable_memories": [],
@@ -193,18 +195,144 @@ func set_debug_disable_memory(disabled: bool) -> void:
 
 
 func enforce_anchor_cap() -> void:
-	var anchors: Array = GameState.long_term_memory.get("anchors", [])
-	if anchors.size() <= ANCHOR_CAP:
+	if has_pending_eviction():
 		return
-	var evicted: Array[Dictionary] = []
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
 	while anchors.size() > ANCHOR_CAP:
-		var idx := _lowest_anchor_index(anchors)
-		evicted.append((anchors[idx] as Dictionary).duplicate(true))
+		if _try_queue_player_eviction(anchors):
+			return
+		var idx := _lowest_evictable_index(anchors)
+		if idx < 0:
+			break
+		var evicted: Dictionary = (anchors[idx] as Dictionary).duplicate(true)
 		anchors.remove_at(idx)
+		_merge_evicted_anchors([evicted])
 	GameState.long_term_memory["anchors"] = anchors
+	notify_memory_changed()
+
+
+func has_pending_eviction() -> bool:
+	var pending: Variant = GameState.long_term_memory.get("pending_eviction", {})
+	if pending is not Dictionary:
+		return false
+	var ids: Variant = pending.get("candidate_ids", [])
+	return ids is Array and ids.size() >= 2
+
+
+func get_pending_eviction_candidates() -> Array:
+	var pending: Variant = GameState.long_term_memory.get("pending_eviction", {})
+	if pending is not Dictionary:
+		return []
+	var ids: Array = []
+	var raw_ids: Variant = pending.get("candidate_ids", [])
+	if raw_ids is Array:
+		ids = raw_ids.duplicate()
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
+	var out: Array = []
+	for raw_id in ids:
+		var mem_id := str(raw_id).strip_edges()
+		if mem_id == "":
+			continue
+		for entry in anchors:
+			if entry is Dictionary and str(entry.get("id", "")) == mem_id:
+				out.append(entry.duplicate(true))
+				break
+	return out
+
+
+func resolve_eviction(erase_id: String) -> void:
+	erase_id = erase_id.strip_edges()
+	if erase_id == "" or not has_pending_eviction():
+		return
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
+	var evicted: Dictionary = {}
+	for i in range(anchors.size()):
+		if not anchors[i] is Dictionary:
+			continue
+		if str(anchors[i].get("id", "")) == erase_id:
+			evicted = (anchors[i] as Dictionary).duplicate(true)
+			anchors.remove_at(i)
+			break
+	GameState.long_term_memory["anchors"] = anchors
+	GameState.long_term_memory["pending_eviction"] = {}
 	if not evicted.is_empty():
-		_merge_evicted_anchors(evicted)
-		notify_memory_changed()
+		_merge_evicted_anchors([evicted])
+	notify_memory_changed()
+	enforce_anchor_cap()
+
+
+func is_anchor_pinned(entry: Dictionary) -> bool:
+	return bool(entry.get("pinned", false))
+
+
+func get_anchor_pages() -> Array:
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
+	var pages: Array = []
+	for raw in anchors:
+		if not raw is Dictionary:
+			continue
+		var entry: Dictionary = raw
+		pages.append({
+			"id": str(entry.get("id", "")),
+			"summary": str(entry.get("summary", "")).strip_edges(),
+			"game_day": int(entry.get("game_day", 0)),
+			"kind": str(entry.get("kind", "")),
+			"pinned": is_anchor_pinned(entry),
+		})
+	return pages
+
+
+func pin_anchor_by_id(mem_id: String) -> bool:
+	mem_id = mem_id.strip_edges()
+	if mem_id == "":
+		return false
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
+	var changed := false
+	for i in range(anchors.size()):
+		if not anchors[i] is Dictionary:
+			continue
+		if str(anchors[i].get("id", "")) != mem_id:
+			continue
+		var entry: Dictionary = anchors[i]
+		entry["pinned"] = true
+		entry["importance"] = 1.0
+		anchors[i] = entry
+		changed = true
+		break
+	if not changed:
+		return false
+	GameState.long_term_memory["anchors"] = anchors
+	notify_memory_changed()
+	return true
+
+
+func pin_from_player_chat(text: String) -> Dictionary:
+	var summary := _extract_pin_summary(text)
+	if summary == "":
+		summary = _latest_player_chat_line()
+	if summary == "":
+		return {"ok": false, "reason": "empty"}
+	var mem_id := _find_anchor_id_by_summary(summary)
+	if mem_id == "":
+		mem_id = _promote_summary_to_anchor(summary)
+	elif not _has_anchor_id(mem_id):
+		mem_id = _promote_existing_memory_to_anchor(mem_id)
+	if mem_id == "":
+		return {"ok": false, "reason": "no_anchor"}
+	if not pin_anchor_by_id(mem_id):
+		return {"ok": false, "reason": "pin_failed"}
+	enforce_anchor_cap()
+	return {"ok": true, "id": mem_id, "summary": summary}
+
+
+func looks_like_pin_request(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	for cue in ["记住这个", "帮我记住", "写进本子", "记进本子", "记进本子里", "别忘掉", "要记得"]:
+		if cue in cleaned:
+			return true
+	return false
 
 
 func finalize_week_archive(completed_week: int, journal: Array) -> void:
@@ -225,6 +353,8 @@ func get_week_summary(week_index: int) -> Dictionary:
 
 
 func anchor_score(entry: Dictionary) -> float:
+	if is_anchor_pinned(entry):
+		return 999.0
 	var score := float(entry.get("importance", 0.5))
 	var facts: Dictionary = entry.get("facts", {}) if entry.get("facts", {}) is Dictionary else {}
 	if facts.has("chat_salience"):
@@ -236,24 +366,167 @@ func anchor_score(entry: Dictionary) -> float:
 			score += 0.05
 		"chat":
 			score -= 0.05
+	var day := int(entry.get("game_day", 1))
+	var recency := float(day) / maxf(float(GameState.game_day), 1.0)
+	score += recency * 0.08
 	return score
 
 
 func _lowest_anchor_index(anchors: Array) -> int:
-	var best_idx := 0
+	return _lowest_evictable_index(anchors, false)
+
+
+func _lowest_evictable_index(anchors: Array, prefer_unpinned_only: bool = true) -> int:
+	var best_idx := -1
 	var best_score := INF
 	var best_day := 999999
+	var found_unpinned := false
 	for i in range(anchors.size()):
 		if not anchors[i] is Dictionary:
 			continue
 		var entry: Dictionary = anchors[i]
+		if prefer_unpinned_only and is_anchor_pinned(entry):
+			continue
+		found_unpinned = true
 		var score := anchor_score(entry)
 		var day := int(entry.get("game_day", 999999))
 		if score < best_score or (is_equal_approx(score, best_score) and day < best_day):
 			best_score = score
 			best_day = day
 			best_idx = i
+	if prefer_unpinned_only and not found_unpinned:
+		return _lowest_evictable_index(anchors, false)
 	return best_idx
+
+
+func _try_queue_player_eviction(anchors: Array) -> bool:
+	if StoryDirector.is_stranger_mode() or GameState.is_story_complete():
+		return false
+	var candidates := _pick_eviction_candidates(anchors, 2)
+	if candidates.size() < 2:
+		return false
+	var ids: Array[String] = []
+	for entry in candidates:
+		ids.append(str(entry.get("id", "")))
+	GameState.long_term_memory["pending_eviction"] = {
+		"candidate_ids": ids,
+		"queued_day": GameState.game_day,
+	}
+	anchor_eviction_pending.emit(candidates.duplicate(true))
+	notify_memory_changed()
+	return true
+
+
+func _pick_eviction_candidates(anchors: Array, count: int) -> Array:
+	var ranked: Array[Dictionary] = []
+	for raw in anchors:
+		if not raw is Dictionary:
+			continue
+		var entry: Dictionary = raw
+		if is_anchor_pinned(entry):
+			continue
+		ranked.append(entry)
+	ranked.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var score_a := anchor_score(a)
+		var score_b := anchor_score(b)
+		if not is_equal_approx(score_a, score_b):
+			return score_a < score_b
+		return int(a.get("game_day", 999999)) < int(b.get("game_day", 999999))
+	)
+	var out: Array = []
+	for i in range(mini(count, ranked.size())):
+		out.append(ranked[i].duplicate(true))
+	return out
+
+
+func _extract_pin_summary(text: String) -> String:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return ""
+	for prefix in ["帮我记住这个", "帮我记住", "记住这个", "写进本子里", "写进本子", "记进本子里", "记进本子", "要记得", "别忘掉"]:
+		var idx := cleaned.find(prefix)
+		if idx >= 0:
+			cleaned = cleaned.substr(idx + prefix.length()).strip_edges()
+			break
+	cleaned = cleaned.trim_prefix("：").trim_prefix(":").trim_prefix("，").trim_prefix(",").strip_edges()
+	cleaned = cleaned.trim_suffix("。").trim_suffix("！").trim_suffix("!").trim_suffix("？").trim_suffix("?").strip_edges()
+	if cleaned.length() > 44:
+		cleaned = cleaned.substr(0, 44).strip_edges() + "…"
+	return cleaned
+
+
+func _latest_player_chat_line() -> String:
+	for i in range(GameState.get_recent_chat_turns(8).size() - 1, -1, -1):
+		var turn: Dictionary = GameState.get_recent_chat_turns(8)[i]
+		if str(turn.get("role", "")) != "player":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line != "" and not looks_like_pin_request(line):
+			return line
+	return ""
+
+
+func _find_anchor_id_by_summary(summary: String) -> String:
+	var probe := summary.strip_edges()
+	if probe == "":
+		return ""
+	var anchors: Array = GameState.long_term_memory.get("anchors", [])
+	for raw in anchors:
+		if not raw is Dictionary:
+			continue
+		var entry: Dictionary = raw
+		var line := str(entry.get("summary", "")).strip_edges()
+		if line == probe or probe in line or line in probe:
+			return str(entry.get("id", ""))
+	for raw in GameState.get_recent_memories(12):
+		if not raw is Dictionary:
+			continue
+		var entry: Dictionary = raw
+		var line := str(entry.get("summary", "")).strip_edges()
+		if line == probe or probe in line or line in probe:
+			return str(entry.get("id", ""))
+	return ""
+
+
+func _promote_summary_to_anchor(summary: String) -> String:
+	var line := summary.strip_edges()
+	if line == "":
+		return ""
+	GameState.record_memory_event("chat", line, 1.0, {
+		"pinned_request": true,
+		"text": line,
+	})
+	return _find_anchor_id_by_summary(line)
+
+
+func _has_anchor_id(mem_id: String) -> bool:
+	mem_id = mem_id.strip_edges()
+	if mem_id == "":
+		return false
+	for raw in GameState.long_term_memory.get("anchors", []):
+		if raw is Dictionary and str(raw.get("id", "")) == mem_id:
+			return true
+	return false
+
+
+func _promote_existing_memory_to_anchor(mem_id: String) -> String:
+	mem_id = mem_id.strip_edges()
+	if mem_id == "":
+		return ""
+	for raw in GameState.get_recent_memories(12):
+		if not raw is Dictionary:
+			continue
+		if str(raw.get("id", "")) != mem_id:
+			continue
+		var entry: Dictionary = raw.duplicate(true)
+		entry["importance"] = 1.0
+		entry["pinned"] = true
+		var anchors: Array = GameState.long_term_memory.get("anchors", [])
+		anchors.append(entry)
+		GameState.long_term_memory["anchors"] = anchors
+		enforce_anchor_cap()
+		return mem_id
+	return ""
 
 
 func _merge_evicted_anchors(evicted: Array[Dictionary]) -> void:
@@ -395,10 +668,11 @@ func _compose_week_summary_text(week_index: int, highlights: Array) -> String:
 		var line := str(raw).strip_edges()
 		if line != "":
 			lines.append(line)
+	var label := "第 %d 天" % GameState.game_day if GameState.IS_TEN_DAY_EDITION else "第 %d 周" % week_index
 	if lines.is_empty():
-		return "第 %d 周：一起把农场又往前推了一小步。" % week_index
+		return "%s：一起把农场又往前推了一小步。" % label
 	var body := "；".join(lines.slice(0, 4))
-	return "第 %d 周：%s。" % [week_index, body]
+	return "%s：%s。" % [label, body]
 
 
 func _append_unique_line(lines: Array[String], line: String) -> Array[String]:

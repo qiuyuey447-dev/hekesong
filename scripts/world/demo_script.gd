@@ -39,7 +39,7 @@ func _session_start_override(week: int, day: int) -> String:
 	if week == 5 and day == 7 and GameState.has_revealed_memory():
 		return "我还记得那天。谢谢你一直没有赶我走。"
 	if day == 7 and not GameState.has_revealed_memory() and week < 5:
-		return "今天是这周的最后一天了。等忙完萝卜田，我们一起把这一周的事再看一遍吧。"
+		return "等忙完萝卜田，我们一起把这几天的事再看一遍吧。"
 	return ""
 
 
@@ -76,7 +76,7 @@ func _companion_react_override(week: int, day: int, react_type: String) -> Strin
 	if react_type != "story_nudge":
 		return ""
 	if week == 1 and day == 7:
-		return "今天是这周的最后一天了。等忙完萝卜田，我们一起把这一周的事再看一遍吧。"
+		return "等忙完萝卜田，我们一起把这几天的事再看一遍吧。"
 	return ""
 
 

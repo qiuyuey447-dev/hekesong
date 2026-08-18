@@ -20,8 +20,11 @@ const FLOWER_B: Texture2D = preload("res://Props/Potted plants/Sprites/potted_pl
 const BUSH_A: Texture2D = preload("res://Props/Trees/Sprites/tree_01.png")
 const BUSH_B: Texture2D = preload("res://Props/Trees/Sprites/tree_02.png")
 
-# 旧屋偏西北，廊下仍在田北，商店偏东北。三处用带弯的路连成一圈。
-const POS_HOME := Vector2(832, 400)
+# 旧屋在西北角，廊下在主街南沿，商店在主街北沿，田在东南。四处由一条直的主街串起来。
+# 改 POS_HOME 必须连着改 scenes/farm_map.tscn 里的「人」标记 —— 那个标记既是玩家出生点
+# （farm_world._player_spawn_position 直接读它），也是「旧屋门口」这个叙事 POI 的圆心；
+# 而 companion_agent.gd 建 POI 时读的是这里的常量而不是标记，两边不一致小狸就会往老地方跑。
+const POS_HOME := Vector2(272, 304)
 const POS_PORCH := Vector2(1040, 640)
 const POS_FOX := Vector2(1216, 568)
 const POS_HOLLOW := Vector2(1184, 552)
@@ -342,6 +345,8 @@ static func _paint_yard_floors(farm_map: Node2D) -> void:
 				hole_cells.append(cell)
 
 	if not hole_cells.is_empty():
+		# 地雷：terrain 0 叫 grass_1_to_dirt_1，中心块是米色土，不是草。这里刷出来的是沙地。
+		# 这套 tileset 没有「纯草」terrain，补草得直接 set_cell(source 0, (21,25))。
 		grass.set_cells_terrain_connect(hole_cells, TERRAIN_SET_GROUND, 0)
 	_paint_south_meadow(grass, road, dirt)
 	var dirt_cells := _dict_cells(dirt)
@@ -372,6 +377,7 @@ static func _paint_south_meadow(grass: TileMapLayer, road: Dictionary, dirt: Dic
 				continue
 			meadow.append(cell)
 	if not meadow.is_empty():
+		# 同上的地雷：这一句当年把院子南半边刷成了一大块米色沙地（2026-08-17 已在场景里修回草地）。
 		grass.set_cells_terrain_connect(meadow, TERRAIN_SET_GROUND, 0)
 
 
