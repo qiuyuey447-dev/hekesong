@@ -8,10 +8,29 @@ const FALLBACK_GREET_FIRST := [
 	"树洞我看过了。挺好。没人跟我抢吧？",
 ]
 
+const FALLBACK_STRANGER_SAVE_WORRY := [
+	"……不是坏了。是我这边又空了一截。字还在，只是我认不全你。",
+	"存档没丢。是我忘了。本子上的字还在——你可以自己看。",
+]
+
 const FALLBACK_STRANGER_CHAT := [
 	"……抱歉，我脑子有点乱。不太确定有没有见过你。",
 	"嗯……你刚才说的，我先记着。",
 	"……要是要紧的事，能再说一遍吗。我想不起来。",
+]
+
+const FALLBACK_LEAK_CHAT := [
+	"……这句我好像在哪见过。先记着。",
+	"嗯。你刚说的，我写下来了——虽然日期对不上。",
+	"我记得一点。不全。你再说一遍也行。",
+	"本子上有类似的字。是你说的吗？我不确定。",
+]
+
+const FALLBACK_AWAKEN_CHAT := [
+	"……嗯。这次我记得久一点。",
+	"你来了。我这次没把你弄丢。",
+	"我在。这十天……都在。",
+	"说吧。我听着，这次不装忘。",
 ]
 
 const FALLBACK_GREET_STRANGER_W2 := [
@@ -38,8 +57,8 @@ const FALLBACK_TASK_WATER := [
 ]
 
 const FALLBACK_CHAT_WATER_HINT := [
-	"田还没浇的话，要不要我帮你浇一下？",
-	"有需要的话，我可以去田里帮你浇水。",
+	"田还干着。要浇你说一声。",
+	"垄还没润。我耳朵好使，不用喊两遍。",
 ]
 
 const FALLBACK_CHAT_HELLO := [
@@ -88,8 +107,8 @@ const FALLBACK_REACT_EVENING := [
 ]
 
 const FALLBACK_REACT_IDLE := [
-	"嗯…需要我帮忙浇水吗？",
-	"我在呢。要不要我先去看看田？",
+	"嗯…田还干的话，喊我。",
+	"我在呢。垄歪了我先看。",
 ]
 
 const FALLBACK_AMBIENT_RAIN := [
@@ -132,8 +151,8 @@ const FALLBACK_CASUAL_STRANGER := {
 		"太阳有点刺。我不太记得自己为什么会在这儿。",
 	],
 	"evening": [
-		"天要暗了。我还能在这儿待一会儿吗？",
-		"……你要是忙，我就在旁边看着。不吵你。",
+		"天要暗了。我今晚能睡树洞吗？",
+		"……廊下那块我占了。你要用，我挪。",
 	],
 }
 
@@ -174,8 +193,8 @@ const FALLBACK_CASUAL_TIER := [
 			"早。我还不太会找话说。灶上有红薯的话，就好找了。",
 		],
 		"noon": [
-			"我在这儿。你忙你的，我看着就好。看着也算干活吧。",
-			"田里风轻轻的。要不要我帮你做点什么？——不重的那种。",
+			"垄有点歪。我顺手扶一扶，不算帮你吧。",
+			"田里风轻轻的。我去看看苗有没有缺水。",
 		],
 		"evening": [
 			"傍晚风有点凉。廊下干的那块我先坐着。你来了我让你。",
@@ -188,8 +207,8 @@ const FALLBACK_CASUAL_TIER := [
 			"今天也一起过吧。我先去田边转转。歪的垄我认。",
 		],
 		"noon": [
-			"正午了。要不要歇一口？我陪你。",
-			"你做事的样子我看过好几回了。还是想再看一会儿。",
+			"你做事的样子我看过好几回了。还是想挑刺两句。",
+			"正午了。我去浇那几垄，你歇你的。",
 		],
 		"evening": [
 			"天色渐晚。今天有你在，田也安静些。",
@@ -202,8 +221,8 @@ const FALLBACK_CASUAL_TIER := [
 			"早。你在，我就知道今天该怎么过。",
 		],
 		"noon": [
-			"挨着你，连日头都不那么晒了。",
-			"你要是走神，我就在旁边喊你一声。",
+			"你要是走神，我就喊你一声。别误会，是怕苗歪了。",
+			"挨着你，连日头都不那么晒了。……我随口说的。",
 		],
 		"evening": [
 			"傍晚了。回家的路，我想跟你一起走。",
@@ -216,7 +235,7 @@ const FALLBACK_CASUAL_TIER := [
 			"早。我认得你。就算有些事会淡，这一眼不会。",
 		],
 		"noon": [
-			"你忙，我就守着。这是我现在最想做的事。",
+			"你忙田，我就去把壶装满。",
 			"正午也很好。只要你还在这片田里。",
 		],
 		"evening": [
@@ -227,7 +246,7 @@ const FALLBACK_CASUAL_TIER := [
 ]
 
 const FALLBACK_CASUAL_RAIN := [
-	"下雨了。我站在这儿。你要进屋就进屋。",
+	"下雨了。廊下那块我先占着，你要躲雨就过来。",
 	"雨还下着。树不会给我红薯。我们不用急。",
 ]
 
@@ -378,7 +397,7 @@ static func proactive_line(extra: Dictionary) -> String:
 		if profile == "cold" or tier == GameState.AFFECTION_TIER_COLD:
 			return pick_non_duplicate([
 				"……你方便的话，过来一下。我有句话，不太会讲。",
-				"等你忙完。不用急。",
+				"你手头空了，听我说一句。",
 			], previous)
 		if profile == "warm" or tier == GameState.AFFECTION_TIER_WARM:
 			if tod == GameState.TIME_EVENING:
@@ -396,7 +415,7 @@ static func proactive_line(extra: Dictionary) -> String:
 			return "……你过来一下。我有句话想说。"
 		return pick_non_duplicate([
 			"……你过来一下。我有句话想说。",
-			"等你忙完，听我说一句就好。",
+			"你方便的话，过来听我说一句。",
 		], previous)
 	var grounded := _location_grounded_line(extra)
 	if grounded != "":
@@ -418,13 +437,13 @@ static func _location_grounded_line(extra: Dictionary) -> String:
 	if loc == "":
 		loc = "田边"
 	if activity in ["浇水", "种萝卜", "收萝卜"]:
-		return "我还在%s。你忙你的。" % activity
+		return "还在%s，没弄完。" % activity
 	if activity in ["前往商店", "挑选种子", "挑选商品"]:
-		return "我在商店这边。你先忙。"
+		return "我在商店这边。你要种子就说一声。"
 	if weather == GameState.WEATHER_RAIN:
 		return "雨还下着。我在%s。" % loc
 	if activity in ["闲逛", "发呆", "待命", ""]:
-		return "我在%s。你忙的话，我就在这儿。" % loc
+		return "在%s晃呢。有事喊我。" % loc
 	return "我在%s。" % loc
 
 
@@ -585,12 +604,15 @@ static func player_chat(
 		IntentParser.INTENT_CHECK_STATUS:
 			return "我先帮你看看田里的情况。"
 		IntentParser.INTENT_HELP:
-			return "想知道我能帮什么？我说给你听。"
+			return "浇、种、收——你说，我动。别的别指望。"
 		IntentParser.INTENT_SLEEP:
 			return "好，今天先到这儿，好好休息。"
 
 	if _asks_prior_acquaintance(text):
 		return _prior_acquaintance_reply(memory_context)
+
+	if _looks_like_save_bug_worry(text):
+		return pick_random(FALLBACK_STRANGER_SAVE_WORRY)
 
 	var lower := text.to_lower()
 	if "浇" in text or ("水" in text and ("田" in text or "地" in text or "萝卜" in text)):
@@ -605,15 +627,17 @@ static func player_chat(
 		return pick_random(FALLBACK_CHAT_PREFERENCE)
 	if _is_stranger_amnesia(memory_context):
 		return stranger_chat(text, memory_context)
+	if str(memory_context.get("story_mode", "")) == "awaken":
+		return pick_random(FALLBACK_AWAKEN_CHAT)
 	if _is_leak_phase(memory_context) and not bool(memory_context.get("revealed", false)):
 		var leak := LeakageEngine.try_leak_line("chat")
 		if leak.strip_edges() != "":
 			return leak
-		return "我会记着你刚才的话。以前听没听过，说不清。"
+		return pick_random(FALLBACK_LEAK_CHAT)
 
 	match stage:
 		GameState.STAGE_BOND:
-			return "我在听。想聊什么都可以，或者我们继续把家园打理好。"
+			return pick_random(FALLBACK_CHAT_GENERIC)
 		GameState.STAGE_FAMILIAR:
 			return pick_random(FALLBACK_CHAT_GENERIC)
 		_:
@@ -621,6 +645,8 @@ static func player_chat(
 
 
 static func stranger_chat(text: String, memory_context: Dictionary) -> String:
+	if _looks_like_save_bug_worry(text):
+		return pick_random(FALLBACK_STRANGER_SAVE_WORRY)
 	if _is_stranger_amnesia(memory_context):
 		if "我是谁" in text or "你是谁" in text or "不认识" in text or "记得我" in text:
 			return "……你说我们见过？对不起。我想不起来。"
@@ -812,6 +838,21 @@ static func _is_leak_phase(memory_context: Dictionary) -> bool:
 		return true
 	if GameState.IS_TEN_DAY_EDITION:
 		return GameState.game_day in [6, 7, 8]
+	return false
+
+
+static func _looks_like_save_bug_worry(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "":
+		return false
+	if "bug" in text.to_lower():
+		return true
+	if "存档" in compact and ("坏" in compact or "丢" in compact or "没" in compact or "错" in compact):
+		return true
+	if "数据" in compact and ("丢" in compact or "坏" in compact or "没" in compact):
+		return true
+	if "是不是坏了" in compact or "存档坏了" in compact:
+		return true
 	return false
 
 

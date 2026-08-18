@@ -25,9 +25,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from typing import Any
 from urllib import error, request
 
@@ -117,6 +119,11 @@ def load_relationship_rules() -> dict[str, Any]:
                 "你喂过", "不是第一次", "像家人", "像朋友", "一直在一起", "我记得你", "我们以前",
             ],
             "stranger_intimate_phrases": ["想你了", "亲爱的", "宝贝", "乖", "抱抱", "爱你", "好想你"],
+            "awkward_waiting_phrases": [
+                "我在这儿等", "你忙你的", "我就在旁边看着", "我站这儿就行", "我在旁边看着",
+                "你忙，我就守着", "我看着就好", "不吵你", "你忙的话，我就在这儿", "我就在这儿",
+                "我就守着", "陪着你就好", "你忙你的，我", "我就在旁边", "我在这儿。你忙",
+            ],
             "action_intent_affection_cap": 1,
         }
         return _RULES_CACHE
@@ -433,13 +440,49 @@ INTENT_KEYWORDS: list[tuple[str, list[str]]] = [
 ]
 
 
+def _looks_like_sleep_nudge_text(text: str) -> bool:
+    compact = text.strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    for phrase in (
+        "还不睡觉吗", "还不睡吗", "还不睡啊", "怎么还不睡", "还不去睡吗",
+        "还不去睡觉", "你还不睡", "还没睡吗", "还没睡觉吗", "该睡了吧",
+        "还不歇息吗", "还不睡嘛",
+    ):
+        if phrase in compact:
+            return True
+    if "睡" in compact and compact.endswith(("吗", "么", "嘛")):
+        for cue in ("还不", "怎么还", "还没", "该睡"):
+            if cue in compact:
+                return True
+    return False
+
+
+def _looks_like_sleep_refusal(text: str) -> bool:
+    compact = text.strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    if _looks_like_sleep_nudge_text(compact):
+        return False
+    for phrase in ("不要睡", "别去睡", "不能睡", "不想睡", "睡什么", "别睡"):
+        if phrase in compact:
+            return True
+    if compact.startswith("不睡"):
+        return True
+    if "没睡" in compact and not compact.endswith(("吗", "么")):
+        return True
+    return False
+
+
 def looks_like_sleep_request(message: str) -> bool:
     if looks_like_status_inquiry(message):
         return False
     text = message.strip().replace(" ", "").replace("　", "")
     if not text:
         return False
-    if any(p in text for p in ("不睡", "别睡", "没睡", "睡得好")):
+    if _looks_like_sleep_nudge_text(text):
+        return True
+    if _looks_like_sleep_refusal(text):
         return False
     sleep_phrases = (
         "睡觉吧", "去睡觉", "该睡觉了", "该睡了", "收工睡觉", "进入下一天",
@@ -634,6 +677,144 @@ def _story_mode(payload: dict[str, Any]) -> str:
     return str(boundaries.get("story_mode", "")).strip()
 
 
+_FARM_PLOT_CONFIG: dict[str, Any] | None = None
+
+
+def _config_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "config"
+
+
+def _load_farm_plot_config() -> dict[str, Any]:
+    global _FARM_PLOT_CONFIG
+    if _FARM_PLOT_CONFIG is not None:
+        return _FARM_PLOT_CONFIG
+    path = _config_root() / "farm_plot_reactions.json"
+    try:
+        _FARM_PLOT_CONFIG = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        _FARM_PLOT_CONFIG = {}
+    return _FARM_PLOT_CONFIG
+
+
+def _farm_plot_game_day(payload: dict[str, Any]) -> int:
+    for src in (
+        payload,
+        payload.get("relationship") or {},
+        payload.get("story_context") or {},
+        payload.get("world_snapshot") or {},
+    ):
+        if not isinstance(src, dict):
+            continue
+        if src.get("game_day") is None:
+            continue
+        try:
+            return int(src.get("game_day"))
+        except (TypeError, ValueError):
+            continue
+    return 1
+
+
+def _farm_plot_tone(payload: dict[str, Any]) -> str:
+    if _story_mode(payload) == "stranger":
+        return "stranger"
+    mode = _story_mode(payload)
+    if _farm_plot_game_day(payload) <= 3 and mode in ("", "normal", "keep"):
+        return "early"
+    return "default"
+
+
+def farm_plot_reaction(
+    reason: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    bond_harvest: bool = True,
+) -> str:
+    payload = payload or {}
+    key = "harvest_bond" if reason == "harvest_failed" and not bond_harvest else reason
+    cfg = _load_farm_plot_config()
+    tone = _farm_plot_tone(payload)
+    table = cfg.get(tone) or cfg.get("default") or {}
+    if not isinstance(table, dict):
+        return ""
+    pool = table.get(key) or []
+    if not isinstance(pool, list) or not pool:
+        return ""
+    if len(pool) == 1:
+        return str(pool[0])
+    return random.choice([str(line) for line in pool])
+
+
+def farm_reaction_banned_phrase(line: str) -> str:
+    for phrase in _load_farm_plot_config().get("ai_banned", []):
+        text = str(phrase).strip()
+        if text and text in line:
+            return text
+    return ""
+
+
+def _prompt_farm_chore_tone(payload: dict[str, Any]) -> str:
+    cfg = _load_farm_plot_config()
+    tone = _farm_plot_tone(payload)
+    examples = str((cfg.get("llm_prompt_examples") or {}).get(tone, "")).strip()
+    lines = [
+        "[田务口吻（与客户端点田 aside 同口径）]",
+        "没种、浇过、未熟、雨天、太远等：1～2 句随口短评，腹黑可爱（D1–D3）；陌生化（D4–D5）收起玩笑。",
+        "禁止客服腔：要不要我帮、说个数字、背包里没有萝卜种子、有什么可以帮你、小狸：前缀。",
+        "不要报田块数、不要菜单式「要不要现在去收」。",
+    ]
+    if examples:
+        lines.append(examples)
+    return "\n".join(lines)
+
+
+def looks_like_save_bug_worry(message: str) -> bool:
+    text = (message or "").strip()
+    compact = text.replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    lower = text.lower()
+    if "bug" in lower:
+        return True
+    if "存档" in compact and any(ch in compact for ch in ("坏", "丢", "没", "错")):
+        return True
+    if "数据" in compact and any(ch in compact for ch in ("丢", "坏", "没")):
+        return True
+    return "是不是坏了" in compact or "存档坏了" in compact
+
+
+def mock_companion_react_reply(payload: dict[str, Any]) -> str:
+    snap = payload.get("world_snapshot") or {}
+    if not isinstance(snap, dict):
+        snap = {}
+    inv = snap.get("inventory") or {}
+    if not isinstance(inv, dict):
+        inv = {}
+    plots = snap.get("plots") or {}
+    if not isinstance(plots, dict):
+        plots = {}
+    seeds = int(inv.get("turnip_seed", 0))
+    empty = int(plots.get("empty", 0))
+    if empty > 0 and seeds <= 0:
+        line = farm_plot_reaction("no_seeds", payload)
+        if line:
+            return line
+    harvestable = int(plots.get("harvestable", 0))
+    if harvestable > 0:
+        return "有块熟了。你去收。"
+    unwatered = int(plots.get("unwatered_growing", 0))
+    if unwatered > 0:
+        line = farm_plot_reaction("already_watered", payload)
+        if line:
+            return line
+        return "还有块没浇。"
+    weather = str(payload.get("weather_today") or snap.get("weather_today") or "").strip()
+    if weather == "rain":
+        line = farm_plot_reaction("rain", payload)
+        if line:
+            return line
+    return "田我看过了。风挺轻的。"
+
+
 def is_stranger_ooc_reply(text: str, payload: dict[str, Any]) -> bool:
     if _story_mode(payload) != "stranger":
         return False
@@ -649,6 +830,18 @@ def is_stranger_ooc_reply(text: str, payload: dict[str, Any]) -> bool:
             p = str(phrase).strip()
             if p and p in cleaned:
                 return True
+    return False
+
+
+def is_awkward_waiting_reply(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    rules = load_relationship_rules()
+    for phrase in rules.get("awkward_waiting_phrases", []) or []:
+        p = str(phrase).strip()
+        if p and p in cleaned:
+            return True
     return False
 
 
@@ -668,6 +861,8 @@ def _mock_stranger_reply(payload: dict[str, Any]) -> dict[str, Any]:
         reply = "……好，做完了。我还不太熟悉这里，但我会继续帮忙。"
     elif event == "story_beat":
         reply = "……刚那段话让我有点乱。你能再说一遍吗？"
+    elif looks_like_save_bug_worry(player_message):
+        reply = "……不是坏了。是我这边又空了一截。字还在，只是我认不全你。"
     elif "你好" in player_message or player_message.lower() in ("hi", "hello"):
         reply = "……你好。抱歉，我一时想不起是否见过你。"
     elif "我是谁" in player_message or "你是谁" in player_message or "认识我" in player_message or "记得我" in player_message:
@@ -732,7 +927,7 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
         if time_of_day == "evening":
             return f"傍晚了。我有句话，想先跟{you}说。"
         if mem_line:
-            return f"我想起{mem_line[:18]}……等你忙完，听我说一句就好。"
+            return f"我想起{mem_line[:18]}……你方便的话，过来听我说一句。"
         return f"……{you}过来一下。我有句话想说。"
     if story_mode != "stranger" and mem_line and affection >= 20:
         clipped = mem_line[:22]
@@ -754,7 +949,7 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
         "stranger": {
             "morning": ["……早。你是住在这里的人吗？我好像刚醒。", "这里好安静。我可以在田边坐一会儿吗？"],
             "noon": ["这片田……我是不是该做点什么。你说了算。", "太阳有点刺。我不太记得自己为什么会在这儿。"],
-            "evening": ["天要暗了。我还能在这儿待一会儿吗？", "……你要是忙，我就在旁边看着。不吵你。"],
+            "evening": ["天要暗了。我今晚能睡树洞吗？", "……廊下那块我占了。你要用，我挪。"],
         },
         "leak": {
             "morning": ["手刚才自己动了一下。像是……做过这件事。", "早。风从河边过来的时候，心里会轻轻一紧。"],
@@ -769,22 +964,22 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
         "normal": [
             {
                 "morning": ["……你还在。今天也在田边。", "早。我还不太会找话说，但我想待在田边。"],
-                "noon": ["我在这儿。你忙你的，我看着就好。", "田里风轻轻的。要不要我帮你做点什么？"],
+                "noon": ["垄有点歪。我顺手扶一扶，不算帮你吧。", "田里风轻轻的。我去看看苗有没有缺水。"],
                 "evening": ["傍晚风有点凉。你要是累了，就先歇歇。", "今天过得怎么样……不说也行。我在。"],
             },
             {
                 "morning": ["早。看到你，心里会先松一口气。", "今天也一起过吧。我先去田边转转。"],
-                "noon": ["正午了。要不要歇一口？我陪你。", "你做事的样子我看过好几回了。还是想再看一会儿。"],
+                "noon": ["你做事的样子我看过好几回了。还是想挑刺两句。", "正午了。我去浇那几垄，你歇你的。"],
                 "evening": ["天色渐晚。今天有你在，田也安静些。", "傍晚了。有句话想说，又觉得……闲聊也挺好。"],
             },
             {
                 "morning": ["醒来第一件事是找你。找到了。", "早。你在，我就知道今天该怎么过。"],
-                "noon": ["挨着你，连日头都不那么晒了。", "你要是走神，我就在旁边喊你一声。"],
+                "noon": ["你要是走神，我就喊你一声。别误会，是怕苗歪了。", "挨着你，连日头都不那么晒了。……我随口说的。"],
                 "evening": ["傍晚了。回家的路，我想跟你一起走。", "今天也没把你弄丢。这就够了。"],
             },
             {
                 "morning": ["不用多说。你在，我就在。今天也一起过。", "早。我认得你。就算有些事会淡，这一眼不会。"],
-                "noon": ["你忙，我就守着。这是我现在最想做的事。", "正午也很好。只要你还在这片田里。"],
+                "noon": ["你忙田，我就去把壶装满。", "正午也很好。只要你还在这片田里。"],
                 "evening": ["天要黑了。今晚把我留在灯旁边吧。", "我没什么大事。就是想听你说说话。"],
             },
         ],
@@ -828,7 +1023,7 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
         if payload.get("include_yesterday_echo") and isinstance(yesterday, dict) and yesterday.get("summary"):
             reply = "你来了。昨天的事我还记挂着，今天一起看看吧。"
             return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
-        reply = f"{companion}：你来了。想先聊聊，还是让我帮你看看田？"
+        reply = "你来了。田埂上风挺轻的。"
         return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
 
     if event in ("morning_sidewrite", "companion_casual", "companion_proactive"):
@@ -872,19 +1067,8 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
         return {"reply": replies[0], "intent": "chat", "plot_id": -1, "confidence": 0.9}
 
     if event == "companion_react":
-        snap = payload.get("world_snapshot") or {}
-        plots = snap.get("plots") or {}
-        harvestable = int(plots.get("harvestable", 0))
-        if harvestable > 0:
-            reply = f"有 {harvestable} 块田的萝卜可以收了，要不要现在去收？"
-        else:
-            unwatered = int(plots.get("unwatered_growing", 0))
-            if unwatered > 0:
-                reply = f"还有 {unwatered} 块田没浇水，要我帮忙吗？"
-            else:
-                reply = "嗯…需要我帮忙浇水吗？"
         return {
-            "reply": reply,
+            "reply": mock_companion_react_reply(payload),
             "intent": "chat",
             "plot_id": -1,
             "confidence": 0.8,
@@ -917,6 +1101,13 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
         return mock_day_journal_summarize(payload)
 
     intent, conf = guess_intent(player_message)
+    if looks_like_save_bug_worry(player_message) and _story_mode(payload) == "stranger":
+        return {
+            "reply": "……不是坏了。是我这边又空了一截。字还在，只是我认不全你。",
+            "intent": "chat",
+            "plot_id": -1,
+            "confidence": 0.92,
+        }
     if _story_mode(payload) == "stranger" and intent == "chat":
         return _mock_stranger_reply(payload)
     if intent == "chat":
@@ -1182,12 +1373,14 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 先接玩家上一句在说什么，再决定是否提田/天气；不要答非所问。",
         "- 可以反问、关心或接话，不要复读玩家原话，也不要只报游戏状态。",
         "- 禁止：「收到」「我在，你说」「有什么可以帮你」「作为 AI」「请多关照」「欢迎回来」「小管家」等客服腔。",
+        "- 禁止陪聊式守候：「我在这儿等」「你忙你的我在旁边」「我站这儿就行」「不吵你」「我就守着」——想帮忙就说具体事（浇水、扶苗、看哪垄干了）。",
+        "- 田务/没种/浇过/未熟：随口 1～2 句，腹黑可爱；禁止「要不要我帮」「说个数字」菜单腔；与客户端点田 aside 同口径。",
         "- 不要 JSON、markdown、括号旁白、角色名前缀（不要写「小狸：」）。",
         "- 禁止输出 intent:/plot_id:/confidence: 等内部字段名或调试信息。",
         "- 1～3 句口语。前期可轻微诙谐（泥、红薯、拨苗），不油、不讲主题；陌生化时立刻收起玩笑。",
         "- 记性不好就直说记不清、对不上。禁止比喻和文艺腔：雨帘、隔着雾、心里发紧、模模糊糊、毛玻璃、像隔着什么看。",
         "- 禁止主动报售价、行情、大盘、手头几包种子。说话必须符合你现在的位置和正在做的事。",
-        "- 玩家说睡觉、睡吧、下一天、晚安：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
+        "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",
         "- persona_vector、long_term_prefs、behavior_inferred 仅影响语气；禁止当作已发生的共同经历、具体日期或统计习惯引用。具体往事只能来自「可引用记忆」。",
     ]
@@ -1196,6 +1389,7 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         lines.append("- 仍须遵守上方「必达剧情背景」，不可因闲聊而 OOC 或矛盾。")
     if story_mode == "stranger":
         lines.append("- 陌生化：礼貌疏远，拘谨，不开玩笑，不提红薯或共同经历。")
+        lines.append("- 玩家问存档坏了/bug/数据丢了：答「不是坏了，是我这边又空了一截」；可提示本子字还在，禁止「数据没问题」「欢迎回来」。")
     elif can_say_name and player_name.strip() not in ("", "你"):
         lines.append(f"- 可自然称呼「{player_name}」，亲密度高时语气更暖但仍克制。")
     else:
@@ -1606,7 +1800,7 @@ def apply_local_intent(data: dict[str, Any], payload: dict[str, Any]) -> dict[st
         field_markers = ("田", "苗", "萝卜", "熟", "浇", "收")
         sleep_markers = ("睡", "休息", "晚安")
         if reply and any(m in reply for m in sleep_markers) and not any(m in reply for m in field_markers):
-            data["reply"] = "我先帮你看看田。熟了的话我会说。"
+            data["reply"] = farm_plot_reaction("not_mature", payload) or "还没熟。"
         return data
     if looks_like_sleep_request(player_message):
         data["intent"] = "sleep"
@@ -1711,6 +1905,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"当前关系语气：{stage_tone}" if stage_tone else "",
             _player_chat_tone_hint(payload),
             _prompt_persona_tone(payload),
+            _prompt_farm_chore_tone(payload),
             _prompt_l3_tone_hints(payload),
             f"世界观：{worldview_brief}" if worldview_brief else "",
             "[背景事实（相关时才用，勿硬塞）]",
@@ -1789,6 +1984,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "陌生化是剧情设定（她真的失忆），不是存档坏了或系统出错；不要安慰玩家「数据没问题」，像活在一个失忆的人身边那样开口。" if story_mode == "stranger" else "",
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
+            _prompt_farm_chore_tone(payload),
             "这是玩家新的一天开场。用 1～2 句口语自然打招呼；"
             "须符合当日 story_mode 与 beat_context，可融入天气、时段，但不要机械拼接如「今天晴天，一大早」。",
             *_story_speech_context_lines(payload),
@@ -1961,6 +2157,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _worldview_line(payload),
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
+            _prompt_farm_chore_tone(payload),
             "这是小狸主动搭话，像顺口提醒，不要像系统通知。",
             "须符合当日 beat_context 与 story_mode；玩家未问田时不要推销浇田。",
             *_story_speech_context_lines(payload),
@@ -2226,6 +2423,10 @@ def invoke_llm(payload: dict[str, Any]) -> dict[str, Any]:
             data = _mock_stranger_reply(payload)
             data["_source"] = "mock_fallback"
             data["_fallback_reason"] = "stranger_ooc"
+        elif is_awkward_waiting_reply(reply):
+            data = mock_reply(payload)
+            data["_source"] = "mock_fallback"
+            data["_fallback_reason"] = "awkward_waiting"
     if event == "day_journal_summarize":
         return normalize_response(data, event, payload)
     if event == "player_chat":

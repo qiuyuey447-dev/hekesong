@@ -14,10 +14,13 @@ const DAY_CARD_FADE_OUT_SEC := 0.35
 var _fade: ColorRect
 var _sleep_panel: PanelContainer
 var _day_panel: PanelContainer
+var _trust_panel: PanelContainer
+var _trust_body: Label
 var _day_title: Label
 var _day_body: Label
 var _busy := false
 var _prompt_visible := false
+var _trust_waiting := false
 var _tween: Tween
 
 
@@ -31,8 +34,10 @@ func _ready() -> void:
 	add_child(_fade)
 	_build_sleep_panel()
 	_build_day_panel()
+	_build_trust_panel()
 	_sleep_panel.visible = false
 	_day_panel.visible = false
+	_trust_panel.visible = false
 
 
 func is_busy() -> bool:
@@ -46,7 +51,6 @@ func is_prompt_visible() -> bool:
 func show_sleep_prompt() -> void:
 	if _busy or _prompt_visible:
 		return
-	BgmDirector.stop_for_sleep(true)
 	_prompt_visible = true
 	_fade.color = Color(0.02, 0.03, 0.06, 0.52)
 	_fade.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -73,6 +77,8 @@ func hide_sleep_prompt() -> void:
 	if not _busy:
 		_fade.color = Color(0.02, 0.03, 0.06, 0.0)
 		_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if BgmDirector.has_method("resume_after_sleep"):
+			BgmDirector.resume_after_sleep()
 
 
 func run_sleep_sequence(advance_callback: Callable) -> void:
@@ -89,8 +95,10 @@ func run_sleep_sequence(advance_callback: Callable) -> void:
 		advance_callback.call()
 	await get_tree().create_timer(HOLD_BLACK_SEC).timeout
 	await _play_day_opening_auto(GameState.game_day)
+	if GameState.IS_TEN_DAY_EDITION and GameState.game_day == 4:
+		await show_d4_trust_telegraph_blocking()
 	await _fade_from_black(FADE_FROM_BLACK_SEC)
-	BgmDirector.resume_day_after_sleep()
+	BgmDirector.resume_after_sleep()
 	_day_panel.visible = false
 	_busy = false
 	day_opening_finished.emit()
@@ -171,6 +179,8 @@ func _build_sleep_panel() -> void:
 	sleep_btn.pressed.connect(func() -> void:
 		if _busy:
 			return
+		AmbientAudio.ensure_unlocked()
+		BgmDirector.ensure_unlocked()
 		sleep_now_pressed.emit()
 	)
 	stack.add_child(sleep_btn)
@@ -206,6 +216,98 @@ func _build_day_panel() -> void:
 	_day_body.add_theme_color_override("font_color", LetterPaperKit.INK_SOFT)
 	LetterPaperKit.apply_font(_day_body)
 	stack.add_child(_day_body)
+
+
+func show_d4_trust_telegraph_blocking() -> void:
+	if not GameState.IS_TEN_DAY_EDITION or GameState.game_day != 4:
+		return
+	if bool(GameState.get_ending_flags().get("d4_telegraph_ack_at_wake", false)):
+		return
+	var body := StoryNodeCopy.get_morning("t10_d4_telegraph").strip_edges()
+	if body == "":
+		return
+	var owned_busy := not _busy
+	if owned_busy:
+		_busy = true
+	_trust_body.text = body
+	_trust_panel.visible = true
+	_trust_panel.modulate.a = 0.0
+	_trust_panel.scale = Vector2(0.94, 0.94)
+	_fade.color = Color(0.02, 0.03, 0.06, 0.72)
+	_fade.mouse_filter = Control.MOUSE_FILTER_STOP
+	move_child(_trust_panel, get_child_count() - 1)
+	call_deferred("_finalize_trust_panel_layout")
+	var intro := create_tween()
+	intro.set_parallel(true)
+	intro.tween_property(_trust_panel, "modulate:a", 1.0, 0.32)
+	intro.tween_property(_trust_panel, "scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	await intro.finished
+	AmbientAudio.play_narrative_stinger("d4_stranger")
+	_trust_waiting = true
+	while _trust_waiting:
+		await get_tree().process_frame
+	var outro := create_tween()
+	outro.tween_property(_trust_panel, "modulate:a", 0.0, 0.28)
+	await outro.finished
+	_trust_panel.visible = false
+	GameState.set_ending_flag("d4_telegraph_ack_at_wake", true)
+	if owned_busy:
+		_busy = false
+
+
+func _finalize_trust_panel_layout() -> void:
+	if not _trust_panel.visible:
+		return
+	_trust_panel.pivot_offset = _trust_panel.size * 0.5
+
+
+func _build_trust_panel() -> void:
+	_trust_panel = PanelContainer.new()
+	_trust_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_trust_panel.offset_left = -320
+	_trust_panel.offset_right = 320
+	_trust_panel.offset_top = -220
+	_trust_panel.offset_bottom = 220
+	_trust_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trust_panel.add_theme_stylebox_override("panel", LetterPaperKit.paper_style(true))
+	add_child(_trust_panel)
+
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 18)
+	stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	_trust_panel.add_child(stack)
+
+	var title := Label.new()
+	title.text = "第 4 天"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", LetterPaperKit.INK)
+	LetterPaperKit.apply_font(title)
+	stack.add_child(title)
+
+	_trust_body = Label.new()
+	_trust_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_trust_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_trust_body.add_theme_font_size_override("font_size", 18)
+	_trust_body.add_theme_color_override("font_color", LetterPaperKit.INK_SOFT)
+	LetterPaperKit.apply_font(_trust_body)
+	stack.add_child(_trust_body)
+
+	var ack_btn := Button.new()
+	ack_btn.name = "TrustAckButton"
+	ack_btn.text = StoryNodeCopy.get_system("d4_trust_confirm")
+	ack_btn.custom_minimum_size = Vector2(220, 52)
+	ack_btn.focus_mode = Control.FOCUS_NONE
+	ack_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	LetterPaperKit.apply_sticky_button(ack_btn)
+	LetterPaperKit.apply_font(ack_btn)
+	ack_btn.pressed.connect(func() -> void:
+		if not _trust_waiting:
+			return
+		_trust_waiting = false
+	)
+	stack.add_child(ack_btn)
 
 
 func _fade_to_black(duration: float) -> void:

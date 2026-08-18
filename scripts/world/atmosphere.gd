@@ -108,6 +108,8 @@ func _process(_delta: float) -> void:
 	if not _layers_ready:
 		return
 	_sync_layout()
+	if GameState.weather_today == GameState.WEATHER_RAIN:
+		_update_rain_shelter()
 
 
 func _refresh(instant: bool = false) -> void:
@@ -129,6 +131,11 @@ func _refresh(instant: bool = false) -> void:
 			_rain_world.call("set_night_factor", 0.65 if night else 1.0)
 		if _rain_world.has_method("set_raining"):
 			_rain_world.call("set_raining", raining)
+	AmbientAudio.set_rain_active(raining)
+	if raining:
+		_update_rain_shelter()
+	else:
+		AmbientAudio.set_rain_sheltered(false)
 
 	_update_overlays(raining, night, instant)
 
@@ -163,6 +170,15 @@ func _update_overlays(raining: bool, night: bool, instant: bool) -> void:
 
 	_apply_overlay(_rain_dim, rain_dim, instant)
 	_apply_overlay(_night_veil, night_veil, instant)
+
+
+func _update_rain_shelter() -> void:
+	var player := get_tree().get_first_node_in_group("player") as Node2D
+	var farm := get_tree().get_first_node_in_group("farm_world")
+	var sheltered := false
+	if player != null and farm != null and farm.has_method("is_rain_sheltered"):
+		sheltered = farm.is_rain_sheltered(player.global_position)
+	AmbientAudio.set_rain_sheltered(sheltered)
 
 
 func _apply_overlay(rect: ColorRect, target: Color, instant: bool) -> void:

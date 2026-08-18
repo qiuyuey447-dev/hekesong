@@ -45,7 +45,7 @@ var _snuggle_callback: Callable = Callable()
 var _snuggle_player_phase := 0.0
 var _snuggle_companion_phase := 0.0
 
-const SNUGGLE_DURATION := 3.0
+const SNUGGLE_DURATION := 5.5
 const SNUGGLE_PLAYER_SWAY_X := 12.0
 const SNUGGLE_PLAYER_SWAY_Y := 4.0
 const SNUGGLE_PLAYER_SWAY_SPEED := 2.15
@@ -68,6 +68,10 @@ func _ready() -> void:
 	_setup_camera_limits()
 	call_deferred("_setup_camera_limits")
 	set_process(false)
+
+
+func is_snuggle_active() -> bool:
+	return _snuggle_active
 
 
 func start_companion_snuggle(on_finished: Callable) -> void:

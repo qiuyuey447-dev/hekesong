@@ -574,7 +574,7 @@ func _on_http_completed(
 			call_deferred("_pump_api_queue")
 			return
 		var reason := str(validation.get("reason", ""))
-		if reason == "literary" or reason == "action_mismatch" or reason == "l3_episodic":
+		if reason == "literary" or reason == "action_mismatch" or reason == "l3_episodic" or reason == "awkward_waiting":
 			var literary_fallback := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, literary_fallback, true)
 			call_deferred("_pump_api_queue")

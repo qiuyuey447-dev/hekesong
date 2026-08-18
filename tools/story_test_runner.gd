@@ -51,6 +51,12 @@ func _run_ten_day_tests() -> void:
 	_test_ten_day_calendar_bounds()
 	_test_ten_day_story_modes()
 	_test_ten_day_d4_morning_telegraph()
+	_test_trust_chain_copy()
+	_test_ten_day_f5_branding()
+	_test_dialogue_surface_policy()
+	_test_wave3_audio_policy()
+	_test_wave4_experience_policy()
+	_test_wave5_trust_ui_policy()
 	_test_ten_day_promise_on_d3_beat()
 	_test_ten_day_awakening_copy_no_week5()
 	_test_ten_day_true_ending_reachable()
@@ -333,7 +339,129 @@ func _test_ten_day_d4_morning_telegraph() -> void:
 	var text := StoryRouteData.render_morning_opening(false, "P_N05")
 	_assert("弄丢" in text, "D4 morning telegraphs lost name")
 	_assert("不是存档" in text or "失忆" in text, "D4 morning frames amnesia not save bug")
+	GameState.set_ending_flag("d4_telegraph_ack_at_wake", true)
+	_assert(
+		StoryRouteData.render_morning_opening(false, "P_N05").strip_edges() == "",
+		"D4 morning skips duplicate telegraph after wake ack"
+	)
 	_assert(StoryNodeCopy.get_system("d4_amnesia_hint").strip_edges() != "", "D4 amnesia hint copy present")
+	_assert(StoryNodeCopy.get_system("d4_trust_confirm") == "知道了", "D4 trust confirm copy")
+	_assert(StoryNodeCopy.get_system("d4_memory_panel_hint").strip_edges() != "", "D4 memory panel hint")
+
+
+func _test_trust_chain_copy() -> void:
+	print("  .. trust chain")
+	var p11 := StoryRouteData.render_body("P_N11", "P_N11")
+	_assert("名字" in p11 and "糊" in p11, "D3 P_N11 foreshadows name blur")
+	GameState.reset_for_new_game()
+	GameState.game_day = 4
+	var ctx := {"story_mode": "stranger"}
+	var save_line := NpcFallback.stranger_chat("是不是存档坏了？", ctx)
+	_assert("不是坏了" in save_line or "没丢" in save_line, "stranger save worry fallback")
+	_assert("欢迎回来" not in save_line, "save worry avoids OOC welcome")
+
+
+func _test_ten_day_f5_branding() -> void:
+	print("  .. F5 branding")
+	_assert(GameState.GAME_DISPLAY_NAME == "去狸的岛", "display name unified")
+	_assert(StoryNodeCopy.get_system("d1_after_name_companion").strip_edges() != "", "D1 opening guide copy")
+	_assert("忘" not in StoryNodeCopy.get_system("d1_after_name_companion"), "D1 opening guide avoids spoilers")
+	_assert("农场" in StoryNodeCopy.get_system("d1_after_name_companion"), "D1 opening guide mentions farm")
+	_assert("我在这儿等" not in StoryNodeCopy.get_system("d1_after_name_companion"), "D1 opening avoids awkward waiting")
+	_assert(StoryNodeCopy.get_system("tutorial_chat_hint").strip_edges() != "", "opening chat tutorial copy")
+	_assert(StoryNodeCopy.get_system("tutorial_controls_hint").strip_edges() != "", "controls tutorial copy")
+	_assert("忘" not in StoryNodeCopy.get_system("tutorial_controls_hint"), "controls hint avoids spoilers")
+	for phrase in RelationshipDirector.get_awkward_waiting_phrases():
+		_assert(phrase.strip_edges() != "", "awkward waiting phrase non-empty")
+	_assert(
+		not ResponseValidator.validate(
+			"player_chat",
+			"你忙你的，我就在旁边看着。不吵你。",
+			{"story_mode": "familiar"},
+		).get("ok", true),
+		"awkward waiting reply rejected"
+	)
+	_assert("五周" not in GameState.get_about_dialog_text(), "about avoids week language")
+	_assert("35" not in GameState.get_about_dialog_text(), "about avoids 35-day language")
+	_assert("Demo" not in GameState.get_about_dialog_text(), "about avoids demo wording")
+	var steps := EndingDirector.get_epilogue_steps(EndingDirector.ENDING_NORMAL)
+	var credits_body := ""
+	for step in steps:
+		if str(step.get("kind", "")) == "credits":
+			credits_body = str(step.get("body", ""))
+			break
+	_assert(GameState.GAME_DISPLAY_NAME in credits_body, "credits use display name")
+	_assert("河可松" not in credits_body, "credits avoid old product name")
+
+
+func _test_dialogue_surface_policy() -> void:
+	print("  .. dialogue UI")
+	GameState.reset_for_new_game()
+	GameState.record_chat_turn("player", "你好")
+	GameState.record_chat_turn("companion", "嗯，我在。")
+	var history := GameState.get_chat_history_for_ui()
+	_assert(history.size() >= 2, "chat history still stored for journal/LLM")
+	_assert(str(history[history.size() - 2].get("role", "")) == "player", "player turn kept in history")
+	_assert(str(history[history.size() - 1].get("role", "")) == "companion", "companion turn kept in history")
+
+
+func _test_wave3_audio_policy() -> void:
+	print("  .. wave3 audio")
+	GameState.reset_for_new_game()
+	GameState.time_of_day = GameState.TIME_MORNING
+	_assert(BgmDirector.resume_mode_after_sleep() == "day", "sleep resume uses morning day track")
+	GameState.time_of_day = GameState.TIME_NIGHT
+	_assert(BgmDirector.resume_mode_after_sleep() == "night", "sleep resume uses night track when still night")
+	_assert(AmbientAudio.stinger_for_beat("P_N05") == "d4_stranger", "D4 beat maps stinger")
+	_assert(AmbientAudio.stinger_for_beat("N16") == "d7_night", "D7 beat maps stinger")
+	_assert(BasketDrawer.sprout_tier_for_affection(65) >= 3, "high affection reaches bloom tier")
+
+
+func _test_wave4_experience_policy() -> void:
+	print("  .. wave4 experience")
+	GameState.reset_for_new_game()
+	_assert(StoryNodeCopy.get_system("tutorial_notebook_hint").strip_edges() != "", "notebook tutorial copy")
+	_assert(StoryNodeCopy.get_system("d9_pause_defer").strip_edges() != "", "d9 defer label")
+	var beat := StoryBeatDirector.build_beat("NM_N20c")
+	var steps: Array = beat.get("steps", [])
+	var has_d9_choice := false
+	for step in steps:
+		if step is Dictionary and str(step.get("kind", "")) == "choice":
+			for choice in step.get("choices", []):
+				if choice is Dictionary and str(choice.get("id", "")) == "d9_defer":
+					has_d9_choice = true
+	_assert(has_d9_choice, "D9 beat offers soft pause choice")
+	GameState.set_ending_flag("d9_soft_pause_beat", "NM_N20c")
+	StoryBeatDirector.resolve_soft_paused_beats_before_advance()
+	_assert(GameState.is_story_node_seen("NM_N20c"), "soft pause resolves on day advance")
+	_assert(str(GameState.get_ending_flags().get("d9_soft_pause_beat", "")) == "", "soft pause flag cleared")
+	var leak := NpcFallback.player_chat("嗯", GameState.STAGE_FAMILIAR, {"story_mode": "leak", "revealed": false})
+	var awaken := NpcFallback.player_chat("嗯", GameState.STAGE_FAMILIAR, {"story_mode": "awaken"})
+	_assert(leak.strip_edges() != "", "leak fallback non-empty")
+	_assert(awaken.strip_edges() != "", "awaken fallback non-empty")
+	_assert(leak != awaken, "leak/awaken fallback differ")
+
+
+func _test_wave5_trust_ui_policy() -> void:
+	print("  .. wave5 trust ui")
+	_assert(
+		StoryNodeCopy.get_system("d5_notebook_trust_hint").strip_edges() != "",
+		"D5 notebook trust hint copy"
+	)
+	_assert(
+		StoryNodeCopy.get_system("companion_snuggle_afterglow").strip_edges() != "",
+		"D7 snuggle afterglow copy"
+	)
+	for reason in ["plant_ok", "water_ok", "harvest_ok"]:
+		var line := PersonaGuard.reply_for_plot_click(reason).strip_edges()
+		_assert(line != "", "farm success reaction %s has copy" % reason)
+	_assert(GameState.bgm_volume_linear >= 0.0, "bgm volume pref default")
+	_assert(GameState.ambient_volume_linear >= 0.0, "ambient volume pref default")
+	var water_hint := NpcFallback.pick_random([
+		"田还干着。要浇你说一声。",
+		"垄还没润。我耳朵好使，不用喊两遍。",
+	])
+	_assert("要不要" not in water_hint, "chat water fallback avoids customer-service tone")
 
 
 func _test_ten_day_promise_on_d3_beat() -> void:
@@ -624,6 +752,10 @@ func _test_ten_day_mid_profile_copy() -> void:
 
 func _test_status_inquiry_not_sleep() -> void:
 	_assert(not IntentParser.looks_like_sleep_request("熟了没"), "熟了没 is not sleep")
+	_assert(IntentParser.looks_like_sleep_request("你还不睡觉吗"), "sleep nudge recognized")
+	_assert(IntentParser.looks_like_sleep_request("怎么还不睡"), "怎么还不睡 is sleep nudge")
+	_assert(not IntentParser.looks_like_sleep_request("别睡了"), "refuse sleep is not sleep request")
+	_assert(not IntentParser.looks_like_sleep_request("睡得好吗"), "sleep quality question is not sleep request")
 	_assert(IntentParser.looks_like_status_inquiry("田怎么样"), "田怎么样 is status")
 	var parsed := IntentParser.parse("能收了吗")
 	_assert(str(parsed.get("intent", "")) == IntentParser.INTENT_CHECK_STATUS, "能收了吗 → check_status")
@@ -1048,6 +1180,33 @@ func _test_ten_day_e_polish() -> void:
 		"blocking hint avoids task wording"
 	)
 	_assert(StoryNodeCopy.get_system("sleep_prompt_title") == "夜深了", "sleep prompt narrative title")
+	_assert(FileAccess.file_exists("res://config/farm_plot_reactions.json"), "farm plot reactions config present")
+	for reason in ["no_seeds", "already_watered", "rain", "need_closer", "not_mature", "harvest_failed"]:
+		var line := PersonaGuard.reply_for_plot_click(reason).strip_edges()
+		_assert(line != "", "farm plot reaction %s has copy" % reason)
+		_assert("没有萝卜种子了" not in line, "farm plot %s avoids system seed toast" % reason)
+		var banned := PersonaGuard.farm_reaction_banned_phrase(line)
+		_assert(banned == "", "farm plot %s avoids AI phrase: %s" % [reason, banned])
+	for reason in ["plant_ok", "water_ok", "harvest_ok"]:
+		var ok_line := PersonaGuard.reply_for_plot_click(reason).strip_edges()
+		_assert(ok_line != "", "farm plot success %s has copy" % reason)
+		_assert(PersonaGuard.farm_reaction_banned_phrase(ok_line) == "", "farm success %s avoids banned phrase" % reason)
+	GameState.reset_for_new_game()
+	GameState.game_day = 2
+	var early := PersonaGuard.reply_for_plot_click("no_seeds").strip_edges()
+	_assert(early != "", "early farm no_seeds has copy")
+	_assert(
+		"背包里没有" not in early and "要不要" not in early,
+		"early farm hint avoids customer-service seed line"
+	)
+	GameState.game_day = 4
+	var stranger := PersonaGuard.reply_for_plot_click("already_watered").strip_edges()
+	_assert(stranger.begins_with("……"), "stranger farm hint drops playful tone")
+	_assert("帮我" not in stranger, "stranger farm hint avoids helper-bot wording")
+	_assert(
+		StoryNodeCopy.get_system("blocking_farm_d10").strip_edges() != "",
+		"D10 farm block uses narrative system hint"
+	)
 
 	GameState.reset_for_new_game()
 	GameState.game_day = 2
@@ -1060,7 +1219,8 @@ func _test_ten_day_e_polish() -> void:
 
 	var font := UIFontTheme.get_font()
 	_assert(font != null, "UIFontTheme font loaded for Web/Desktop")
-	_assert(FileAccess.file_exists("res://assets/fonts/ZCOOLKuaiLe-Regular.ttf"), "primary CJK font file present")
+	_assert(ResourceLoader.exists("res://assets/fonts/ZCOOLKuaiLe-Regular.ttf"), "primary CJK font resource exists")
+	_assert(not UIFontTheme.is_using_fallback(), "UIFontTheme uses primary CJK font not zpix")
 
 	GameState.reset_for_new_game()
 	GameState.register_farm_plots(4)

@@ -46,6 +46,8 @@ func should_fallback(local_intent: Dictionary) -> bool:
 	var raw_for_sleep := str(local_intent.get("raw_text", "")).strip_edges()
 	if IntentParser.is_explicit_sleep_utterance(raw_for_sleep):
 		return false
+	if IntentParser.looks_like_sleep_nudge(raw_for_sleep):
+		return false
 	if IntentParser.looks_like_status_inquiry(raw_for_sleep):
 		return false
 	if IntentParser.looks_like_stop_farm_chore(raw_for_sleep):

@@ -1206,7 +1206,26 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 					step["template"] = "%s_%s" % [beat_id, profile]
 				elif tpl == "%s_b" % beat_id:
 					step["template"] = "%s_b_%s" % [beat_id, profile]
+		if GameState.IS_TEN_DAY_EDITION:
+			steps.append({
+				"title": StoryNodeCopy.get_system("d9_pause_title"),
+				"body": StoryNodeCopy.get_system("d9_pause_body"),
+				"kind": "choice",
+				"choices": [
+					{"id": "d9_continue", "label": StoryNodeCopy.get_system("d9_pause_continue")},
+					{"id": "d9_defer", "label": StoryNodeCopy.get_system("d9_pause_defer")},
+				],
+			})
 	return steps
+
+
+func resolve_soft_paused_beats_before_advance() -> void:
+	var paused := str(GameState.get_ending_flags().get("d9_soft_pause_beat", "")).strip_edges()
+	if paused == "":
+		return
+	if not is_beat_seen(paused):
+		GameState.mark_story_node_seen(paused)
+	GameState.set_ending_flag("d9_soft_pause_beat", "")
 
 
 func _n16_night_choice_hint(profile: String) -> String:

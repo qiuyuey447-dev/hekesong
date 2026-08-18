@@ -82,12 +82,34 @@ var _pending_feed_refuse: bool = false
 
 ## 去 AI 味：LLM 调试副作用（delta/引用/mock 来源）默认不进对话流，仅调试时开启。
 const SHOW_LLM_DEBUG: bool = false
-const TYPEWRITER_SEC_PER_CHAR: float = 0.045
+const TYPEWRITER_SEC_PER_CHAR: float = 0.071
+const PLAYER_ECHO_HOLD_SEC: float = 1.8
+const PLAYER_ECHO_FADE_SEC: float = 0.4
+const PLAYER_ECHO_RISE_PX: float = 12.0
+const CHAT_PANEL_HEIGHT := 292.0
+const OPENING_HINT_HOLD_SEC := 5.0
+const OPENING_HINT_FADE_IN_SEC := 0.25
+const OPENING_HINT_FADE_OUT_SEC := 0.45
+const NARRATIVE_HINT_SEC := 8.0
+const NARRATIVE_HINT_KEYS := {
+	"d4_amnesia_hint": true,
+	"d4_memory_panel_hint": true,
+	"d5_notebook_trust_hint": true,
+	"tutorial_notebook_hint": true,
+}
 var _companion_tween: Tween = null
 var _player_echo_tween: Tween = null
 var _toast_tween: Tween = null
+var _opening_hint_phase: int = 0
+var _opening_hint_tween: Tween = null
+var _opening_hint_token: int = 0
+var _narrative_hint_tween: Tween = null
 var _arrow_tween: Tween = null
 var _typing: bool = false
+var _typewriter_full_text: String = ""
+var _typewriter_visible_count: int = 0
+var _transient_companion_aside: String = ""
+var _player_echo_base_y: float = 0.0
 
 
 func _ready() -> void:
@@ -99,18 +121,7 @@ func _ready() -> void:
 	_setup_day_cycle_overlay()
 	_task_panel.visible = false
 	_chat_input.placeholder_text = "…（轻声对小狸说）"
-	# 历史对话流：滚动记录，不再单句覆盖。
-	_player_echo.visible = false
-	_continue_arrow.visible = false
-	_companion_sign.visible = true
-	_companion_sign.modulate.a = 1.0
-	_companion_sign.text = "—— 和她说说话 ——"
-	_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_chat_log.mouse_filter = Control.MOUSE_FILTER_STOP
-	_chat_log.scroll_active = true
-	_chat_log.scroll_following = true
-	_chat_log.bbcode_enabled = true
-	_chat_log.visible_ratio = 1.0
+	_setup_dialogue_panel()
 	_restore_chat_history()
 
 	GameState.stats_changed.connect(_refresh_hud)
@@ -135,7 +146,9 @@ func _ready() -> void:
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_chat_send.pressed.connect(_on_chat_send_pressed)
 	_chat_input.text_submitted.connect(_on_chat_submitted)
+	_chat_input.text_changed.connect(_on_chat_input_text_changed)
 	_chat_input.gui_input.connect(_on_chat_input_gui_input)
+	_chat_input.gui_input.connect(_ensure_audio_unlocked)
 	_nudge_ok_button.pressed.connect(_on_nudge_ok_pressed)
 	_nudge_later_button.pressed.connect(_on_nudge_later_pressed)
 	_next_day_button.pressed.connect(_on_next_day_pressed)
@@ -161,6 +174,8 @@ func _ready() -> void:
 
 	_refresh_hud()
 	_apply_ui_scale()
+	if not get_viewport().size_changed.is_connected(_apply_ui_scale):
+		get_viewport().size_changed.connect(_apply_ui_scale)
 	_last_sprout_tier_seen = BasketDrawer.sprout_tier_for_affection(GameState.affection)
 	# 开场状态已在顶栏 / 篮子，不弹系统旁白。
 	if GameState.is_story_complete():
@@ -174,6 +189,35 @@ func _ready() -> void:
 	call_deferred("_maybe_show_name_prompt_after_load")
 	call_deferred("_maybe_resume_pending_eviction")
 	call_deferred("_maybe_trigger_persona_shift")
+	call_deferred("_ensure_bgm")
+
+
+func _ensure_bgm() -> void:
+	BgmDirector.ensure_playing()
+
+
+func _ensure_audio_unlocked(_event: InputEvent = null) -> void:
+	AmbientAudio.ensure_unlocked()
+	BgmDirector.ensure_unlocked()
+
+
+func _setup_dialogue_panel() -> void:
+	_chat_send.visible = true
+	_chat_send.disabled = false
+	_chat_send.text = "发送"
+	if _chat_date:
+		_chat_date.visible = false
+	_player_echo.visible = false
+	_continue_arrow.visible = false
+	_companion_sign.visible = true
+	_companion_sign.modulate.a = 1.0
+	_companion_sign.text = "—— 和她说说话 ——"
+	_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_chat_log.mouse_filter = Control.MOUSE_FILTER_STOP
+	_chat_log.scroll_active = true
+	_chat_log.scroll_following = true
+	_chat_log.bbcode_enabled = true
+	_chat_log.visible_ratio = 1.0
 
 
 func _process(_delta: float) -> void:
@@ -182,12 +226,26 @@ func _process(_delta: float) -> void:
 
 
 func _on_chat_input_gui_input(event: InputEvent) -> void:
-	if not _is_player_moving():
+	if _is_player_moving():
+		_chat_input.add_theme_color_override(
+			"font_placeholder_color",
+			Color(0.55, 0.48, 0.40, 0.55)
+		)
+		if _is_movement_key_event(event):
+			_chat_input.accept_event()
+			_chat_input.release_focus()
 		return
-	if not _is_movement_key_event(event):
+	_chat_input.add_theme_color_override(
+		"font_placeholder_color",
+		Color(0.42, 0.34, 0.26, 0.82)
+	)
+
+
+func _on_chat_input_text_changed(new_text: String) -> void:
+	if _opening_hint_phase != 1:
 		return
-	_chat_input.accept_event()
-	_chat_input.release_focus()
+	if new_text.strip_edges() != "":
+		_dismiss_opening_chat_hint()
 
 
 func _is_player_moving() -> bool:
@@ -239,8 +297,147 @@ func _on_name_prompt_confirmed(name: String) -> void:
 	if cleaned == "":
 		return
 	_append_companion_message("……%s。好。我先念三遍。" % cleaned)
+	_maybe_show_d1_opening_guide()
 	_refresh_hud()
 	CompanionDirector.schedule_consider(0.8, "period")
+
+
+func _maybe_show_d1_opening_guide() -> void:
+	if not GameState.IS_TEN_DAY_EDITION or GameState.game_day != 1:
+		return
+	if bool(GameState.get_ending_flags().get("d1_opening_guide_shown", false)):
+		return
+	GameState.set_ending_flag("d1_opening_guide_shown", true)
+	var guide := StoryNodeCopy.get_system("d1_after_name_companion").strip_edges()
+	if guide != "":
+		get_tree().create_timer(1.2).timeout.connect(func() -> void:
+			_append_companion_message(guide)
+		, CONNECT_ONE_SHOT)
+	_maybe_show_opening_hint_sequence()
+
+
+func _maybe_show_opening_hint_sequence() -> void:
+	if bool(GameState.get_ending_flags().get("tutorial_controls_hint_seen", false)):
+		return
+	if _opening_hint_phase != 0:
+		return
+	get_tree().create_timer(1.0).timeout.connect(_begin_opening_chat_hint, CONNECT_ONE_SHOT)
+
+
+func _begin_opening_chat_hint() -> void:
+	if bool(GameState.get_ending_flags().get("tutorial_controls_hint_seen", false)):
+		return
+	if not GameState.IS_TEN_DAY_EDITION or GameState.game_day != 1:
+		return
+	var line := StoryNodeCopy.get_system("tutorial_chat_hint").strip_edges()
+	if line == "":
+		line = "试着和它聊聊天吧"
+	_opening_hint_phase = 1
+	_fade_in_opening_toast(line)
+	_schedule_opening_hint_timeout(1, _on_opening_chat_hint_timeout)
+
+
+func _schedule_opening_hint_timeout(phase: int, callback: Callable) -> void:
+	_opening_hint_token += 1
+	var token := _opening_hint_token
+	get_tree().create_timer(OPENING_HINT_HOLD_SEC).timeout.connect(func() -> void:
+		if token != _opening_hint_token or _opening_hint_phase != phase:
+			return
+		if callback.is_valid():
+			callback.call()
+	, CONNECT_ONE_SHOT)
+
+
+func _on_opening_chat_hint_timeout() -> void:
+	_dismiss_opening_chat_hint()
+
+
+func _dismiss_opening_chat_hint() -> void:
+	if _opening_hint_phase != 1:
+		return
+	_opening_hint_phase = 0
+	_bump_opening_hint_token()
+	_fade_out_opening_toast(_begin_opening_movement_hint)
+
+
+func _begin_opening_movement_hint() -> void:
+	if bool(GameState.get_ending_flags().get("tutorial_controls_hint_seen", false)):
+		return
+	var line := _opening_movement_hint_line()
+	if line == "":
+		_finish_opening_hint_sequence()
+		return
+	_opening_hint_phase = 2
+	_fade_in_opening_toast(line)
+	_schedule_opening_hint_timeout(2, _on_opening_movement_hint_timeout)
+
+
+func _on_opening_movement_hint_timeout() -> void:
+	if _opening_hint_phase != 2:
+		return
+	_opening_hint_phase = 0
+	_bump_opening_hint_token()
+	_fade_out_opening_toast(_finish_opening_hint_sequence)
+
+
+func _finish_opening_hint_sequence() -> void:
+	_opening_hint_phase = 0
+	_bump_opening_hint_token()
+	GameState.set_ending_flag("tutorial_controls_hint_seen", true)
+
+
+func _bump_opening_hint_token() -> void:
+	_opening_hint_token += 1
+
+
+func _opening_movement_hint_line() -> String:
+	var key := "tutorial_controls_hint_touch" if _needs_touch_controls_hint() else "tutorial_controls_hint"
+	var line := StoryNodeCopy.get_system(key).strip_edges()
+	if line == "":
+		line = StoryNodeCopy.get_system("tutorial_controls_hint").strip_edges()
+	return line
+
+
+func _fade_in_opening_toast(text: String) -> void:
+	var line := text.strip_edges()
+	if line == "":
+		return
+	_cancel_opening_hint_tween()
+	if _toast_tween != null and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_toast.text = line
+	_toast.modulate.a = 0.0
+	_opening_hint_tween = create_tween()
+	_opening_hint_tween.tween_property(_toast, "modulate:a", 1.0, OPENING_HINT_FADE_IN_SEC)
+
+
+func _fade_out_opening_toast(on_finished: Callable = Callable()) -> void:
+	_cancel_opening_hint_tween()
+	_opening_hint_tween = create_tween()
+	_opening_hint_tween.tween_property(_toast, "modulate:a", 0.0, OPENING_HINT_FADE_OUT_SEC)
+	if on_finished.is_valid():
+		_opening_hint_tween.finished.connect(on_finished, CONNECT_ONE_SHOT)
+
+
+func _cancel_opening_hint_tween() -> void:
+	if _opening_hint_tween != null and _opening_hint_tween.is_valid():
+		_opening_hint_tween.kill()
+	_opening_hint_tween = null
+
+
+func _cancel_opening_hint_sequence() -> void:
+	_opening_hint_phase = 0
+	_bump_opening_hint_token()
+	_cancel_opening_hint_tween()
+
+
+func _needs_touch_controls_hint() -> bool:
+	if DisplayServer.is_touchscreen_available():
+		return true
+	if OS.has_feature("web"):
+		var vp := get_viewport().get_visible_rect().size
+		return vp.x < 1200.0 or vp.y < 820.0 or vp.y > vp.x * 1.05
+	return false
 
 
 func _on_time_changed(time_of_day: String) -> void:
@@ -684,14 +881,28 @@ func _on_basket_sleep() -> void:
 
 
 func _maybe_announce_sprout_growth() -> void:
-	## 小苗只在篮子里默默长高，不弹说明文案。
 	var tier := BasketDrawer.sprout_tier_for_affection(GameState.affection)
 	if _last_sprout_tier_seen < 0:
 		_last_sprout_tier_seen = tier
 		return
 	if tier <= _last_sprout_tier_seen:
 		return
+	var line := _sprout_growth_line(tier)
 	_last_sprout_tier_seen = tier
+	if line != "" and not _npc_busy and not _story_beat_panel.visible:
+		_append_companion_message(line)
+
+
+func _sprout_growth_line(tier: int) -> String:
+	match tier:
+		1:
+			return "……篮子里那株冒了芽。别盯着我看，是土自己长的。"
+		2:
+			return "小苗抽高了。我浇的水，它记得——比我还诚实。"
+		3:
+			return "……开花了。像萝卜田，但它是我们的。"
+		_:
+			return ""
 
 
 ## 每天清晨她自己先开一句口（走 LLM，带昨日日志与缺席回归），
@@ -827,6 +1038,7 @@ func _maybe_show_awakening() -> void:
 		return
 	# 开场文案在信纸里演，不再 toast 一整段。
 	_awakening_panel.open()
+	call_deferred("_sync_player_movement_lock")
 
 
 func _maybe_force_story_finale() -> void:
@@ -848,6 +1060,7 @@ func _maybe_force_story_finale() -> void:
 
 func _on_awakening_finished(skipped: bool) -> void:
 	GameState.mark_awakening_complete(skipped)
+	call_deferred("_sync_player_movement_lock")
 	GameState.mark_story_node_seen("N20")
 	var ending_id := EndingDirector.resolve_ending(skipped)
 	if not EndingDirector.is_bad_ending(ending_id):
@@ -877,6 +1090,8 @@ func _request_scheduled_story_invite(beat_id: String) -> void:
 
 
 func _has_unfinished_story_beat_today() -> bool:
+	if _is_d9_soft_paused():
+		return false
 	if StoryBeatDirector.has_blocking_today_beat():
 		return true
 	if StoryBeatDirector.has_pending_night_beat():
@@ -908,10 +1123,15 @@ func _maybe_show_story_beat(force_open: bool = false) -> void:
 	if beat.is_empty():
 		return
 	beat = await StoryBeatDirector.prepare_beat_for_display(beat)
+	if beat_id == "P_N06p":
+		_maybe_show_d5_notebook_trust_hint()
 	_story_beat_blocked = true
+	if beat_id.ends_with("_N20c"):
+		GameState.set_ending_flag("d9_soft_pause_beat", "")
 	GameState.clear_pending_invite_beat()
 	StoryBeatDirector.mark_schedule_fired()
 	_story_beat_panel.open(beat)
+	call_deferred("_sync_player_movement_lock")
 
 
 func _maybe_resume_beat_tail() -> void:
@@ -927,6 +1147,7 @@ func _maybe_resume_beat_tail() -> void:
 	beat = await StoryBeatDirector.prepare_beat_for_display(beat)
 	_story_beat_blocked = true
 	_story_beat_panel.open(beat)
+	call_deferred("_sync_player_movement_lock")
 
 
 func deliver_companion_proactive() -> void:
@@ -953,6 +1174,7 @@ func deliver_companion_proactive() -> void:
 
 
 func _on_story_beat_finished(beat_id: String) -> void:
+	call_deferred("_sync_player_movement_lock")
 	if _pending_post_snuggle_day_advance:
 		_pending_post_snuggle_day_advance = false
 		_story_beat_blocked = false
@@ -983,11 +1205,57 @@ func _on_story_beat_finished(beat_id: String) -> void:
 		_append_companion_message(companion_line)
 	if beat_id == "P_N01":
 		call_deferred("_maybe_show_name_prompt")
+	if beat_id in ["P_N05", "BE_N05"]:
+		_show_d4_amnesia_hint_once()
+	if beat_id in ["P_N01", "P_N02"]:
+		call_deferred("_maybe_show_notebook_tutorial")
 	CompanionDirector.schedule_consider(0.9)
+	call_deferred("_maybe_trigger_persona_shift")
+
+
+func _is_d9_soft_paused() -> bool:
+	var paused := str(GameState.get_ending_flags().get("d9_soft_pause_beat", "")).strip_edges()
+	if paused == "":
+		return false
+	return paused == StoryBeatDirector.get_pending_night_beat_id()
+
+
+func _handle_d9_pause_choice(choice_id: String, beat_id: String) -> void:
+	if choice_id == "d9_defer":
+		GameState.set_ending_flag("d9_soft_pause_beat", beat_id)
+		GameState.save_game()
+		_system_hint("d9_pause_saved")
+		_story_beat_panel.close_panel()
+		_story_beat_blocked = false
+		call_deferred("_sync_player_movement_lock")
+		return
+	GameState.set_ending_flag("d9_soft_pause_beat", "")
+	_story_beat_panel.finish_now()
+
+
+func _maybe_show_d5_notebook_trust_hint() -> void:
+	if bool(GameState.get_ending_flags().get("d5_notebook_trust_hint_shown", false)):
+		return
+	GameState.set_ending_flag("d5_notebook_trust_hint_shown", true)
+	_system_hint("d5_notebook_trust_hint")
+
+
+func _maybe_show_notebook_tutorial() -> void:
+	if not GameState.IS_TEN_DAY_EDITION:
+		return
+	if GameState.game_day > 2:
+		return
+	if bool(GameState.get_ending_flags().get("tutorial_notebook_hint_seen", false)):
+		return
+	GameState.set_ending_flag("tutorial_notebook_hint_seen", true)
+	_system_hint("tutorial_notebook_hint")
 
 
 func _on_story_beat_choice(choice_id: String) -> void:
 	var beat_id := _story_beat_panel.get_beat_id()
+	if beat_id.ends_with("_N20c") and choice_id in ["d9_continue", "d9_defer"]:
+		_handle_d9_pause_choice(choice_id, beat_id)
+		return
 	if beat_id == "P_N06p":
 		_handle_w2_beat_choice(choice_id)
 		return
@@ -1047,6 +1315,7 @@ func _handle_companion_night_choice(beat_id: String, choice_id: String) -> void:
 func _begin_companion_snuggle(beat_id: String) -> void:
 	_snuggle_blocked = true
 	_set_snuggle_controls(true)
+	call_deferred("_sync_player_movement_lock")
 	var farm := get_tree().get_first_node_in_group("farm_world")
 	if farm != null and farm.has_method("start_companion_snuggle"):
 		farm.start_companion_snuggle(func() -> void:
@@ -1059,10 +1328,14 @@ func _begin_companion_snuggle(beat_id: String) -> void:
 func _on_companion_snuggle_finished(beat_id: String) -> void:
 	_snuggle_blocked = false
 	_set_snuggle_controls(false)
+	call_deferred("_sync_player_movement_lock")
 	var farewell := StoryRouteData.render_companion_night_farewell(beat_id)
 	if farewell.strip_edges() != "":
 		_append_companion_message(farewell)
 	if GameState.game_day == 7 and beat_id.ends_with("_N16"):
+		var afterglow := StoryNodeCopy.get_system("companion_snuggle_afterglow").strip_edges()
+		if afterglow != "":
+			_show_narrative_hint(afterglow)
 		PlayerNotebookService.on_first_write_d7()
 	if _try_show_post_snuggle_fragment(beat_id):
 		return
@@ -1084,6 +1357,7 @@ func _try_show_post_snuggle_fragment(beat_id: String) -> bool:
 	_story_beat_blocked = true
 	beat["steps"] = fragment_steps
 	_story_beat_panel.open(beat)
+	call_deferred("_sync_player_movement_lock")
 	return true
 
 
@@ -1217,31 +1491,38 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 
 	if stage == 0:
 		if GameState.plant_turnip(plot_id):
+			_companion_farm_reaction("plant_ok")
+			_clear_companion_aside()
 			_refresh_hud()
 		else:
-			_hint("没有萝卜种子了。")
+			_companion_farm_reaction("no_seeds")
 		return
 
 	if GameState.can_harvest(plot_id):
 		if GameState.harvest_turnip(plot_id):
+			_companion_farm_reaction("harvest_ok")
+			_clear_companion_aside()
 			_refresh_hud()
 		else:
-			_hint("这块田暂时收不了。")
+			_companion_farm_reaction("harvest_failed")
 		return
 
 	if stage >= GameState.MATURE_STAGE:
-		_hint("还差一点才熟。")
+		_companion_farm_reaction("not_mature")
 		return
 
 	if plot_id in GameState.watered_plots or bool(plot.get("watered", false)):
-		_hint("这块田今天浇过了。")
+		_companion_farm_reaction("already_watered")
 		return
 
 	if GameState.weather_today == GameState.WEATHER_RAIN:
-		_hint("雨天田会自己喝饱。")
+		_companion_farm_reaction("rain")
 		return
 
 	GameState.mark_plot_watered(plot_id)
+	AmbientAudio.play_prop_sfx("water")
+	_companion_farm_reaction("water_ok")
+	_clear_companion_aside()
 	_refresh_hud()
 
 
@@ -1286,7 +1567,7 @@ func on_companion_clicked() -> void:
 
 
 func on_need_closer() -> void:
-	_hint("再走近一点。")
+	_companion_farm_reaction("need_closer")
 
 
 func _on_feed_closed() -> void:
@@ -1319,6 +1600,7 @@ func _on_memory_pressed() -> void:
 	if _market_panel.visible:
 		_market_panel.close()
 	_memory_panel.open()
+	_maybe_show_d4_memory_panel_hint()
 
 
 func _maybe_resume_pending_eviction() -> void:
@@ -1390,8 +1672,12 @@ func _maybe_trigger_persona_shift() -> void:
 		return
 	if StoryDirector.is_stranger_mode() or GameState.is_night():
 		return
-	if _story_beat_panel.visible or _story_choice_panel.visible:
-		call_deferred("_maybe_trigger_persona_shift")
+	if (
+		_story_beat_blocked
+		or _story_beat_panel.visible
+		or _story_choice_panel.visible
+		or _awakening_panel.visible
+	):
 		return
 	if not GameState.can_proactive_speech("react"):
 		return
@@ -1443,6 +1729,7 @@ func _on_feed_requested(item_id: String) -> void:
 func _open_feed_beat(beat: Dictionary) -> void:
 	_story_beat_blocked = true
 	_story_beat_panel.open(beat)
+	call_deferred("_sync_player_movement_lock")
 
 
 func _count_treats() -> int:
@@ -1518,6 +1805,8 @@ func _handle_day_advanced_content() -> void:
 		_hint(StoryNodeCopy.get_system("tree_hollow_night_wait"))
 	call_deferred("_maybe_show_story_beat")
 	call_deferred("_maybe_request_session_start")
+	if GameState.IS_TEN_DAY_EDITION and GameState.game_day == 4:
+		call_deferred("_begin_d4_trust_telegraph")
 
 
 func _on_week_reset(week_index: int) -> void:
@@ -1594,6 +1883,7 @@ func open_memory_from_companion() -> void:
 	if _market_panel.visible:
 		_market_panel.close()
 	_memory_panel.open()
+	_maybe_show_d4_memory_panel_hint()
 
 
 func sleep_from_companion() -> void:
@@ -1624,9 +1914,10 @@ func _send_chat_async(text: String) -> void:
 		return
 
 	CompanionDirector.notify_player_active()
-	_append_player_message(trimmed)
+	_clear_companion_aside()
 	_chat_input.clear()
 	GameState.record_player_chat(trimmed)
+	_append_player_message(trimmed)
 
 	if MemoryService.looks_like_pin_request(trimmed):
 		var pin_result := MemoryService.pin_from_player_chat(trimmed)
@@ -1676,7 +1967,6 @@ func _send_chat_async(text: String) -> void:
 	var api_intent := {}
 	if classify_attempted:
 		_set_npc_busy(true)
-		_chat_input.placeholder_text = "……"
 		api_intent = await IntentBridge.classify_message(trimmed)
 		_set_npc_busy(false)
 
@@ -2034,7 +2324,7 @@ func _blocks_farm_chores(show_hint: bool = false) -> bool:
 	if not GameState.is_pure_narrative_day():
 		return false
 	if show_hint:
-		_hint("今天……她好像有很重要的话要说。田先放一放。")
+		_system_hint("blocking_farm_d10")
 	return true
 
 
@@ -2261,7 +2551,7 @@ func _offer_water_help() -> void:
 		_pending_water_offer = false
 		return
 	_pending_water_offer = true
-	_append_companion_message("田里的萝卜还没浇水呢，要不要我帮你浇一下？")
+	_append_companion_message("垄还干着。要浇你说一声。")
 
 
 func _try_handle_water_offer_reply(text: String) -> bool:
@@ -2646,37 +2936,94 @@ func _set_npc_busy(busy: bool) -> void:
 	_npc_busy = busy
 	_chat_input.editable = not busy
 	_chat_send.disabled = busy
-	if busy:
-		_chat_input.placeholder_text = "……"
-	else:
-		_chat_input.placeholder_text = "…（轻声对小狸说）"
+	_set_companion_thinking(busy)
+	_chat_input.placeholder_text = "…（轻声对小狸说）"
+
+
+func _set_companion_thinking(active: bool) -> void:
+	for node in get_tree().get_nodes_in_group("companion_interact"):
+		if node.has_method("show_status_bubble") and node.has_method("hide_status_bubble"):
+			if active:
+				node.show_status_bubble("…")
+			else:
+				node.hide_status_bubble()
 
 
 func _escape_bbcode(text: String) -> String:
-	# 避免玩家输入的 [] 破坏 BBCode；用全角括号替代。
 	return text.replace("[", "［").replace("]", "］")
 
 
 func _format_player_line(line: String) -> String:
-	return "[color=#9A7040]我[/color]  [color=#4A3A2C]%s[/color]" % _escape_bbcode(line)
+	return "[color=#8C7B68]%s[/color]" % _escape_bbcode(line)
 
 
 func _format_companion_line(line: String) -> String:
-	var name := str(GameState.companion_name)
-	return "[color=#B07A3A]%s[/color]  [color=#2E241C]%s[/color]" % [
-		_escape_bbcode(name),
-		_escape_bbcode(line),
-	]
+	return "[color=#3D3329]%s[/color]" % _escape_bbcode(line)
 
 
 func _restore_chat_history() -> void:
-	## 从存档重建话区；继续游戏时应能看到退出前的对话。
+	_transient_companion_aside = ""
+	_render_chat_log()
+
+
+func _append_player_message(text: String) -> void:
+	var line := text.strip_edges()
+	if line == "":
+		return
+	_clear_companion_aside(false)
+	_render_chat_log()
+
+
+func _append_companion_message(text: String) -> void:
+	var cleaned := text.strip_edges()
+	_transient_companion_aside = ""
+	if cleaned != "":
+		GameState.record_chat_turn("companion", cleaned)
+		_arm_pending_offers_from_companion_line(cleaned)
+	_render_chat_log()
+
+
+func _finish_typewriter_if_needed(_reveal_all: bool = false) -> void:
+	if _companion_tween != null and _companion_tween.is_valid():
+		_companion_tween.kill()
+	_typing = false
+	_continue_arrow.visible = false
+	if _arrow_tween != null and _arrow_tween.is_valid():
+		_arrow_tween.kill()
+	_arrow_tween = null
+
+
+func _scroll_chat_to_end() -> void:
+	await get_tree().process_frame
+	if is_instance_valid(_chat_log):
+		_chat_log.scroll_to_line(_chat_log.get_line_count())
+
+
+func _speak_companion_aside(text: String) -> void:
+	var line := text.strip_edges()
+	if line == "":
+		return
+	_transient_companion_aside = line
+	_render_chat_log()
+
+
+func _clear_companion_aside(redraw: bool = true) -> void:
+	if _transient_companion_aside == "":
+		return
+	_transient_companion_aside = ""
+	if redraw:
+		_render_chat_log()
+
+
+func _render_chat_log() -> void:
 	_chat_log.clear()
 	var history := GameState.get_chat_history_for_ui()
-	if history.is_empty():
-		_chat_log.append_text("[color=#8A6E4F]……[/color]")
-		return
 	var first := true
+	if history.is_empty() and _transient_companion_aside == "":
+		_chat_log.append_text("[color=#8A6E4F]……[/color]")
+		_sync_companion_sign_for_surface(false)
+		_scroll_chat_to_end()
+		return
 	for turn in history:
 		if not turn is Dictionary:
 			continue
@@ -2690,44 +3037,35 @@ func _restore_chat_history() -> void:
 			_chat_log.append_text("%s%s" % [prefix, _format_player_line(line)])
 		else:
 			_chat_log.append_text("%s%s" % [prefix, _format_companion_line(line)])
+	if _transient_companion_aside != "":
+		var prefix := "" if first else "\n\n"
+		_chat_log.append_text(
+			"%s[color=#8C7B68]%s[/color]" % [prefix, _escape_bbcode(_transient_companion_aside)]
+		)
+	_sync_companion_sign_for_surface(_transient_companion_aside != "")
 	_scroll_chat_to_end()
 
 
-func _append_player_message(text: String) -> void:
-	## 追加到历史，带「我」落款，不覆盖。
-	var line := text.strip_edges()
-	if line == "":
+func _sync_companion_sign_for_surface(aside_active: bool) -> void:
+	if aside_active:
+		_companion_sign.text = str(GameState.companion_name)
+		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_companion_sign.visible = true
 		return
-	_finish_typewriter_if_needed()
-	_chat_log.append_text("\n\n%s" % _format_player_line(line))
-	_scroll_chat_to_end()
-
-
-func _append_companion_message(text: String) -> void:
-	## 追加到历史；不擦掉前文。
-	var cleaned := text.strip_edges()
-	if cleaned != "":
-		GameState.record_chat_turn("companion", cleaned)
-		_arm_pending_offers_from_companion_line(cleaned)
-	_finish_typewriter_if_needed()
-	var shown := cleaned if cleaned != "" else "……"
-	_chat_log.append_text("\n\n%s" % _format_companion_line(shown))
-	_scroll_chat_to_end()
-	# 历史模式下不再用 visible_ratio 打字机（会把整段历史一起藏掉）。
-
-
-func _finish_typewriter_if_needed() -> void:
-	if _companion_tween != null and _companion_tween.is_valid():
-		_companion_tween.kill()
-	_typing = false
-	_chat_log.visible_ratio = 1.0
-	_continue_arrow.visible = false
-
-
-func _scroll_chat_to_end() -> void:
-	await get_tree().process_frame
-	if is_instance_valid(_chat_log):
-		_chat_log.scroll_to_line(_chat_log.get_line_count())
+	var history := GameState.get_chat_history_for_ui()
+	if history.is_empty():
+		_companion_sign.text = "—— 和她说说话 ——"
+		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_companion_sign.visible = true
+		return
+	var last := history[history.size() - 1]
+	if str(last.get("role", "")) == "companion":
+		_companion_sign.text = "── %s ──" % str(GameState.companion_name)
+		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	else:
+		_companion_sign.text = "—— 和她说说话 ——"
+		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_companion_sign.visible = true
 
 
 func _show_nudge_bar(react_type: String) -> void:
@@ -2757,10 +3095,56 @@ func _ambient_sidewrite_fallback() -> String:
 	return NpcFallback.ambient_sidewrite(GameState.weather_today)
 
 
+func _companion_farm_reaction(reason: String) -> void:
+	var line := PersonaGuard.reply_for_plot_click(reason).strip_edges()
+	if line != "":
+		_speak_companion_aside(line)
+
+
 func _system_hint(key: String) -> void:
 	var line := StoryNodeCopy.get_system(key).strip_edges()
-	if line != "":
+	if line == "":
+		return
+	if NARRATIVE_HINT_KEYS.has(key):
+		_show_narrative_hint(line)
+	else:
 		_hint(line)
+
+
+func _show_narrative_hint(text: String) -> void:
+	var line := text.strip_edges()
+	if line == "":
+		return
+	if _narrative_hint_tween != null and _narrative_hint_tween.is_valid():
+		_narrative_hint_tween.kill()
+	_companion_sign.text = line
+	_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_companion_sign.modulate = Color(0.55, 0.42, 0.30, 0.92)
+	_companion_sign.visible = true
+	_narrative_hint_tween = create_tween()
+	_narrative_hint_tween.tween_interval(NARRATIVE_HINT_SEC)
+	_narrative_hint_tween.tween_callback(_restore_companion_sign_after_narrative_hint)
+
+
+func _restore_companion_sign_after_narrative_hint() -> void:
+	_companion_sign.modulate = Color(1, 1, 1, 1)
+	_sync_companion_sign_for_surface(_transient_companion_aside != "")
+
+
+func _sync_player_movement_lock() -> void:
+	var farm := get_tree().get_first_node_in_group("farm_world")
+	if farm == null or not farm.has_method("get_player"):
+		return
+	var player: CharacterBody2D = farm.get_player()
+	if player == null or not player.has_method("set_movement_locked"):
+		return
+	var should_lock: bool = (
+		_story_beat_panel.visible
+		or _awakening_panel.visible
+		or _snuggle_blocked
+		or (farm.has_method("is_snuggle_active") and bool(farm.is_snuggle_active()))
+	)
+	player.set_movement_locked(should_lock)
 
 
 func _looks_like_identity_question(text: String) -> bool:
@@ -2770,17 +3154,45 @@ func _looks_like_identity_question(text: String) -> bool:
 	return false
 
 
+func _begin_d4_trust_telegraph() -> void:
+	if not GameState.IS_TEN_DAY_EDITION or GameState.game_day != 4:
+		return
+	if bool(GameState.get_ending_flags().get("d4_telegraph_ack_at_wake", false)):
+		return
+	if _day_cycle_overlay == null or _day_cycle_overlay.is_busy():
+		call_deferred("_begin_d4_trust_telegraph")
+		return
+	if _sleep_flow_active:
+		return
+	_set_gameplay_controls_enabled(false)
+	await _day_cycle_overlay.show_d4_trust_telegraph_blocking()
+	_set_gameplay_controls_enabled(true)
+
+
+func _show_d4_amnesia_hint_once() -> void:
+	if bool(GameState.get_ending_flags().get("d4_amnesia_hint_shown", false)):
+		return
+	GameState.set_ending_flag("d4_amnesia_hint_shown", true)
+	_system_hint("d4_amnesia_hint")
+
+
+func _maybe_show_d4_memory_panel_hint() -> void:
+	if GameState.game_day < 4:
+		return
+	if bool(GameState.get_ending_flags().get("d4_memory_panel_hint_shown", false)):
+		return
+	GameState.set_ending_flag("d4_memory_panel_hint_shown", true)
+	_system_hint("d4_memory_panel_hint")
+
+
 func _maybe_show_d4_amnesia_hint(player_text: String) -> void:
 	if GameState.game_day not in [4, 5]:
 		return
 	if not StoryDirector.is_stranger_mode():
 		return
-	if bool(GameState.get_ending_flags().get("d4_amnesia_hint_shown", false)):
-		return
 	if not _looks_like_identity_question(player_text):
 		return
-	GameState.set_ending_flag("d4_amnesia_hint_shown", true)
-	_system_hint("d4_amnesia_hint")
+	_show_d4_amnesia_hint_once()
 
 
 func _hint(text: String) -> void:
@@ -2804,6 +3216,7 @@ func _show_toast(text: String) -> void:
 	var line := text.strip_edges()
 	if line == "":
 		return
+	_cancel_opening_hint_sequence()
 	if _toast_tween != null and _toast_tween.is_valid():
 		_toast_tween.kill()
 	_toast.text = line
@@ -2815,6 +3228,10 @@ func _show_toast(text: String) -> void:
 
 
 func _apply_ui_scale() -> void:
+	var chat_panel := $ChatPanel as Control
+	if chat_panel:
+		chat_panel.offset_top = -CHAT_PANEL_HEIGHT
+		chat_panel.modulate.a = 1.0
 	var font := UIFontTheme.get_font()
 	if font != null:
 		for label in [_hud_day, _hud_stats, _hud_stage, $HUD/Margin/VBox/HintLabel, _task_title, _task_body, _task_timer, _chat_date, _player_echo, _companion_sign, _continue_arrow, _toast]:
@@ -2830,14 +3247,13 @@ func _apply_ui_scale() -> void:
 	_task_title.add_theme_font_size_override("font_size", 28)
 	_task_body.add_theme_font_size_override("font_size", 19)
 	_task_timer.add_theme_font_size_override("font_size", 18)
-	_chat_log.add_theme_font_size_override("normal_font_size", 19)
-	_chat_log.add_theme_color_override("default_color", Color(0.22, 0.17, 0.13, 1.0))
-	_chat_log.add_theme_constant_override("line_separation", 8)
+	_chat_log.add_theme_font_size_override("normal_font_size", 21)
+	_chat_log.add_theme_color_override("default_color", Color(0.24, 0.20, 0.16, 1.0))
+	_chat_log.add_theme_constant_override("line_separation", 10)
 	_player_echo.add_theme_font_size_override("font_size", 16)
-	_chat_date.add_theme_font_size_override("font_size", 15)
-	_chat_date.add_theme_color_override("font_color", Color(0.42, 0.34, 0.24, 1.0))
-	_companion_sign.add_theme_font_size_override("font_size", 22)
-	_companion_sign.add_theme_color_override("font_color", Color(0.28, 0.18, 0.10, 1.0))
+	_player_echo.add_theme_color_override("font_color", Color(0.55, 0.48, 0.41, 0.88))
+	_companion_sign.add_theme_font_size_override("font_size", 14)
+	_companion_sign.add_theme_color_override("font_color", Color(0.54, 0.43, 0.31, 0.92))
 	_continue_arrow.add_theme_font_size_override("font_size", 18)
 	_toast.add_theme_font_size_override("font_size", 20)
 	_toast.add_theme_color_override("font_color", Color(0.28, 0.18, 0.10, 1.0))
@@ -2874,24 +3290,17 @@ func _apply_cozy_theme() -> void:
 	for panel in [$TaskPanel]:
 		panel.add_theme_stylebox_override("panel", panel_style.duplicate())
 
-	## 话区：信纸底板——加高、加边、加阴影，和农场底色拉开层次。
+	## 话区：无边框渐隐底，不抢画面。
 	var chat_style := StyleBoxFlat.new()
-	chat_style.bg_color = Color(1.0, 0.97, 0.91, 0.98)
-	chat_style.border_color = Color(0.72, 0.55, 0.36, 0.72)
-	chat_style.set_border_width_all(2)
-	chat_style.border_width_top = 3
-	chat_style.set_corner_radius_all(0)
-	chat_style.corner_radius_top_left = 22
-	chat_style.corner_radius_top_right = 22
-	chat_style.corner_radius_bottom_left = 14
-	chat_style.corner_radius_bottom_right = 14
-	chat_style.content_margin_left = 6
-	chat_style.content_margin_top = 6
-	chat_style.content_margin_right = 6
-	chat_style.content_margin_bottom = 6
-	chat_style.shadow_color = Color(0.18, 0.1, 0.04, 0.28)
-	chat_style.shadow_size = 14
-	chat_style.shadow_offset = Vector2(0, -4)
+	chat_style.bg_color = Color(0.98, 0.94, 0.86, 0.72)
+	chat_style.border_width_top = 1
+	chat_style.border_color = Color(0.72, 0.55, 0.36, 0.18)
+	chat_style.set_border_width_all(0)
+	chat_style.border_width_top = 1
+	chat_style.content_margin_left = 12
+	chat_style.content_margin_top = 10
+	chat_style.content_margin_right = 12
+	chat_style.content_margin_bottom = 8
 	$ChatPanel.add_theme_stylebox_override("panel", chat_style)
 	$ChatPanel.visible = true
 	$ChatPanel.modulate = Color(1, 1, 1, 1)
@@ -2901,7 +3310,7 @@ func _apply_cozy_theme() -> void:
 		button.add_theme_stylebox_override("hover", button_hover.duplicate())
 		button.add_theme_stylebox_override("pressed", button_hover.duplicate())
 
-	## 输入行：嵌在话区里的「落笔槽」，白底金边。
+	## 输入行：白底 + 发送钮。
 	var input_style := StyleBoxFlat.new()
 	input_style.bg_color = Color(1.0, 0.99, 0.96, 1.0)
 	input_style.border_color = Color(0.78, 0.6, 0.38, 0.85)
@@ -2930,13 +3339,9 @@ func _apply_cozy_theme() -> void:
 	_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_companion_sign.visible = true
 	_companion_sign.modulate = Color(1, 1, 1, 1)
-	_companion_sign.add_theme_color_override("font_color", Color(0.26, 0.14, 0.08, 1.0))
-	_companion_sign.add_theme_font_size_override("font_size", 24)
-	if _chat_date:
-		_chat_date.text = _get_chat_date_label()
-		_chat_date.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_chat_date.add_theme_color_override("font_color", Color(0.42, 0.34, 0.24, 1.0))
-		_chat_date.add_theme_font_size_override("font_size", 15)
-	_chat_log.add_theme_constant_override("line_separation", 8)
-	_player_echo.add_theme_color_override("font_color", Color(0.32, 0.26, 0.2, 1.0))
-	_player_echo.add_theme_font_size_override("font_size", 17)
+	_companion_sign.add_theme_color_override("font_color", Color(0.54, 0.43, 0.31, 0.92))
+	_companion_sign.add_theme_font_size_override("font_size", 14)
+	_chat_log.add_theme_constant_override("line_separation", 10)
+	_player_echo.add_theme_color_override("font_color", Color(0.55, 0.48, 0.41, 0.88))
+	_player_echo.add_theme_font_size_override("font_size", 16)
+	_chat_input.custom_minimum_size = Vector2(0, 48)

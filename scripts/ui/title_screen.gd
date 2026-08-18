@@ -54,6 +54,11 @@ func _ready() -> void:
 	if _world_viewport_container != null and not _world_viewport_container.resized.is_connected(_sync_world_viewport_size):
 		_world_viewport_container.resized.connect(_sync_world_viewport_size)
 	_refresh_save_state()
+	call_deferred("_ensure_bgm")
+
+
+func _ensure_bgm() -> void:
+	BgmDirector.ensure_playing()
 
 
 func _process(delta: float) -> void:
@@ -362,8 +367,8 @@ func _build_menu() -> void:
 	_title_sign.anchor_right = 0.5
 	_title_sign.offset_left = -420
 	_title_sign.offset_right = 420
-	_title_sign.offset_top = 28
-	_title_sign.offset_bottom = 132
+	_title_sign.offset_top = 20
+	_title_sign.offset_bottom = 156
 	_title_sign.pivot_offset = Vector2(420, 20)
 	_menu_root.add_child(_title_sign)
 
@@ -392,7 +397,7 @@ func _build_menu() -> void:
 
 func _build_title_sign() -> Control:
 	_title_root = Control.new()
-	_title_root.custom_minimum_size = Vector2(840, 104)
+	_title_root.custom_minimum_size = Vector2(840, 136)
 	_title_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var title_holder := Control.new()
@@ -456,6 +461,14 @@ func _title_font() -> Font:
 	return UIFontTheme.get_font()
 
 
+func _style_system_dialog(dialog: Window) -> void:
+	var font := _title_font()
+	if font == null:
+		return
+	dialog.add_theme_font_override("font", font)
+	dialog.add_theme_font_size_override("font_size", 24)
+
+
 func _make_menu_button(label_text: String) -> Button:
 	var button := Button.new()
 	button.custom_minimum_size = MENU_BUTTON_SIZE
@@ -516,6 +529,8 @@ func _refresh_save_state() -> void:
 
 
 func _on_continue_pressed() -> void:
+	AmbientAudio.ensure_unlocked()
+	BgmDirector.ensure_unlocked()
 	if not GameState.ensure_save_migrated():
 		_refresh_save_state()
 		return
@@ -537,12 +552,15 @@ func _on_new_game_pressed() -> void:
 		)
 		dialog.canceled.connect(dialog.queue_free)
 		dialog.close_requested.connect(dialog.queue_free)
+		_style_system_dialog(dialog)
 		dialog.popup_centered()
 		return
 	_start_new_game_confirmed()
 
 
 func _start_new_game_confirmed() -> void:
+	AmbientAudio.ensure_unlocked()
+	BgmDirector.ensure_unlocked()
 	GameState.start_new_game_fresh()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 

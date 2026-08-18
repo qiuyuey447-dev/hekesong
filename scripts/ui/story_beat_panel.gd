@@ -66,6 +66,13 @@ func open(beat: Dictionary) -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_play_open_fade()
 	_show_step()
+	_play_beat_stinger()
+
+
+func _play_beat_stinger() -> void:
+	var kind := AmbientAudio.stinger_for_beat(_beat_id)
+	if kind != "":
+		AmbientAudio.play_narrative_stinger(kind)
 
 
 func close_panel() -> void:
@@ -173,6 +180,7 @@ func _present_page(with_turn_anim: bool) -> void:
 	_refresh_continue_label()
 
 	if with_turn_anim:
+		AmbientAudio.play_prop_sfx("page")
 		_page_turning = true
 		_kill_typewriter()
 		_kill_page_tween()

@@ -49,6 +49,7 @@ func open() -> void:
 	_sync_viewport_layout()
 	_play_open_fade()
 	_show_step()
+	AmbientAudio.play_narrative_stinger("d10_awakening")
 
 
 func close_panel() -> void:
@@ -232,6 +233,7 @@ func _on_continue_pressed() -> void:
 
 
 func _on_skip_pressed() -> void:
+	AmbientAudio.play_narrative_stinger("d10_awakening")
 	_finish(true)
 
 

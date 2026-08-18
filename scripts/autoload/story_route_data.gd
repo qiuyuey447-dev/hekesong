@@ -841,6 +841,8 @@ func _render_morning_ten_day(
 		3:
 			return StoryNodeCopy.get_morning("t10_d3") % [sky, companion]
 		4:
+			if bool(GameState.get_ending_flags().get("d4_telegraph_ack_at_wake", false)):
+				return ""
 			return StoryNodeCopy.get_morning("t10_d4_telegraph")
 		5:
 			return StoryNodeCopy.get_morning("t10_d5") % [sky, companion]

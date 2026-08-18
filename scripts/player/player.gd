@@ -24,6 +24,13 @@ func set_walk_bounds(rect: Rect2) -> void:
 	_walk_bounds = rect
 
 
+func _get_move_input() -> Vector2:
+	var keyboard := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	if keyboard.length_squared() > 0.0025:
+		return keyboard
+	return TouchControls.get_move_vector()
+
+
 func _ready() -> void:
 	add_to_group("player")
 	add_to_group("rain_target")
@@ -41,8 +48,7 @@ func sync_world_position() -> void:
 
 
 func is_moving() -> bool:
-	var input_dir := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	if input_dir != Vector2.ZERO:
+	if _get_move_input() != Vector2.ZERO:
 		return true
 	return velocity.length() > 8.0
 
@@ -67,7 +73,7 @@ func _physics_process(_delta: float) -> void:
 		_update_interact_cursor()
 		return
 
-	var input_dir := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	var input_dir := _get_move_input()
 	if input_dir != Vector2.ZERO:
 		velocity = input_dir.normalized() * MOVE_SPEED
 		_update_facing(input_dir)

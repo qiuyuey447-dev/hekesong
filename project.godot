@@ -14,8 +14,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 [application]
 
-config/name="hekesong"
-config/description="去狸的岛 · AI animal companion home demo"
+config/name="去狸的岛"
+config/description="十日完整故事 · 与 AI 伙伴小狸一起种田、聊天、留下约定；她会忘记你，也会在雾里慢慢认出你。"
 run/main_scene="res://scenes/title_screen.tscn"
 config/features=PackedStringArray("4.7")
 config/icon="res://icon.svg"
@@ -23,6 +23,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 GameState="*res://scripts/autoload/game_state.gd"
+DisplayBoot="*res://scripts/autoload/display_boot.gd"
 BehaviorCollector="*res://scripts/autoload/behavior_collector.gd"
 LeakageEngine="*res://scripts/autoload/leakage_engine.gd"
 TaskSystem="*res://scripts/autoload/task_system.gd"
@@ -35,6 +36,7 @@ StoryNodeCopy="*res://scripts/autoload/story_node_copy.gd"
 StoryRouteData="*res://scripts/autoload/story_route_data.gd"
 StorySlotService="*res://scripts/autoload/story_slot_service.gd"
 InteractCursor="*res://scripts/ui/interact_cursor.gd"
+TouchControls="*res://scripts/ui/touch_controls.gd"
 StoryBeatDirector="*res://scripts/autoload/story_beat_director.gd"
 WorldSnapshot="*res://scripts/autoload/world_snapshot.gd"
 NpcBridge="*res://scripts/autoload/npc_bridge.gd"
@@ -47,6 +49,7 @@ CompanionDirector="*res://scripts/autoload/companion_director.gd"
 CompanionAgent="*res://scripts/autoload/companion_agent.gd"
 UIFontTheme="*res://scripts/autoload/ui_theme.gd"
 BgmDirector="*res://scripts/autoload/bgm_director.gd"
+AmbientAudio="*res://scripts/autoload/ambient_audio.gd"
 MCPRuntime="*res://addons/godot_mcp/runtime/mcp_runtime.gd"
 PlayerNotebookService="*res://scripts/autoload/player_notebook_service.gd"
 

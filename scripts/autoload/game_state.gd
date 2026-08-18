@@ -35,8 +35,10 @@ const MATURE_STAGE := 3
 const SAVE_VERSION := 2
 const SAVE_FILE_NAME := "save_game.json"
 ## 仅用于迁移：曾用显示名对应的 userdata 目录（当前目录由 project.godot config/name 固定）
-const LEGACY_USER_DIRS := ["去你的岛"]
+const LEGACY_USER_DIRS := ["去你的岛", "hekesong"]
 const GAME_DISPLAY_NAME := "去狸的岛"
+const GAME_SUBTITLE := "十日完整故事"
+const GAME_PITCH := "十天里，一只会忘事的狐狸试图记住你——而你会发现，需要被反复认回的也不只是她。"
 
 const WEATHER_SUN := "sun"
 const WEATHER_RAIN := "rain"
@@ -81,6 +83,9 @@ var coins: int = 80
 var weather_today: String = WEATHER_SUN
 var weather_tomorrow_hint: String = WEATHER_RAIN
 var weather_seed: int = 0
+const AUDIO_PREFS_PATH := "user://audio_prefs.json"
+var bgm_volume_linear: float = 1.0
+var ambient_volume_linear: float = 1.0
 var time_of_day: String = TIME_MORNING
 var _period_elapsed: float = 0.0
 var _awaiting_sleep: bool = false
@@ -173,9 +178,24 @@ var long_term_memory: Dictionary = {
 }
 
 
+func get_about_dialog_text() -> String:
+	var lines: PackedStringArray = [
+		"%s · %s" % [GAME_DISPLAY_NAME, GAME_SUBTITLE],
+		"",
+		GAME_PITCH,
+		"",
+		"与 AI 伙伴小狸一起种田、聊天、留下约定；她会忘记你，也会在雾里慢慢认出你。多结局。",
+		"",
+		"· 联网时可走 AI 对话；断网时仍有完整固定剧本可通关。",
+		"· 第四天起小狸会「陌生化」——这是设定，不是存档坏了。",
+	]
+	return "\n".join(lines)
+
+
 func _ready() -> void:
 	ensure_save_migrated()
 	load_game()
+	_load_audio_prefs()
 	_ensure_runtime_defaults()
 	atmosphere_changed.emit()
 
@@ -2343,6 +2363,7 @@ func reset_daily_plots() -> void:
 func advance_day() -> void:
 	if not can_advance_day():
 		return
+	StoryBeatDirector.resolve_soft_paused_beats_before_advance()
 	var current_loop_day := get_loop_day()
 	var previous_weather := weather_today
 	_grow_crops_for_weather(previous_weather)
@@ -2772,6 +2793,51 @@ func _duplicate_dict_array(source: Array) -> Array[Dictionary]:
 		if item is Dictionary:
 			result.append(item.duplicate(true))
 	return result
+
+
+func _load_audio_prefs() -> void:
+	if not FileAccess.file_exists(AUDIO_PREFS_PATH):
+		return
+	var file := FileAccess.open(AUDIO_PREFS_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if parsed is not Dictionary:
+		return
+	var data: Dictionary = parsed
+	bgm_volume_linear = clampf(float(data.get("bgm_volume_linear", bgm_volume_linear)), 0.0, 1.0)
+	ambient_volume_linear = clampf(float(data.get("ambient_volume_linear", ambient_volume_linear)), 0.0, 1.0)
+	# 早期滑条误触会存 0，导致桌面端「完全没 BGM / 雨声」。
+	if bgm_volume_linear <= 0.001:
+		bgm_volume_linear = 1.0
+	if ambient_volume_linear <= 0.001:
+		ambient_volume_linear = 1.0
+
+
+func _save_audio_prefs() -> void:
+	var file := FileAccess.open(AUDIO_PREFS_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify({
+		"bgm_volume_linear": bgm_volume_linear,
+		"ambient_volume_linear": ambient_volume_linear,
+	}, "\t"))
+	file.close()
+
+
+func set_bgm_volume_linear(value: float) -> void:
+	bgm_volume_linear = clampf(value, 0.0, 1.0)
+	_save_audio_prefs()
+	if BgmDirector.has_method("apply_volume_preference"):
+		BgmDirector.apply_volume_preference()
+
+
+func set_ambient_volume_linear(value: float) -> void:
+	ambient_volume_linear = clampf(value, 0.0, 1.0)
+	_save_audio_prefs()
+	if AmbientAudio.has_method("apply_volume_preference"):
+		AmbientAudio.apply_volume_preference()
 
 
 func save_game() -> void:

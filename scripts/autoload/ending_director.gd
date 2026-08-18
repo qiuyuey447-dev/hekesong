@@ -542,7 +542,7 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 	steps.append({
 		"title": StoryNodeCopy.get_system("credits_title"),
 		"body": (
-			"《河可松》\n\n"
+			"%s\n\n" % GameState.GAME_DISPLAY_NAME
 			+ "策划 · 程序 · 你\n"
 			+ "小狸 · %s\n\n" % companion
 			+ "—— 这十日到此为止 ——"

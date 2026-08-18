@@ -130,7 +130,9 @@ func is_explicit_sleep_utterance(text: String) -> bool:
 	var normalized := _compact(_normalize(text))
 	if normalized == "":
 		return false
-	if "不睡" in normalized or "别睡" in normalized or "没睡" in normalized or "睡得好" in normalized:
+	if _looks_like_sleep_nudge_text(normalized):
+		return true
+	if _looks_like_sleep_refusal(normalized):
 		return false
 	for phrase in [
 		"睡觉吧", "去睡觉", "该睡觉了", "该睡了", "收工睡觉", "进入下一天",
@@ -141,15 +143,21 @@ func is_explicit_sleep_utterance(text: String) -> bool:
 	return normalized in ["睡觉", "睡吧", "晚安", "休息吧", "困了", "去睡", "休息", "睡了"]
 
 
+func looks_like_sleep_nudge(text: String) -> bool:
+	return _looks_like_sleep_nudge_text(_compact(_normalize(text)))
+
+
 func looks_like_sleep_request(text: String) -> bool:
 	if looks_like_status_inquiry(text):
 		return false
 	if is_explicit_sleep_utterance(text):
 		return true
+	if looks_like_sleep_nudge(text):
+		return true
 	var normalized := _compact(_normalize(text))
 	if normalized == "":
 		return false
-	if "不睡" in normalized or "别睡" in normalized or "没睡" in normalized or "睡得好" in normalized:
+	if _looks_like_sleep_refusal(normalized):
 		return false
 	for phrase in [
 		"该睡了", "睡啦", "睡咯", "睡觉哦", "去睡吧", "去歇息", "该歇息",
@@ -157,6 +165,36 @@ func looks_like_sleep_request(text: String) -> bool:
 	]:
 		if phrase in normalized:
 			return true
+	return false
+
+
+func _looks_like_sleep_nudge_text(compact: String) -> bool:
+	if compact == "":
+		return false
+	for phrase in [
+		"还不睡觉吗", "还不睡吗", "还不睡啊", "怎么还不睡", "还不去睡吗",
+		"还不去睡觉", "你还不睡", "还没睡吗", "还没睡觉吗", "该睡了吧",
+		"还不歇息吗", "还不睡嘛",
+	]:
+		if phrase in compact:
+			return true
+	if ("睡" in compact) and (compact.ends_with("吗") or compact.ends_with("么") or compact.ends_with("嘛")):
+		for cue in ["还不", "怎么还", "还没", "该睡"]:
+			if cue in compact:
+				return true
+	return false
+
+
+func _looks_like_sleep_refusal(compact: String) -> bool:
+	if _looks_like_sleep_nudge_text(compact):
+		return false
+	for phrase in ["不要睡", "别去睡", "不能睡", "不想睡", "睡什么", "别睡"]:
+		if phrase in compact:
+			return true
+	if compact.begins_with("不睡"):
+		return true
+	if "没睡" in compact and not compact.ends_with("吗") and not compact.ends_with("么"):
+		return true
 	return false
 
 
@@ -810,7 +848,10 @@ func _score_status(normalized: String) -> Dictionary:
 
 
 func _score_sleep(normalized: String) -> Dictionary:
+	if _looks_like_sleep_nudge_text(normalized):
+		return {"score": 14, "terms": ["sleep_nudge"]}
 	var keywords := {
+		"还不睡觉吗": 14, "还不睡吗": 14, "怎么还不睡": 13,
 		"睡觉吧": 12, "睡觉": 9, "睡吧": 9, "去睡觉": 9, "下一天": 10, "进入下一天": 10,
 		"下一天吧": 10, "明天吧": 8, "休息吧": 7, "困了": 7, "晚安": 8,
 		"结束今天": 8, "今天结束了": 8, "收工睡觉": 9,

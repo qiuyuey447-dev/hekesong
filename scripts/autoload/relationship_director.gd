@@ -74,6 +74,10 @@ func get_stranger_intimate_phrases() -> Array[String]:
 	return _string_array_rule("stranger_intimate_phrases", _default_stranger_intimate_phrases())
 
 
+func get_awkward_waiting_phrases() -> Array[String]:
+	return _string_array_rule("awkward_waiting_phrases", _default_awkward_waiting_phrases())
+
+
 func _string_array_rule(key: String, fallback: Array[String]) -> Array[String]:
 	var raw: Variant = _rules.get(key, [])
 	if raw is Array and not raw.is_empty():
@@ -99,6 +103,14 @@ func _default_stranger_ooc_phrases() -> Array[String]:
 func _default_stranger_intimate_phrases() -> Array[String]:
 	return [
 		"想你了", "亲爱的", "宝贝", "乖", "抱抱", "摸摸", "爱你", "好想你", "别走", "一直陪",
+	]
+
+
+func _default_awkward_waiting_phrases() -> Array[String]:
+	return [
+		"我在这儿等", "你忙你的", "我就在旁边看着", "我站这儿就行", "我在旁边看着",
+		"你忙，我就守着", "我看着就好", "不吵你", "你忙的话，我就在这儿", "我就在这儿",
+		"我就守着", "陪着你就好", "你忙你的，我", "我就在旁边", "我在这儿。你忙",
 	]
 
 

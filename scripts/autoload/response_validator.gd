@@ -62,6 +62,9 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 	if event in CHAT_LIKE_EVENTS and _is_literary_reply(cleaned):
 		return {"ok": false, "reason": "literary"}
 
+	if event in CHAT_LIKE_EVENTS and _is_awkward_waiting_reply(cleaned):
+		return {"ok": false, "reason": "awkward_waiting"}
+
 	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_action_mismatch_reply(cleaned, payload):
 		return {"ok": false, "reason": "action_mismatch"}
 
@@ -186,6 +189,13 @@ func _mentions_forbidden_crop(text: String) -> bool:
 
 func _is_literary_reply(text: String) -> bool:
 	for phrase in LITERARY_PHRASES:
+		if phrase in text:
+			return true
+	return false
+
+
+func _is_awkward_waiting_reply(text: String) -> bool:
+	for phrase in RelationshipDirector.get_awkward_waiting_phrases():
 		if phrase in text:
 			return true
 	return false

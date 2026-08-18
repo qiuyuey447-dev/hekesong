@@ -10,6 +10,12 @@ const PRIMARY_FONT_CANDIDATES := [
 ]
 const FALLBACK_FONT_PATH := "res://assets/fonts/zpix.ttf"
 const MIN_PRIMARY_FONT_BYTES := 100_000 # 真·中文字体通常数 MB；过小多半是 HTML 错误页
+## Web 无系统字体回退；启动时预热常用字，避免首屏豆腐块。
+const WEB_GLYPH_WARMUP := (
+	"去狸的岛继续新游戏退出确定取消开始这将删除当前存档从第一天重新开始"
+	+ "十日完整故事……（轻声对小狸说）发送知道了你是谁记性不好先睡吧"
+	+ "阿松小狸田边廊下树洞浇水萝卜约定记忆本子"
+)
 
 const DEFAULT_FONT_SIZE := 16
 const LINE_SPACING := 6
@@ -39,6 +45,8 @@ func _ready() -> void:
 	if not tree.scene_changed.is_connected(_on_scene_changed):
 		tree.scene_changed.connect(_on_scene_changed)
 	call_deferred("_apply_tree", tree.root)
+	if OS.has_feature("web"):
+		call_deferred("_warm_web_font_cache")
 
 
 func get_font() -> Font:
@@ -68,30 +76,36 @@ func _build_font() -> Font:
 
 
 func _try_load_primary_font(path: String) -> Font:
+	# Web/导出包：ResourceLoader 可靠；FileAccess 对 res:// 常不可用。
+	if ResourceLoader.exists(path):
+		var imported: Resource = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
+		if imported is FontFile:
+			return _finalize_primary_font((imported as FontFile).duplicate(true) as FontFile)
+
+	if OS.has_feature("web"):
+		return null
+
 	if not FileAccess.file_exists(path):
 		return null
 	if not _looks_like_real_font_file(path):
 		push_warning("UIFontTheme: 跳过损坏/过小的字体文件 %s（请重新下载）" % path)
 		return null
 
-	# 1) 已导入的资源优先
-	if ResourceLoader.exists(path):
-		var imported: Resource = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
-		if imported is FontFile:
-			return _wrap_primary_font(imported as FontFile)
-
-	# 2) 未导入时用动态加载，避免 "No loader found" 红错
 	var abs_path := ProjectSettings.globalize_path(path)
 	var dynamic := FontFile.new()
 	var err := dynamic.load_dynamic_font(abs_path)
 	if err != OK:
 		push_warning("UIFontTheme: load_dynamic_font 失败 path=%s err=%d" % [path, err])
 		return null
-	return _wrap_primary_font(dynamic)
+	return _finalize_primary_font(dynamic)
 
 
-func _wrap_primary_font(base: FontFile) -> Font:
+func _finalize_primary_font(base: FontFile) -> Font:
 	_tune_dynamic_font(base)
+	# Web 上 FontVariation + 大字号 CJK 易出豆腐块；桌面也统一用 FontFile 保一致。
+	if OS.has_feature("web"):
+		base.allow_system_fallback = false
+		return base
 	var fv := FontVariation.new()
 	fv.base_font = base
 	fv.variation_embolden = EMBOLDEN
@@ -101,19 +115,23 @@ func _wrap_primary_font(base: FontFile) -> Font:
 
 
 func _load_fallback_font() -> Font:
-	if not FileAccess.file_exists(FALLBACK_FONT_PATH):
-		return null
+	push_warning("UIFontTheme: 主字体未加载，回退 zpix（不含中文，Web 会显示方框）")
 	var fb: Resource = null
 	if ResourceLoader.exists(FALLBACK_FONT_PATH):
 		fb = ResourceLoader.load(FALLBACK_FONT_PATH, "", ResourceLoader.CACHE_MODE_REUSE)
-	if not (fb is FontFile):
+	if not (fb is FontFile) and not OS.has_feature("web"):
+		if not FileAccess.file_exists(FALLBACK_FONT_PATH):
+			return null
 		var dynamic := FontFile.new()
 		if dynamic.load_dynamic_font(ProjectSettings.globalize_path(FALLBACK_FONT_PATH)) != OK:
 			return null
 		fb = dynamic
-	(fb as FontFile).oversampling = 1.0
+	if not (fb is FontFile):
+		return null
+	var copy := (fb as FontFile).duplicate(true) as FontFile
+	copy.oversampling = 1.0
 	_using_fallback = true
-	return fb as Font
+	return copy
 
 
 func _looks_like_real_font_file(path: String) -> bool:
@@ -151,8 +169,23 @@ func _tune_dynamic_font(f: FontFile) -> void:
 	f.hinting = TextServer.HINTING_LIGHT
 	f.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
 	f.oversampling = 0.0
-	f.generate_mipmaps = true
-	f.allow_system_fallback = true
+	f.generate_mipmaps = not OS.has_feature("web")
+	# Web 无系统字体；桌面 CJK 靠打包字体，不依赖系统回退。
+	f.allow_system_fallback = false
+
+
+func _warm_web_font_cache() -> void:
+	if _font == null or not OS.has_feature("web"):
+		return
+	var probe := Label.new()
+	probe.visible = false
+	probe.add_theme_font_override("font", _font)
+	add_child(probe)
+	for size in [18, 28, 42, 78]:
+		probe.add_theme_font_size_override("font_size", size)
+		probe.text = WEB_GLYPH_WARMUP
+		probe.get_minimum_size()
+	probe.queue_free()
 
 
 func _apply_root_theme() -> void:
@@ -173,11 +206,18 @@ func _apply_root_theme() -> void:
 
 func _on_node_added(node: Node) -> void:
 	if node is Control:
-		call_deferred("_apply_control_deferred", node)
+		call_deferred("_apply_control_by_id", node.get_instance_id())
 
 
 func _on_scene_changed() -> void:
 	call_deferred("_apply_tree", get_tree().root)
+
+
+func _apply_control_by_id(instance_id: int) -> void:
+	var node := instance_from_id(instance_id)
+	if not is_instance_valid(node) or not (node is Control):
+		return
+	apply_control(node as Control)
 
 
 func _apply_control_deferred(node: Control) -> void:

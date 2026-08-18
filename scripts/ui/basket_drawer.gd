@@ -39,6 +39,8 @@ var _shop_button: Button
 var _market_button: Button
 var _memory_button: Button
 var _close_button: Button
+var _bgm_slider: HSlider
+var _ambient_slider: HSlider
 var _title_label: Label
 var _day_chip: Label
 var _open: bool = false
@@ -156,6 +158,10 @@ func refresh() -> void:
 		_sleep_button.disabled = true
 	if _day_chip:
 		_day_chip.text = GameState.get_day_period_label()
+	if _bgm_slider:
+		_bgm_slider.set_value_no_signal(GameState.bgm_volume_linear)
+	if _ambient_slider:
+		_ambient_slider.set_value_no_signal(GameState.ambient_volume_linear)
 	_refresh_today()
 	_refresh_sprout()
 
@@ -264,6 +270,7 @@ func _build() -> void:
 	_build_header(vbox)
 	_build_living_grid(vbox)
 	_build_today_strip(vbox)
+	_build_audio_strip(vbox)
 	_build_sleep_strip(vbox)
 	_build_entries(vbox)
 	_build_her_pocket(vbox)
@@ -569,6 +576,69 @@ func _load_item_icon(path: String) -> Texture2D:
 	var img2 := Image.create(16, 16, false, Image.FORMAT_RGBA8)
 	img2.fill(Color(0.7, 0.55, 0.3, 1))
 	return ImageTexture.create_from_image(img2)
+
+
+func _build_audio_strip(parent: VBoxContainer) -> void:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 0.97, 0.90, 0.96)
+	style.border_color = Color(0.70, 0.52, 0.32, 0.35)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(14)
+	style.content_margin_left = 12
+	style.content_margin_top = 10
+	style.content_margin_right = 12
+	style.content_margin_bottom = 10
+	panel.add_theme_stylebox_override("panel", style)
+	parent.add_child(panel)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	panel.add_child(col)
+
+	var title := Label.new()
+	title.text = "声音"
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color(0.48, 0.36, 0.24, 0.9))
+	col.add_child(title)
+
+	var bgm_row := _make_volume_row("音乐", GameState.bgm_volume_linear)
+	_bgm_slider = bgm_row["slider"] as HSlider
+	_bgm_slider.value_changed.connect(func(value: float) -> void:
+		GameState.set_bgm_volume_linear(value)
+	)
+	col.add_child(bgm_row["root"] as Node)
+
+	var ambient_row := _make_volume_row("环境", GameState.ambient_volume_linear)
+	_ambient_slider = ambient_row["slider"] as HSlider
+	_ambient_slider.value_changed.connect(func(value: float) -> void:
+		GameState.set_ambient_volume_linear(value)
+	)
+	col.add_child(ambient_row["root"] as Node)
+
+
+func _make_volume_row(label_text: String, initial: float) -> Dictionary:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+
+	var label := Label.new()
+	label.text = label_text
+	label.custom_minimum_size = Vector2(44, 0)
+	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_color_override("font_color", Color(0.42, 0.28, 0.14, 1.0))
+	row.add_child(label)
+
+	var slider := HSlider.new()
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.min_value = 0.05
+	slider.max_value = 1.0
+	slider.step = 0.05
+	slider.value = maxf(initial, 0.05)
+	slider.focus_mode = Control.FOCUS_NONE
+	row.add_child(slider)
+
+	return {"root": row, "slider": slider}
 
 
 func _build_sleep_strip(parent: VBoxContainer) -> void:
