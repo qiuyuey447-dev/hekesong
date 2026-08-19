@@ -360,8 +360,9 @@ func _test_ten_day_d4_morning_telegraph() -> void:
 	GameState.game_day = 4
 	_assert(StoryRouteData.should_inject_morning_opening("P_N05"), "D4 injects morning telegraph")
 	var text := StoryRouteData.render_morning_opening(false, "P_N05")
-	_assert("弄丢" in text, "D4 morning telegraphs lost name")
-	_assert("不是存档" in text or "失忆" in text, "D4 morning frames amnesia not save bug")
+	_assert("清晨风很凉" in text, "D4 morning opening line present")
+	_assert("像不认得" in text, "D4 morning telegraphs stranger gaze")
+	_assert("不是存档" not in text, "D4 morning omits save-bug explainer")
 	GameState.set_ending_flag("d4_telegraph_ack_at_wake", true)
 	_assert(
 		StoryRouteData.render_morning_opening(false, "P_N05").strip_edges() == "",

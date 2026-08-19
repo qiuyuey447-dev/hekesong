@@ -289,8 +289,8 @@ func _build_trust_panel() -> void:
 	_trust_body = Label.new()
 	_trust_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_trust_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_trust_body.add_theme_font_size_override("font_size", 18)
-	_trust_body.add_theme_color_override("font_color", LetterPaperKit.INK_SOFT)
+	_trust_body.add_theme_font_size_override("font_size", 26)
+	_trust_body.add_theme_color_override("font_color", LetterPaperKit.INK)
 	LetterPaperKit.apply_font(_trust_body)
 	stack.add_child(_trust_body)
 

@@ -186,7 +186,7 @@ func _tc04_d4_telegraph() -> void:
 				tele = str(lbl2.text)
 		await get_tree().process_frame
 		frames += 1
-	var ok: bool = "不是存档坏了" in tele or GameState.game_day >= 4
+	var ok: bool = "清晨风很凉" in tele or "像不认得" in tele or GameState.game_day >= 4
 	_record("TC04", "D4 telegraph", ok, "day=%d tele=%s" % [GameState.game_day, tele.substr(0, 80)])
 
 

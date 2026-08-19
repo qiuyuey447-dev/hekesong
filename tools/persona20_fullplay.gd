@@ -127,6 +127,7 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 		var chats: Array = spec.get("chats", [])
 		var chat_days: Array = spec.get("chat_days", [])
 		if chats.size() > 0 and (chat_days.is_empty() or day in chat_days):
+			await _await_npc_idle(90)
 			var msg := str(chats[mini(chat_ok + chat_fail, chats.size() - 1)])
 			var cres := await _send_chat_wait(msg)
 			if bool(cres.get("ok", false)):
@@ -166,14 +167,14 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 				run["stuck_day"] = day
 				break
 		if GameState.game_day == 4 and day == 3:
-			telegraph = telegraph or ("不是存档坏了" in " ".join(_notes))
+			telegraph = telegraph or ("清晨风很凉" in " ".join(_notes))
 		if GameState.game_day <= day:
 			_err("过天后仍是第 %d 天" % GameState.game_day)
 			run["stuck"] = true
 			run["stuck_day"] = GameState.game_day
 			break
 	run["knife"] = knife
-	run["telegraph"] = telegraph or ("不是存档坏了" in " ".join(_notes))
+	run["telegraph"] = telegraph or ("清晨风很凉" in " ".join(_notes))
 	run["sleep_blocked"] = sleep_blocked
 	run["chat_ok"] = chat_ok
 	run["chat_fail"] = chat_fail
@@ -291,7 +292,7 @@ func _flip_story(spec: Dictionary) -> PackedStringArray:
 			_print("%s LETTER %s | %s" % [_pid, title, body.substr(0, 90).replace("\n", " / ")])
 			if "这一句我不想拿它赖掉" in body or "拿这个砸我" in body:
 				_note("看到 D3 刀垫")
-			if "不是存档坏了" in body:
+			if "像不认得" in body and "清晨风很凉" in body:
 				_note("信纸里有 telegraph")
 		if bool(panel.get("_is_choice_step")) and not panel.get("_choice_buttons").is_empty():
 			var cid := _choice_for_spec(spec, panel)
@@ -395,7 +396,7 @@ func _sleep_through_night() -> bool:
 		if overlay != null and bool(overlay.get("_trust_waiting")):
 			var body_n: Node = overlay.get("_trust_body")
 			var tel := str(body_n.text) if body_n else ""
-			if "不是存档坏了" in tel:
+			if "清晨风很凉" in tel or "像不认得" in tel:
 				_note("D4 telegraph 实翻：%s" % tel.substr(0, 60).replace("\n", " "))
 			overlay.set("_trust_waiting", false)
 		if GameState.game_day > day0 and _ui != null and not bool(_ui.get("_sleep_flow_active")):
@@ -593,11 +594,24 @@ func _chat_placeholder() -> String:
 
 
 func _chat_tail() -> String:
+	## RichTextLabel.text 不反映 append_text()；以 GameState 当日聊天记录为准。
+	var turns := GameState.snapshot_today_chat_log()
+	if not turns.is_empty():
+		var last := turns[turns.size() - 1]
+		var line := str(last.get("text", "")).strip_edges()
+		if line.length() > 180:
+			return line.substr(line.length() - 180)
+		return line
 	if _ui == null:
 		return ""
 	var log: Node = _ui.get("_chat_log")
 	if log == null:
 		return ""
+	if log.has_method("get_parsed_text"):
+		var parsed := str(log.call("get_parsed_text")).strip_edges()
+		if parsed.length() > 180:
+			return parsed.substr(parsed.length() - 180)
+		return parsed
 	var t := str(log.get("text")).strip_edges()
 	if t.length() > 180:
 		return t.substr(t.length() - 180)
