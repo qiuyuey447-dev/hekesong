@@ -198,7 +198,43 @@ func _looks_like_sleep_refusal(compact: String) -> bool:
 	return false
 
 
+func looks_like_planting_rebuttal(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	for phrase in [
+		"不是你帮我种的", "不是我帮你种的", "不是你帮种", "你帮我种的",
+		"帮我种的不是你", "明明是你种", "是你帮我种", "不是你种的",
+		"种的不是我吗", "种的不是我", "不是我种的吗",
+	]:
+		if phrase in compact:
+			return true
+	if compact.contains("帮我种") and (compact.ends_with("吗") or compact.ends_with("么") or compact.ends_with("嘛")):
+		return true
+	return false
+
+
+func looks_like_chore_completion_statement(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if compact.ends_with("吗") or compact.ends_with("么") or compact.ends_with("嘛") or compact.ends_with("?"):
+		return false
+	for phrase in [
+		"收完了", "种完了", "浇完了", "买好了", "都收好了", "刚收完", "已经收完",
+		"都种好了", "刚种完", "都浇好了", "刚浇完", "种子买好了",
+	]:
+		if phrase in compact:
+			return true
+	return ShopDelegate.looks_like_completed_harvest_claim(text) \
+		or ShopDelegate.looks_like_completed_plant_claim(text) \
+		or ShopDelegate.looks_like_completed_water_claim(text) \
+		or ShopDelegate.looks_like_completed_shop_claim(text)
+
+
 func looks_like_status_inquiry(text: String) -> bool:
+	if looks_like_chore_completion_statement(text):
+		return false
 	var compact := _compact(_normalize(text))
 	if compact == "":
 		return false
@@ -206,6 +242,10 @@ func looks_like_status_inquiry(text: String) -> bool:
 		"熟了没", "熟了吗", "能收了吗", "能收吗", "可以收了吗", "收了没",
 		"田怎么样", "田里怎么样", "田里怎样", "长好了没", "长好了吗",
 		"看看田", "田况", "能收了没",
+		"种好了吗", "种了吗", "种上了吗", "你种完",
+		"浇好了吗", "浇了吗", "你浇完",
+		"收好了吗", "收了吗", "你收完",
+		"买好了吗", "买到了吗", "买完了吗", "种子买了吗",
 	]:
 		if phrase in compact:
 			return true
@@ -732,7 +772,7 @@ func _score_harvest_all(normalized: String) -> Dictionary:
 func _score_harvest(normalized: String) -> Dictionary:
 	var keywords := {
 		"收萝卜": 10, "收一下萝卜": 10, "帮忙收": 9, "帮我收": 10, "帮我摘": 10,
-		"帮我拔": 10, "去收萝卜": 10, "去收": 8, "收萝卜田": 10, "收获": 8,
+		"帮我拔": 10, "去收萝卜": 10, "去收吧": 10, "去收": 8, "收萝卜田": 10, "收获": 8,
 		"帮忙收获": 10, "帮我收获": 10, "摘萝卜": 10, "拔萝卜": 10,
 		"派你去收": 10, "叫你去收": 10, "代收": 9, "帮收": 9,
 	}

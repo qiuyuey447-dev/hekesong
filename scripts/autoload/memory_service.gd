@@ -697,6 +697,8 @@ func _prefs_snapshot() -> Dictionary:
 func _promise_snapshot() -> Dictionary:
 	if StoryDirector.is_stranger_mode():
 		return {}
+	if not GameState.has_story_promise():
+		return {}
 	var promise: Variant = GameState.long_term_memory.get("promise", {})
 	if promise is Dictionary:
 		return promise.duplicate(true)
@@ -772,6 +774,10 @@ func _pick_relevant_memories(event: String, extra: Dictionary, recent: Array, an
 
 func _memory_matches_event(entry: Dictionary, event: String, player_message: String) -> bool:
 	var kind := str(entry.get("kind", ""))
+	if kind == "promise" and not GameState.has_story_promise():
+		return false
+	if kind == "promise_done":
+		return false
 	var summary := str(entry.get("summary", ""))
 	match event:
 		"session_start":

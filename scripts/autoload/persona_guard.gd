@@ -28,7 +28,7 @@ func check_intent(intent: Dictionary) -> Dictionary:
 		if not can_delegate_harvest():
 			return {
 				"blocked": true,
-				"reply": "萝卜你来收。我馋，规矩不让。",
+				"reply": "你来收吧，我馋，规矩不让。点田就能收。",
 			}
 
 	if action == IntentParser.INTENT_SLEEP and TaskSystem.is_busy():
@@ -167,6 +167,87 @@ func reply_when_shop_not_done() -> String:
 	if seeds <= 0:
 		return "种子还没买。商店在东边。"
 	return "种子在篮子里。还没种。"
+
+
+func reply_for_chore_progress_inquiry(player_text: String) -> String:
+	## 玩家问「种完没/浇完没」时，按任务状态与田况实话答，勿信聊天上下文。
+	if IntentParser.looks_like_chore_completion_statement(player_text):
+		return ""
+	var compact := player_text.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "":
+		return ""
+	if not IntentParser.looks_like_status_inquiry(player_text):
+		return ""
+
+	var asks_plant := _asks_chore_kind(compact, ["种完", "种好了", "种了吗", "种上了", "你种完"])
+	var asks_water := _asks_chore_kind(compact, ["浇完", "浇好了", "浇了吗", "你浇完"])
+	var asks_harvest := _asks_chore_kind(compact, ["收完", "收好了", "收了吗", "你收完"])
+	var asks_shop := _asks_chore_kind(compact, ["买好了", "买到了", "买完了", "种子买了", "买种子了吗"])
+	if not (asks_plant or asks_water or asks_harvest or asks_shop):
+		return ""
+
+	if TaskSystem.is_busy():
+		match TaskSystem.current_task:
+			TaskSystem.TaskType.PLANT:
+				if asks_plant or (not asks_water and not asks_harvest and not asks_shop):
+					return "还在种呢，稍等一下。"
+			TaskSystem.TaskType.WATER:
+				if asks_water or (not asks_plant and not asks_harvest and not asks_shop):
+					return "还在浇水，马上好。"
+			TaskSystem.TaskType.HARVEST:
+				if asks_harvest or (not asks_plant and not asks_water and not asks_shop):
+					return "还在收萝卜，等一下。"
+			TaskSystem.TaskType.SHOP:
+				if asks_shop or (not asks_plant and not asks_water and not asks_harvest):
+					return "还在商店，一会儿就回来。"
+			_:
+				return "还在忙上一件事，稍等。"
+
+	var last := GameState.last_task_summary.strip_edges()
+	if asks_plant:
+		if "种" in last and ("好" in last or "完" in last):
+			return last if last.ends_with("。") else last + "。"
+		var summary := GameState.get_plot_summary()
+		if GameState.get_plantable_plot_ids().is_empty():
+			if int(summary.get("growing", 0)) > 0 or int(summary.get("harvestable", 0)) > 0:
+				return "种好了。苗都在田里了。"
+			if int(summary.get("empty", 0)) <= 0:
+				return "田都满了，没有新种的了。"
+		return "还没种呢。要我现在去种吗？"
+
+	if asks_water:
+		if "浇" in last and ("好" in last or "完" in last):
+			return last if last.ends_with("。") else last + "。"
+		var unwatered := GameState.get_unwatered_growing_plot_ids()
+		if unwatered.is_empty():
+			if int(GameState.get_plot_summary().get("growing", 0)) > 0:
+				return reply_when_already_watered()
+			return reply_when_cannot_water()
+		return "还没浇完。还有 %d 块田等着呢。" % unwatered.size()
+
+	if asks_harvest:
+		if "收" in last and ("好" in last or "完" in last):
+			return last if last.ends_with("。") else last + "。"
+		var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+		if harvestable <= 0:
+			return "还没有能收的。"
+		return "还没收呢。有 %d 块田可以收了。" % harvestable
+
+	if asks_shop:
+		if "商店" in last or "种子" in last:
+			return last if last.ends_with("。") else last + "。"
+		if int(GameState.get_item_count("turnip_seed")) > 0:
+			return "种子买好了，在篮子里。"
+		return reply_when_shop_not_done()
+
+	return ""
+
+
+func _asks_chore_kind(compact: String, markers: Array) -> bool:
+	for marker in markers:
+		if str(marker) in compact:
+			return true
+	return false
 
 
 func can_delegate_water() -> bool:

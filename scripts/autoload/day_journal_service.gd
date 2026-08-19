@@ -47,6 +47,7 @@ func build_entry(weather: String) -> Dictionary:
 	var chat_log := GameState.snapshot_today_chat_log()
 	var highlights := _build_highlights(events)
 	var chat_digest_rule := _rule_chat_digest(chat_log)
+	chat_digest_rule = _sanitize_chat_summary(chat_digest_rule, chat_log)
 	if chat_digest_rule.strip_edges() != "":
 		highlights = _append_unique_highlight(highlights, "聊天 · %s" % chat_digest_rule)
 	var tags := _build_tags(events, weather, chat_log)
@@ -85,20 +86,28 @@ func request_llm_enrich(entry: Dictionary, chat_log: Array) -> void:
 
 
 func apply_enrichment(day: int, data: Dictionary, used_fallback: bool = false) -> void:
-	var chat_summary := _sanitize_text(str(data.get("chat_summary", "")), MAX_CHAT_SUMMARY_LEN)
+	var entry := GameState.get_day_journal_entry(day)
+	var chat_log: Array = []
+	if not entry.is_empty():
+		if int(entry.get("day", -1)) == day and int(entry.get("chat_turns", 0)) > 0:
+			chat_log = GameState.snapshot_today_chat_log() if day == GameState.game_day else []
+	if chat_log.is_empty() and day < GameState.game_day:
+		chat_log = _chat_log_for_day(day)
+	var chat_summary := _sanitize_chat_summary(
+		str(data.get("chat_summary", "")),
+		chat_log
+	)
 	var companion_feel := _sanitize_text(str(data.get("companion_feel", "")), MAX_COMPANION_FEEL_LEN)
 	var salience := clampf(float(data.get("salience", 0.55)), 0.0, 1.0)
 
 	if chat_summary == "" and companion_feel == "":
-		var entry := GameState.get_day_journal_entry(day)
 		var fallback := str(entry.get("chat_digest_rule", "")).strip_edges()
 		if fallback != "":
-			chat_summary = fallback
+			chat_summary = _sanitize_chat_summary(fallback, chat_log)
 			salience = 0.55
 		else:
 			return
 
-	var entry := GameState.get_day_journal_entry(day)
 	if entry.is_empty():
 		return
 
@@ -410,6 +419,74 @@ func _sanitize_text(text: String, max_len: int) -> String:
 	if cleaned.length() <= max_len:
 		return cleaned
 	return cleaned.substr(0, max_len).strip_edges() + "…"
+
+
+const _INVITE_CLAIM_MARKERS := [
+	"她约你",
+	"约你明天",
+	"约明天",
+	"田边看萝卜",
+	"等萝卜长好",
+	"一起看了这片田",
+	"约定还在",
+	"说有话要说",
+]
+
+
+func _sanitize_chat_summary(summary: String, chat_log: Array) -> String:
+	var cleaned := _sanitize_text(summary, MAX_CHAT_SUMMARY_LEN)
+	if cleaned == "":
+		return ""
+	if _chat_log_supports_invite_claims(cleaned, chat_log):
+		return cleaned
+	return _strip_unverified_invite_claims(cleaned)
+
+
+func _chat_log_supports_invite_claims(summary: String, chat_log: Array) -> bool:
+	var needs_check := false
+	for marker in _INVITE_CLAIM_MARKERS:
+		if marker in summary:
+			needs_check = true
+			break
+	if not needs_check:
+		return true
+	var blob := ""
+	for item in chat_log:
+		if not item is Dictionary:
+			continue
+		blob += str(item.get("text", ""))
+	if blob.strip_edges() == "":
+		return false
+	for token in ["约", "田边", "一起看", "萝卜长好", "明天看"]:
+		if token in blob:
+			return true
+	return false
+
+
+func _strip_unverified_invite_claims(text: String) -> String:
+	var parts := text.split("。")
+	var kept: Array[String] = []
+	for part in parts:
+		var sentence := part.strip_edges()
+		if sentence == "":
+			continue
+		var is_invite := false
+		for marker in _INVITE_CLAIM_MARKERS:
+			if marker in sentence:
+				is_invite = true
+				break
+		if not is_invite:
+			kept.append(sentence)
+	if kept.is_empty():
+		return ""
+	var joined := "。".join(kept)
+	if not joined.ends_with("。"):
+		joined += "。"
+	return _sanitize_text(joined, MAX_CHAT_SUMMARY_LEN)
+
+
+func _chat_log_for_day(_day: int) -> Array:
+	return []
 
 
 func _truncate(text: String, max_len: int) -> String:

@@ -2192,9 +2192,6 @@ func harvest_turnip(plot_id: int) -> bool:
 		0.7,
 		{"plot_id": plot_id, "crop": CROP_TURNIP, "count": 1}
 	)
-	var promise: Dictionary = long_term_memory.get("promise", {})
-	if not promise.is_empty() and not bool(promise.get("fulfilled", false)):
-		fulfill_promise("萝卜熟了。你们一起看了这片田——约定还在。")
 	set_preference("fav_crop", CROP_TURNIP)
 	companion_world_event.emit("player_harvested", {"plot_id": plot_id, "count": 1})
 	save_game()
@@ -2358,6 +2355,8 @@ func record_player_chat(text: String) -> void:
 
 
 func _maybe_set_promise_from_chat(text: String) -> void:
+	if not StoryBeatDirector.is_beat_seen("P_N11") and not StoryBeatDirector.is_beat_seen("BE_N11"):
+		return
 	var existing: Dictionary = long_term_memory.get("promise", {})
 	var existing_id := str(existing.get("id", "")).strip_edges()
 	var existing_summary := str(existing.get("summary", "")).strip_edges()
@@ -2391,7 +2390,22 @@ func set_promise(promise_id: String, summary: String) -> void:
 		"summary": summary,
 		"fulfilled": false,
 	}
-	record_memory_event("promise", "你和小狸约定：%s" % summary, 0.95, {"promise_id": promise_id})
+	record_memory_event("promise", "小狸写进本子：%s" % summary, 0.95, {"promise_id": promise_id})
+
+
+func has_story_promise() -> bool:
+	## D3 信纸（P_N11）完成后才视为正式约定；此前 LLM 不得引用。
+	if not StoryBeatDirector.is_beat_seen("P_N11") and not StoryBeatDirector.is_beat_seen("BE_N11"):
+		return false
+	var promise: Dictionary = long_term_memory.get("promise", {})
+	return str(promise.get("summary", "")).strip_edges() != ""
+
+
+func get_story_promise_summary() -> String:
+	if not has_story_promise():
+		return ""
+	var promise: Dictionary = long_term_memory.get("promise", {})
+	return str(promise.get("summary", "")).strip_edges()
 
 
 func fulfill_promise(summary: String) -> void:

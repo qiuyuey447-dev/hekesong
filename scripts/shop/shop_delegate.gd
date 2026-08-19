@@ -247,6 +247,29 @@ static func looks_like_water_commitment(text: String) -> bool:
 	)
 
 
+static func looks_like_harvest_offer(text: String) -> bool:
+	## 小狸在征求：要不要代收熟萝卜。
+	var normalized := text.strip_edges()
+	if normalized.is_empty():
+		return false
+	if looks_like_shop_offer(normalized) or looks_like_plant_offer(normalized) or looks_like_water_offer(normalized):
+		return false
+	if not ("收" in normalized or "摘" in normalized):
+		return false
+	if not _looks_like_offer_question(normalized):
+		return false
+	return (
+		"帮忙收" in normalized
+		or "帮你收" in normalized
+		or "帮你摘" in normalized
+		or "我去收" in normalized
+		or "去收" in normalized
+		or "要不要" in normalized
+		or "先把" in normalized
+		or "能收" in normalized
+	)
+
+
 static func looks_like_harvest_commitment(text: String) -> bool:
 	var normalized := text.strip_edges()
 	if normalized.is_empty() or looks_like_harvest_declined(normalized):
@@ -254,7 +277,7 @@ static func looks_like_harvest_commitment(text: String) -> bool:
 	for phrase in [
 		"我现在就去收", "这就去收", "马上去收", "去收萝卜", "帮你收", "我去收",
 		"去帮你收", "把萝卜都收", "都收一遍", "帮你摘", "我去摘", "去摘萝卜",
-		"我这就去收", "这就帮你收",
+		"我这就去收", "这就帮你收", "去收吧", "收吧",
 	]:
 		if phrase in normalized:
 			return true

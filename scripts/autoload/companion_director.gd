@@ -52,7 +52,12 @@ func _emit_consider() -> void:
 func pick_speech() -> Dictionary:
 	if GameState.is_story_complete():
 		return {}
+	if GameState.is_pure_narrative_day():
+		return {}
 	if TaskSystem.is_busy():
+		return {}
+	## 当日信纸还没触发：别让渗漏/闲聊抢在定时邀请前开口。
+	if StoryBeatDirector.has_unfired_schedule_today():
 		return {}
 
 	if GameState.can_proactive_speech("leak"):
@@ -64,6 +69,20 @@ func pick_speech() -> Dictionary:
 				"beat_id": "",
 				"leak_context": leak_ctx,
 			}
+
+	var today_beat := StoryBeatDirector.get_today_beat_id()
+	if (
+		today_beat != ""
+		and not StoryBeatDirector.is_beat_seen(today_beat)
+		and _should_offer_casual(_consider_reason)
+	):
+		return {
+			"channel": "casual",
+			"line": "",
+			"beat_id": today_beat,
+			"beat_context": StoryBeatDirector.get_beat_context_for_llm(today_beat),
+			"leak_context": LeakageEngine.peek_leak_context(),
+		}
 
 	if _should_offer_casual(_consider_reason):
 		return {
@@ -194,7 +213,16 @@ func _goal_for(speech: Dictionary, beat_id: String) -> String:
 		"leak":
 			return "用这个玩家真实发生过的记忆，写一句身体先记得、脑子还对不上的话。禁止编造锚点里没有的事，禁止念信纸。"
 		_:
-			return "闲聊。只说你此刻所在的位置和正在做的事。不要报售价、行情、背包、种子包数、叶片或田块数字。不要推销种田。"
+			if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+				return (
+					"闲聊或轻轻点到今日节点氛围。可以接位置、天气、心情。"
+					+ "不要念信纸，不要报田块数字。禁止主动问要不要种/浇/收。"
+				)
+			return (
+				"闲聊。只说你此刻所在的位置和正在做的事。"
+				+ "可以接天气或心情。不要报售价、行情、背包、种子包数、叶片或田块数字。"
+				+ "禁止主动问要不要种/浇/收。"
+			)
 
 
 func _sprout_tier() -> int:

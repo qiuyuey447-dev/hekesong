@@ -117,6 +117,49 @@ func end_proactive_approach() -> void:
 		_idle_cooldown = randf_range(2.0, 4.0)
 
 
+func go_to_poi(poi_id: String, idle_label: String = "") -> bool:
+	if not _ready or _snuggle_paused or is_proactive_active():
+		return false
+	if not _current_job.is_empty() or TaskSystem.is_busy():
+		return false
+	if _activity == Activity.WORKING:
+		return false
+
+	var target := Vector2.ZERO
+	var poi_name := poi_id
+	for poi in _pois:
+		if str(poi.get("id", "")) == poi_id:
+			target = poi.get("pos", Vector2.ZERO)
+			poi_name = str(poi.get("name", poi_id))
+			break
+	if target == Vector2.ZERO:
+		return false
+
+	var arrive_label := idle_label.strip_edges()
+	if arrive_label == "":
+		arrive_label = "在%s" % poi_name
+
+	if _companion.global_position.distance_to(target) <= 48.0:
+		_set_activity(Activity.IDLE, arrive_label)
+		_idle_cooldown = randf_range(IDLE_WANDER_MIN, IDLE_WANDER_MAX)
+		return true
+
+	if _activity == Activity.WALKING:
+		if _visual != null and _visual.has_method("cancel_move"):
+			_visual.cancel_move()
+		if _visual != null and _visual.has_method("hide_status_bubble"):
+			_visual.hide_status_bubble()
+
+	_idle_stand_left = 0.0
+	_walk_to_target(target, "走向%s" % poi_name, "", func() -> void:
+		_set_activity(Activity.IDLE, arrive_label)
+		if _visual != null and _visual.has_method("hide_status_bubble"):
+			_visual.hide_status_bubble()
+		_idle_cooldown = randf_range(IDLE_WANDER_MIN, IDLE_WANDER_MAX)
+	, false)
+	return true
+
+
 func is_active() -> bool:
 	return _activity != Activity.IDLE or not _current_job.is_empty() or is_proactive_active()
 

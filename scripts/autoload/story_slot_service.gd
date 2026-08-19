@@ -122,8 +122,7 @@ func render_time_rhythm_hint(companion: String) -> String:
 
 
 func _base_context(max_lines: int = 3) -> Dictionary:
-	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
-	var promise_summary := str(promise.get("summary", "")).strip_edges()
+	var promise_summary := GameState.get_story_promise_summary()
 
 	var player := GameState.get_player_display_name()
 	if GameState.companion_can_say_player_name() and GameState.has_player_name_set():

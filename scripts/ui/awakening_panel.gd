@@ -38,6 +38,8 @@ func _ready() -> void:
 
 
 func open() -> void:
+	if visible:
+		return
 	_ending_id = EndingDirector.resolve_ending(false)
 	_steps = EndingDirector.get_awakening_steps(_ending_id)
 	_step_index = 0
@@ -155,13 +157,13 @@ func _refresh_continue_label() -> void:
 	var last_step := _step_index >= _steps.size() - 1
 	if not last_page:
 		_continue_button.text = "翻页"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	elif not last_step:
 		_continue_button.text = "继续"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	else:
 		_continue_button.text = "听完了"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	_pulse_arrow()
 
 
@@ -334,7 +336,7 @@ func _build_shell() -> void:
 	vbox.add_child(foot)
 
 	_hint_label = Label.new()
-	_hint_label.text = "↘"
+	_hint_label.text = ""
 	_hint_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hint_label.add_theme_font_size_override("font_size", 16)

@@ -148,6 +148,7 @@ func _build_shell() -> void:
 	_summary_label = Label.new()
 	_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_summary_label.add_theme_font_size_override("font_size", 20)
+	_summary_label.add_theme_color_override("font_color", LetterPaperKit.INK_SOFT)
 	root.add_child(_summary_label)
 
 	var columns := HBoxContainer.new()
@@ -195,6 +196,7 @@ func _wrap_box(title: String, content: RichTextLabel) -> PanelContainer:
 	label.text = title
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
+	label.add_theme_color_override("font_color", Color(0.42, 0.3, 0.18))
 	box.add_child(label)
 	box.add_child(content)
 	return card
@@ -206,4 +208,7 @@ func _make_rich_box(_name: String) -> RichTextLabel:
 	rich.bbcode_enabled = true
 	rich.scroll_active = true
 	rich.fit_content = false
+	rich.add_theme_font_size_override("normal_font_size", 18)
+	rich.add_theme_color_override("default_color", LetterPaperKit.INK)
+	rich.add_theme_color_override("font_selected_color", LetterPaperKit.INK_SOFT)
 	return rich

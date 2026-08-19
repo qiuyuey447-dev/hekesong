@@ -235,6 +235,8 @@ func _pick_anchor_for_node(node_id: String) -> Dictionary:
 		if not entry is Dictionary:
 			continue
 		var item: Dictionary = entry
+		if str(item.get("kind", "")) == "promise_done":
+			continue
 		var score := _node_match_score(item, node_id)
 		if score > best_score:
 			best_score = score
@@ -288,6 +290,8 @@ func _journal_memory_entries() -> Array[Dictionary]:
 
 
 func _promise_memory_entry() -> Dictionary:
+	if not GameState.has_story_promise():
+		return {}
 	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
 	var summary := str(promise.get("summary", "")).strip_edges()
 	if summary == "":
@@ -364,6 +368,8 @@ func _pick_anchor() -> Dictionary:
 		if not entry is Dictionary:
 			continue
 		var item: Dictionary = entry
+		if str(item.get("kind", "")) == "promise_done":
+			continue
 		var summary := str(item.get("summary", "")).strip_edges()
 		if summary == "":
 			continue

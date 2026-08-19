@@ -79,9 +79,16 @@ var _farm_chain_after_task: String = ""
 var _pending_water_offer: bool = false
 var _pending_shop_offer: bool = false
 var _pending_plant_offer: bool = false
+var _pending_harvest_offer: bool = false
 var _skip_player_chat_reply: bool = false
 var _pending_feed_item_id: String = ""
 var _pending_feed_refuse: bool = false
+var _last_chat_activity_msec: int = 0
+var _deferred_invite_speech: Dictionary = {}
+var _pending_invite_story_beat_id: String = ""
+var _deferred_invite_flush_token: int = 0
+var _invite_proactive_dispatched: bool = false
+var _recent_citation_summaries: Array = []
 
 ## 去 AI 味：LLM 调试副作用（delta/引用/mock 来源）默认不进对话流，仅调试时开启。
 const SHOW_LLM_DEBUG: bool = false
@@ -93,7 +100,14 @@ const CHAT_PANEL_HEIGHT := 292.0
 const OPENING_HINT_HOLD_SEC := 5.0
 const OPENING_HINT_FADE_IN_SEC := 0.25
 const OPENING_HINT_FADE_OUT_SEC := 0.45
+const TOAST_FONT_SIZE := 20
+const TOAST_OUTLINE_SIZE := 8
+const OPENING_HINT_FONT_SIZE := 40
+const OPENING_HINT_OUTLINE_SIZE := 16
 const NARRATIVE_HINT_SEC := 8.0
+## 玩家聊天结束后，暂缓剧情邀请 / 信纸弹窗，避免与自由对话抢通道。
+const CHAT_NARRATIVE_GRACE_SEC := 15.0
+const STORY_BEAT_AFTER_INVITE_DELAY_SEC := 5.0
 const NARRATIVE_HINT_KEYS := {
 	"d4_amnesia_hint": true,
 	"d4_memory_panel_hint": true,
@@ -226,6 +240,62 @@ func _setup_dialogue_panel() -> void:
 func _process(_delta: float) -> void:
 	if _chat_input.has_focus() and _is_player_moving():
 		_chat_input.release_focus()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_enter_focus_chat_event(event):
+		return
+	if _chat_input.has_focus():
+		return
+	if not _can_focus_chat_input():
+		return
+	_ensure_audio_unlocked(event)
+	_chat_input.grab_focus()
+	get_viewport().set_input_as_handled()
+
+
+func _is_enter_focus_chat_event(event: InputEvent) -> bool:
+	if not event is InputEventKey:
+		return false
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return false
+	return key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER
+
+
+func _can_focus_chat_input() -> bool:
+	if not is_instance_valid(_chat_input) or not _chat_input.editable or not _chat_input.visible:
+		return false
+	if _is_gameplay_locked() or GameState.is_story_complete():
+		return false
+	if (
+		_story_beat_panel.visible
+		or _awakening_panel.visible
+		or _ending_panel.visible
+		or _name_prompt_panel.visible
+		or _week_wrap_panel.visible
+		or _task_panel.visible
+		or _story_choice_blocked
+		or _story_beat_blocked
+	):
+		return false
+	if (
+		_shop_panel.visible
+		or _feed_panel.visible
+		or _market_panel.visible
+		or _memory_panel.visible
+	):
+		return false
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus == null:
+		return true
+	if focus == _chat_input:
+		return true
+	if focus is LineEdit or focus is TextEdit:
+		return false
+	if focus is BaseButton:
+		return false
+	return true
 
 
 func _on_chat_input_gui_input(event: InputEvent) -> void:
@@ -388,6 +458,7 @@ func _on_opening_movement_hint_timeout() -> void:
 func _finish_opening_hint_sequence() -> void:
 	_opening_hint_phase = 0
 	_bump_opening_hint_token()
+	_restore_toast_layout()
 	GameState.set_ending_flag("tutorial_controls_hint_seen", true)
 
 
@@ -410,10 +481,35 @@ func _fade_in_opening_toast(text: String) -> void:
 	_cancel_opening_hint_tween()
 	if _toast_tween != null and _toast_tween.is_valid():
 		_toast_tween.kill()
+	_apply_opening_toast_layout()
 	_toast.text = line
 	_toast.modulate.a = 0.0
 	_opening_hint_tween = create_tween()
 	_opening_hint_tween.tween_property(_toast, "modulate:a", 1.0, OPENING_HINT_FADE_IN_SEC)
+
+
+func _apply_opening_toast_layout() -> void:
+	_toast.set_anchors_preset(Control.PRESET_CENTER)
+	_toast.offset_left = -420.0
+	_toast.offset_top = -96.0
+	_toast.offset_right = 420.0
+	_toast.offset_bottom = 96.0
+	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_toast.add_theme_font_size_override("font_size", OPENING_HINT_FONT_SIZE)
+	_toast.add_theme_constant_override("outline_size", OPENING_HINT_OUTLINE_SIZE)
+
+
+func _restore_toast_layout() -> void:
+	_toast.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_toast.offset_left = -320.0
+	_toast.offset_top = 70.0
+	_toast.offset_right = 320.0
+	_toast.offset_bottom = 112.0
+	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_toast.add_theme_font_size_override("font_size", TOAST_FONT_SIZE)
+	_toast.add_theme_constant_override("outline_size", TOAST_OUTLINE_SIZE)
 
 
 func _fade_out_opening_toast(on_finished: Callable = Callable()) -> void:
@@ -434,6 +530,7 @@ func _cancel_opening_hint_sequence() -> void:
 	_opening_hint_phase = 0
 	_bump_opening_hint_token()
 	_cancel_opening_hint_tween()
+	_restore_toast_layout()
 
 
 func _needs_touch_controls_hint() -> bool:
@@ -471,6 +568,9 @@ func _maybe_remind_story_invite() -> void:
 		return
 	var speech := StoryBeatDirector.try_invite(true)
 	if speech.is_empty():
+		return
+	if _should_defer_story_invite():
+		_queue_deferred_story_invite(speech)
 		return
 	CompanionDirector.mark_delivered(speech)
 	_request_proactive_speech(speech)
@@ -687,6 +787,8 @@ func _setup_basket_drawer() -> void:
 	_basket_drawer.market_requested.connect(_on_basket_market)
 	_basket_drawer.memory_requested.connect(_on_basket_memory)
 	_basket_drawer.sleep_requested.connect(_on_basket_sleep)
+	_basket_drawer.main_menu_requested.connect(_on_basket_main_menu)
+	_basket_drawer.exit_game_requested.connect(_on_basket_exit_game)
 	# 篮子按钮保持在抽屉之上，方便再点一次收起。
 	if _basket_button:
 		_basket_button.move_to_front()
@@ -882,6 +984,20 @@ func _on_basket_sleep() -> void:
 	sleep_from_companion()
 
 
+func _on_basket_main_menu() -> void:
+	if _basket_drawer:
+		_basket_drawer.close_drawer()
+	GameState.save_game()
+	get_tree().change_scene_to_file("res://scenes/title_screen.tscn")
+
+
+func _on_basket_exit_game() -> void:
+	if _basket_drawer:
+		_basket_drawer.close_drawer()
+	GameState.save_game()
+	get_tree().quit()
+
+
 func _maybe_announce_sprout_growth() -> void:
 	var tier := BasketDrawer.sprout_tier_for_affection(GameState.affection)
 	if _last_sprout_tier_seen < 0:
@@ -971,6 +1087,9 @@ func _request_casual_chat() -> void:
 
 
 func _request_proactive_speech(speech: Dictionary) -> void:
+	if _is_story_invite_speech(speech) and _should_defer_story_invite():
+		_queue_deferred_story_invite(speech)
+		return
 	_pending_proactive_speech = speech.duplicate(true)
 	_begin_proactive_approach_for_speech()
 
@@ -978,6 +1097,8 @@ func _request_proactive_speech(speech: Dictionary) -> void:
 func _deliver_pending_proactive_speech() -> void:
 	if _pending_proactive_speech.is_empty():
 		return
+	if str(_pending_proactive_speech.get("channel", "")) == "invite":
+		_invite_proactive_dispatched = true
 	var extra := CompanionDirector.collect_llm_extra(_pending_proactive_speech)
 	if _basket_drawer:
 		extra["sprout_word"] = _basket_drawer.get_sprout_word()
@@ -986,7 +1107,14 @@ func _deliver_pending_proactive_speech() -> void:
 
 func _begin_proactive_approach_for_speech() -> void:
 	_proactive_chase_spoken.clear()
-	_hint(StoryNodeCopy.get_system("proactive_nudge"))
+	var channel := str(_pending_proactive_speech.get("channel", ""))
+	# 剧情邀请自带台词，不再叠「她好像有话跟你说」toast，避免与聊天抢注意力。
+	if channel != "invite":
+		_hint(StoryNodeCopy.get_system("proactive_nudge"))
+	# 已在聊天里：直接接一句邀请，不再追跑打断。
+	if channel == "invite" and _is_chat_session_active():
+		_deliver_pending_proactive_speech()
+		return
 	if CompanionAgent.is_proactive_active():
 		_deliver_pending_proactive_speech()
 		return
@@ -996,6 +1124,7 @@ func _begin_proactive_approach_for_speech() -> void:
 
 
 func _finish_proactive_approach() -> void:
+	_invite_proactive_dispatched = false
 	if not CompanionAgent.is_proactive_active():
 		_proactive_chase_spoken.clear()
 		return
@@ -1003,12 +1132,113 @@ func _finish_proactive_approach() -> void:
 	_proactive_chase_spoken.clear()
 
 
+func _is_story_invite_speech(speech: Dictionary) -> bool:
+	return str(speech.get("channel", "")).strip_edges() == "invite"
+
+
+func _mark_chat_activity() -> void:
+	_last_chat_activity_msec = Time.get_ticks_msec()
+	_schedule_deferred_invite_flush(CHAT_NARRATIVE_GRACE_SEC + 0.35)
+
+
+func _is_chat_session_active() -> bool:
+	if _npc_busy:
+		return true
+	if _pending_chat_text.strip_edges() != "":
+		return true
+	if _queued_busy_chat.strip_edges() != "":
+		return true
+	if _last_chat_activity_msec <= 0:
+		return false
+	return (Time.get_ticks_msec() - _last_chat_activity_msec) < int(CHAT_NARRATIVE_GRACE_SEC * 1000.0)
+
+
+func _should_defer_story_invite() -> bool:
+	return _is_chat_session_active()
+
+
+func _queue_deferred_story_invite(speech: Dictionary) -> void:
+	if speech.is_empty():
+		return
+	_deferred_invite_speech = speech.duplicate(true)
+	_schedule_deferred_invite_flush(CHAT_NARRATIVE_GRACE_SEC + 0.35)
+
+
+func _schedule_deferred_invite_flush(delay_sec: float = 0.5) -> void:
+	if not is_inside_tree():
+		return
+	_deferred_invite_flush_token += 1
+	var token := _deferred_invite_flush_token
+	get_tree().create_timer(maxf(delay_sec, 0.05)).timeout.connect(func() -> void:
+		if token != _deferred_invite_flush_token:
+			return
+		_flush_deferred_story_invite()
+	, CONNECT_ONE_SHOT)
+
+
+func _flush_deferred_story_invite() -> void:
+	if _pending_invite_story_beat_id != "":
+		if _should_defer_story_invite() or _npc_busy or _story_beat_panel.visible:
+			_schedule_deferred_invite_flush(STORY_BEAT_AFTER_INVITE_DELAY_SEC)
+			return
+		var beat_id := _pending_invite_story_beat_id
+		_pending_invite_story_beat_id = ""
+		if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+			_maybe_show_story_beat(true)
+		return
+	if _deferred_invite_speech.is_empty():
+		return
+	if _should_defer_story_invite() or _story_beat_panel.visible:
+		_schedule_deferred_invite_flush(CHAT_NARRATIVE_GRACE_SEC + 0.35)
+		return
+	if _npc_busy:
+		_schedule_deferred_invite_flush(0.6)
+		return
+	var speech := _deferred_invite_speech.duplicate(true)
+	_deferred_invite_speech = {}
+	var beat_id := str(speech.get("beat_id", "")).strip_edges()
+	if beat_id != "" and not GameState.was_invite_spoken_for(beat_id):
+		CompanionDirector.mark_delivered(speech)
+	_request_proactive_speech(speech)
+
+
+func _maybe_open_story_after_invite(beat_id: String) -> void:
+	beat_id = beat_id.strip_edges()
+	if beat_id == "" or StoryBeatDirector.is_beat_seen(beat_id):
+		return
+	## 邀请台词已出口后，信纸不再被聊天保护期 indefinitely 挡住。
+	get_tree().create_timer(STORY_BEAT_AFTER_INVITE_DELAY_SEC).timeout.connect(func() -> void:
+		if _story_beat_panel.visible or StoryBeatDirector.is_beat_seen(beat_id):
+			return
+		_pending_invite_story_beat_id = ""
+		_maybe_show_story_beat(true)
+	, CONNECT_ONE_SHOT)
+
+
+func _ensure_pending_invite_delivered() -> void:
+	if _pending_proactive_speech.is_empty():
+		return
+	if str(_pending_proactive_speech.get("channel", "")) != "invite":
+		return
+	if _invite_proactive_dispatched:
+		return
+	_deliver_pending_proactive_speech()
+
+
 func _on_companion_chase_shout() -> void:
+	if _should_defer_story_invite():
+		return
 	var line := NpcFallback.proactive_chase_line(_proactive_chase_spoken)
 	if line.strip_edges() == "":
 		return
 	_proactive_chase_spoken.append(line)
 	_append_companion_message(line)
+	if (
+		str(_pending_proactive_speech.get("channel", "")) == "invite"
+		and not _invite_proactive_dispatched
+		and _proactive_chase_spoken.size() >= 2
+	):
+		call_deferred("_deliver_pending_proactive_speech")
 
 
 func _casual_fallback_line() -> String:
@@ -1041,6 +1271,8 @@ func _on_debug_awakening_requested() -> void:
 
 func _maybe_show_awakening() -> void:
 	if not GameState.should_show_awakening():
+		return
+	if _awakening_panel.visible:
 		return
 	if _story_choice_blocked or _ending_panel.visible:
 		return
@@ -1077,6 +1309,8 @@ func _on_awakening_finished(skipped: bool) -> void:
 
 
 func _on_scheduled_story_beat(beat_id: String) -> void:
+	if GameState.should_show_awakening():
+		return
 	if _story_beat_blocked or _is_gameplay_locked():
 		return
 	if StoryBeatDirector.should_auto_open_beat(beat_id):
@@ -1086,20 +1320,28 @@ func _on_scheduled_story_beat(beat_id: String) -> void:
 
 
 func _request_scheduled_story_invite(beat_id: String) -> void:
-	if _npc_busy or _story_beat_panel.visible:
+	if _story_beat_panel.visible:
 		call_deferred("_request_scheduled_story_invite", beat_id)
 		return
+	if not _pending_proactive_speech.is_empty():
+		_pending_proactive_speech = {}
+		_invite_proactive_dispatched = false
+		_finish_proactive_approach()
 	var speech := StoryBeatDirector.build_scheduled_invite(beat_id)
 	if speech.is_empty():
 		call_deferred("_maybe_show_story_beat", true)
+		return
+	if _should_defer_story_invite():
+		_queue_deferred_story_invite(speech)
+		return
+	if _npc_busy:
+		call_deferred("_request_scheduled_story_invite", beat_id)
 		return
 	CompanionDirector.mark_delivered(speech)
 	_request_proactive_speech(speech)
 
 
 func _has_unfinished_story_beat_today() -> bool:
-	if _is_d9_soft_paused():
-		return false
 	if StoryBeatDirector.has_blocking_today_beat():
 		return true
 	if StoryBeatDirector.has_pending_night_beat():
@@ -1227,27 +1469,6 @@ func _on_story_beat_finished(beat_id: String) -> void:
 	call_deferred("_maybe_trigger_persona_shift")
 
 
-func _is_d9_soft_paused() -> bool:
-	var paused := str(GameState.get_ending_flags().get("d9_soft_pause_beat", "")).strip_edges()
-	if paused == "":
-		return false
-	return paused == StoryBeatDirector.get_pending_night_beat_id()
-
-
-func _handle_d9_pause_choice(choice_id: String, beat_id: String) -> void:
-	if choice_id == "d9_defer":
-		GameState.set_ending_flag("d9_soft_pause_beat", beat_id)
-		GameState.save_game()
-		_system_hint("d9_pause_saved")
-		_story_beat_panel.close_panel()
-		_story_beat_blocked = false
-		GameState.pop_time_pause()
-		call_deferred("_sync_player_movement_lock")
-		return
-	GameState.set_ending_flag("d9_soft_pause_beat", "")
-	_story_beat_panel.finish_now()
-
-
 func _maybe_show_d5_notebook_trust_hint() -> void:
 	if bool(GameState.get_ending_flags().get("d5_notebook_trust_hint_shown", false)):
 		return
@@ -1268,9 +1489,6 @@ func _maybe_show_notebook_tutorial() -> void:
 
 func _on_story_beat_choice(choice_id: String) -> void:
 	var beat_id := _story_beat_panel.get_beat_id()
-	if beat_id.ends_with("_N20c") and choice_id in ["d9_continue", "d9_defer"]:
-		_handle_d9_pause_choice(choice_id, beat_id)
-		return
 	if beat_id == "P_N06p":
 		_handle_w2_beat_choice(choice_id)
 		return
@@ -1795,6 +2013,9 @@ func _on_task_completed(task_type: TaskSystem.TaskType, _summary: String, game_f
 	_refresh_hud()
 	if _farm_chain_after_task == "water_all" and task_type == TaskSystem.TaskType.PLANT:
 		_farm_chain_after_task = ""
+		var planted_line := NpcFallback.task_complete(game_facts, {})
+		if planted_line.strip_edges() != "":
+			_append_companion_message(planted_line)
 		_try_start_water_all_after_buy(true)
 		return
 	if _auto_seed_shop_flow and task_type == TaskSystem.TaskType.SHOP:
@@ -1832,6 +2053,8 @@ func _handle_day_advanced_content() -> void:
 	if GameState.should_force_story_finale():
 		call_deferred("_maybe_force_story_finale")
 		return
+	if GameState.game_day == GameState.FINAL_GAME_DAY:
+		StoryBeatDirector.resolve_finale_day_carryover()
 	if GameState.should_show_awakening():
 		call_deferred("_maybe_show_awakening")
 		return
@@ -1948,12 +2171,28 @@ func sleep_from_companion() -> void:
 
 
 func _try_sleep_from_chat() -> void:
+	_queued_busy_chat = ""
 	if _has_unfinished_story_beat_today():
 		if StoryBeatDirector.should_force_schedule_now():
 			call_deferred("_maybe_show_story_beat", true)
 		_system_hint("blocking_sleep_story")
+		_append_companion_message("信纸还没翻完呢。看完再睡？")
 		return
+	TaskSystem.reconcile_stale_task()
+	if TaskSystem.is_busy():
+		_system_hint("blocking_companion_busy")
+		_append_companion_message("等我忙完手上这一阵，再一起睡。")
+		return
+	if not _can_begin_sleep(true):
+		return
+	_append_companion_message(_sleep_ack_line())
 	sleep_from_companion()
+
+
+func _sleep_ack_line() -> String:
+	if GameState.weather_today == GameState.WEATHER_RAIN:
+		return "好，睡吧。这雨声听着就困。"
+	return "好，睡吧。"
 
 
 func _send_chat(text: String) -> void:
@@ -1964,20 +2203,44 @@ func _send_chat_async(text: String) -> void:
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
 		return
+	if _is_gameplay_locked():
+		return
+
+	# 睡觉指令不排队等 LLM：否则会在次日清晨才被当作普通聊天处理。
+	if IntentParser.looks_like_sleep_request(trimmed):
+		CompanionDirector.notify_player_active()
+		_mark_chat_activity()
+		_clear_companion_aside()
+		_chat_input.clear()
+		GameState.record_player_chat(trimmed)
+		_append_player_message(trimmed)
+		_try_sleep_from_chat()
+		return
+
 	if _npc_busy:
 		_queued_busy_chat = trimmed
 		if _feed_panel:
 			_feed_panel.set_status_message("小狸还在想上一句话…")
 		_hint("小狸还在想上一句话…")
 		return
-	if _is_gameplay_locked():
-		return
 
 	CompanionDirector.notify_player_active()
+	_mark_chat_activity()
 	_clear_companion_aside()
 	_chat_input.clear()
 	GameState.record_player_chat(trimmed)
 	_append_player_message(trimmed)
+
+	_ensure_pending_invite_delivered()
+
+	if _try_answer_chore_progress_inquiry(trimmed):
+		return
+
+	if _try_answer_chore_completion_statement(trimmed):
+		return
+
+	if _try_answer_planting_rebuttal(trimmed):
+		return
 
 	if MemoryService.looks_like_pin_request(trimmed):
 		var pin_result := MemoryService.pin_from_player_chat(trimmed)
@@ -1995,10 +2258,6 @@ func _send_chat_async(text: String) -> void:
 			_append_companion_message("好。那我先停下手上的。")
 			return
 
-	if IntentParser.looks_like_sleep_request(trimmed):
-		_try_sleep_from_chat()
-		return
-
 	if _try_handle_seed_quantity_reply(trimmed):
 		return
 
@@ -2012,6 +2271,9 @@ func _send_chat_async(text: String) -> void:
 		return
 
 	if _try_handle_plant_offer_reply(trimmed):
+		return
+
+	if _try_handle_harvest_offer_reply(trimmed):
 		return
 
 	if _try_start_plant_from_correction(trimmed):
@@ -2119,7 +2381,7 @@ func _on_npc_reply_ready(
 		_append_companion_message(spoken)
 		_finish_proactive_approach()
 		if channel == "invite" and beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
-			call_deferred("_maybe_show_story_beat", true)
+			_maybe_open_story_after_invite(beat_id)
 		return
 
 	if event == "player_chat" and _should_discard_player_chat_reply():
@@ -2174,6 +2436,7 @@ func _on_npc_reply_ready(
 		):
 			call_deferred("_try_sleep_from_chat")
 		_maybe_show_d4_amnesia_hint(_pending_chat_text)
+		_mark_chat_activity()
 		_pending_chat_text = ""
 		return
 
@@ -2213,7 +2476,7 @@ func _on_npc_request_failed(request_id: int, event: String, _error: String) -> v
 		_append_companion_message(casual)
 		_finish_proactive_approach()
 		if channel == "invite" and beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
-			call_deferred("_maybe_show_story_beat", true)
+			_maybe_open_story_after_invite(beat_id)
 		return
 	if event == "companion_react":
 		_set_npc_busy(false)
@@ -2382,6 +2645,12 @@ func _show_citation_feedback(request_id: int, used_fallback: bool) -> void:
 	var line := MemoryService.build_citation_feedback(cited_ids)
 	if line == "":
 		return
+	var dedupe_key := line.strip_edges()
+	if dedupe_key in _recent_citation_summaries:
+		return
+	_recent_citation_summaries.append(dedupe_key)
+	if _recent_citation_summaries.size() > 8:
+		_recent_citation_summaries.remove_at(0)
 	## 渗漏期去掉括号，让「想起来」直接混进她的话里；其余日子保留括号做旁注。
 	if _should_show_leak_citation():
 		_append_companion_message(_format_leak_citation(line))
@@ -2400,6 +2669,71 @@ func _format_leak_citation(raw: String) -> String:
 	if cleaned.begins_with("（") and cleaned.ends_with("）"):
 		cleaned = cleaned.substr(1, cleaned.length() - 2).strip_edges()
 	return cleaned
+
+
+func _try_answer_chore_progress_inquiry(text: String) -> bool:
+	var line := PersonaGuard.reply_for_chore_progress_inquiry(text)
+	if line.strip_edges() == "":
+		return false
+	_append_companion_message(line)
+	return true
+
+
+func _try_answer_chore_completion_statement(text: String) -> bool:
+	if not IntentParser.looks_like_chore_completion_statement(text):
+		return false
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	_pending_harvest_offer = false
+	_pending_plant_offer = false
+	_pending_water_offer = false
+	if "收" in compact or "摘" in compact:
+		var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+		if harvestable > 0:
+			_append_companion_message("嗯，还有 %d 块没收呢。" % harvestable)
+		else:
+			_append_companion_message("好，收干净了。")
+		return true
+	if "种" in compact:
+		if GameState.get_plantable_plot_ids().is_empty():
+			_append_companion_message("好，种上了。")
+		else:
+			_append_companion_message("还有空田，要接着种吗？")
+		return true
+	if "浇" in compact:
+		if GameState.get_unwatered_growing_plot_ids().is_empty():
+			_append_companion_message("好，都浇过了。")
+		else:
+			_append_companion_message("还有几块没浇，要我去吗？")
+		return true
+	if "买" in compact or "种子" in compact:
+		_append_companion_message("好，种子在篮子里了。")
+		return true
+	return false
+
+
+func _maybe_sync_companion_move_from_line(text: String) -> void:
+	if text.strip_edges() == "":
+		return
+	if TaskSystem.is_busy() or CompanionAgent.is_proactive_active():
+		return
+	if _line_commits_to_porch(text):
+		CompanionAgent.go_to_poi("porch", "在廊下")
+
+
+func _line_commits_to_porch(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "" or "廊下" not in compact:
+		return false
+	if compact.contains("要不要") and compact.contains("廊下"):
+		return false
+	for phrase in [
+		"走到廊下", "去廊下", "到廊下", "往廊下", "回廊下",
+		"占了廊下", "占廊下", "廊下坐", "廊下躲", "廊下歇",
+		"在廊下坐", "在廊下等", "咱们廊下", "我们廊下",
+	]:
+		if phrase in compact:
+			return true
+	return false
 
 
 func _blocks_farm_chores(show_hint: bool = false) -> bool:
@@ -2453,6 +2787,8 @@ func _try_execute_chat_intent(from_local_first: bool = false) -> void:
 			_pending_water_offer = false
 		if action in [IntentParser.INTENT_PLANT, IntentParser.INTENT_PLANT_ALL]:
 			_pending_plant_offer = false
+		if action in [IntentParser.INTENT_HARVEST, IntentParser.INTENT_HARVEST_ALL]:
+			_pending_harvest_offer = false
 		if action == IntentParser.INTENT_OPEN_SHOP:
 			_pending_shop_offer = false
 		if bool(result.get("auto_seed_flow", false)):
@@ -2492,6 +2828,88 @@ func _try_execute_chat_intent(from_local_first: bool = false) -> void:
 	var fail_line2 := PersonaGuard.check_execution_failure(intent, result)
 	if fail_line2.strip_edges() != "":
 		_append_companion_message(fail_line2)
+
+
+func _try_handle_harvest_offer_reply(text: String) -> bool:
+	## 玩家对「要不要我收」回「好/收吧」时，直接开收田，不再只靠 LLM 嘴上答应。
+	if not _pending_harvest_offer:
+		return false
+
+	var trimmed := text.strip_edges()
+	if ShopDelegate.is_negative_reply(trimmed):
+		_pending_harvest_offer = false
+		_append_companion_message("好，你想收的时候再叫我。")
+		return true
+
+	var direct_harvest := ShopDelegate.looks_like_harvest_commitment(trimmed)
+	var intent := IntentParser.parse(trimmed)
+	var intent_harvest := str(intent.get("intent", "")) in [
+		IntentParser.INTENT_HARVEST,
+		IntentParser.INTENT_HARVEST_ALL,
+	]
+	if not ShopDelegate.is_affirmative_reply(trimmed) and not direct_harvest and not intent_harvest:
+		return false
+
+	_pending_harvest_offer = false
+	if not PersonaGuard.can_delegate_harvest():
+		_append_companion_message(PersonaGuard.reply_when_cannot_harvest())
+		_chat_action_handled = true
+		return true
+
+	if not _ensure_companion_task_ready():
+		_pending_harvest_offer = true
+		_append_companion_message("我还在忙上一件事，稍等一下再吩咐我。")
+		return true
+
+	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+	if harvestable <= 0:
+		_append_companion_message("还没有能收的。")
+		_chat_action_handled = true
+		return true
+
+	var harvest_intent := {
+		"intent": IntentParser.INTENT_HARVEST_ALL,
+		"plot_id": -1,
+		"raw_text": trimmed,
+	}
+	var harvest_result := ActionExecutor.execute(harvest_intent)
+	if bool(harvest_result.get("executed", false)):
+		_append_companion_message("好，我这就去收。")
+		_chat_action_handled = true
+		return true
+
+	var fail_line := PersonaGuard.check_execution_failure(harvest_intent, harvest_result)
+	_append_companion_message(
+		fail_line if fail_line.strip_edges() != "" else PersonaGuard.reply_when_cannot_harvest()
+	)
+	_chat_action_handled = true
+	return true
+
+
+func _try_answer_planting_rebuttal(text: String) -> bool:
+	if not IntentParser.looks_like_planting_rebuttal(text):
+		return false
+	if not PersonaGuard.can_delegate_harvest():
+		_append_companion_message("是，我帮过。种是帮手，收得你来——我馋，规矩不让。")
+		return true
+	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+	if harvestable <= 0:
+		_append_companion_message("是，我帮过。可这会儿还没熟的呢。")
+		return true
+	if not _ensure_companion_task_ready():
+		_append_companion_message("是，我帮过。等我忙完这一阵就去收。")
+		return true
+	var harvest_result := ActionExecutor.execute({
+		"intent": IntentParser.INTENT_HARVEST_ALL,
+		"plot_id": -1,
+		"raw_text": text,
+	})
+	if bool(harvest_result.get("executed", false)):
+		_append_companion_message("是，我帮过。那这次我来收。")
+		_chat_action_handled = true
+		return true
+	_append_companion_message("是，我帮过。可这会儿还走不开，稍等。")
+	return true
 
 
 func _try_handle_seed_quantity_reply(text: String) -> bool:
@@ -2615,16 +3033,14 @@ func _begin_plant_and_water_chain() -> void:
 func _try_start_water_all_after_buy(from_plant_chain: bool = false) -> void:
 	var unwatered := GameState.get_unwatered_growing_plot_ids()
 	if unwatered.is_empty():
-		if from_plant_chain:
-			_append_companion_message("种好了。")
 		return
 	if TaskSystem.start_water_all_task():
 		_pending_water_offer = false
 		if from_plant_chain:
-			_append_companion_message("种好了，我去给它们浇点水。")
+			_append_companion_message("我去给它们浇点水。")
 		return
 	if from_plant_chain:
-		_append_companion_message("种好了。")
+		pass
 	_offer_water_help()
 
 
@@ -2942,6 +3358,7 @@ func _try_execute_companion_followthrough(reply_text: String, api_intent: Dictio
 		var harvest_result := ActionExecutor.execute(harvest_intent)
 		if bool(harvest_result.get("executed", false)):
 			_chat_action_handled = true
+			_pending_harvest_offer = false
 			return
 		var harvest_fail := PersonaGuard.check_execution_failure(harvest_intent, harvest_result)
 		_append_companion_message(
@@ -2988,16 +3405,21 @@ func _arm_pending_offers_from_companion_line(text: String) -> void:
 	var has_shop := ShopDelegate.looks_like_shop_offer(text)
 	var has_plant := (not has_shop) and ShopDelegate.looks_like_plant_offer(text)
 	var has_water := ShopDelegate.looks_like_water_offer(text)
-	if not (has_shop or has_plant or has_water):
+	var has_harvest := (
+		not has_shop and not has_plant and not has_water
+		and ShopDelegate.looks_like_harvest_offer(text)
+	)
+	if not (has_shop or has_plant or has_water or has_harvest):
 		return
 	_pending_shop_offer = has_shop
 	_pending_plant_offer = has_plant
 	_pending_water_offer = has_water
+	_pending_harvest_offer = has_harvest
 
 
 func _maybe_arm_pending_from_last_companion_line() -> void:
 	## 玩家回「好/行」时，若 pending 未挂上（LLM 措辞偏口语），再扫上一句小狸台词。
-	if _pending_shop_offer or _pending_plant_offer or _pending_water_offer:
+	if _pending_shop_offer or _pending_plant_offer or _pending_water_offer or _pending_harvest_offer:
 		return
 	var last_line := _last_companion_chat_line()
 	if last_line != "":
@@ -3013,6 +3435,21 @@ func _last_companion_chat_line() -> String:
 			continue
 		return str(turn.get("text", "")).strip_edges()
 	return ""
+
+
+func _recent_companion_line_texts(limit: int = 6) -> Array:
+	var out: Array = []
+	for turn in GameState.get_recent_chat_turns(12):
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "companion":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line != "":
+			out.append(line)
+	if out.size() <= limit:
+		return out
+	return out.slice(out.size() - limit, out.size())
 
 
 func _start_companion_plant_task() -> bool:
@@ -3089,7 +3526,19 @@ func _append_player_message(text: String) -> void:
 
 
 func _append_companion_message(text: String, ephemeral: bool = false) -> void:
-	var cleaned := text.strip_edges()
+	var raw := text.strip_edges()
+	_maybe_sync_companion_move_from_line(raw)
+	var cleaned := ResponseValidator.strip_stage_directions(raw)
+	if cleaned != "" and ResponseValidator.looks_repetitive_companion_line(cleaned):
+		var previous := _recent_companion_line_texts(8)
+		cleaned = NpcFallback.pick_non_duplicate([
+			"嗯，我在。",
+			"……听着呢。",
+			"有事你说。",
+			"好，我在这儿。",
+		], previous)
+		if cleaned.strip_edges() == "":
+			return
 	_transient_companion_aside = ""
 	if cleaned != "":
 		GameState.record_chat_turn("companion", cleaned, ephemeral)
@@ -3374,12 +3823,14 @@ func _apply_ui_scale() -> void:
 	_companion_sign.add_theme_font_size_override("font_size", 14)
 	_companion_sign.add_theme_color_override("font_color", Color(0.54, 0.43, 0.31, 0.92))
 	_continue_arrow.add_theme_font_size_override("font_size", 18)
-	_toast.add_theme_font_size_override("font_size", 20)
+	_toast.add_theme_font_size_override("font_size", TOAST_FONT_SIZE)
 	_toast.add_theme_color_override("font_color", Color(0.28, 0.18, 0.10, 1.0))
+	_toast.add_theme_constant_override("outline_size", TOAST_OUTLINE_SIZE)
 	_chat_input.add_theme_font_size_override("font_size", 18)
 	for button in [_confirm_button, _cancel_button, _skip_button, _chat_send, _nudge_ok_button, _nudge_later_button]:
 		button.add_theme_font_size_override("font_size", 18)
-	_chat_send.add_theme_font_size_override("font_size", 16)
+	_chat_send.custom_minimum_size = Vector2(96, 48)
+	_chat_send.add_theme_font_size_override("font_size", 18)
 	_next_day_button.add_theme_font_size_override("font_size", 18)
 	_market_button.add_theme_font_size_override("font_size", 18)
 	_memory_button.add_theme_font_size_override("font_size", 18)

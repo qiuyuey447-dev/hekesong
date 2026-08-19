@@ -540,20 +540,24 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 		"kind": "title_card",
 	})
 	steps.append({
-		"title": StoryNodeCopy.get_system("credits_title"),
-		"body": (
-			"%s\n\n" % GameState.GAME_DISPLAY_NAME
-			+ "策划 · 程序 · 你\n"
-			+ "小狸 · %s\n\n" % companion
-			+ "—— 这十日到此为止 ——"
-		),
+		"title": "",
+		"body": "\n".join(get_credits_animation_lines()),
 		"kind": "credits",
 	})
 	return steps
 
 
+func get_credits_animation_lines() -> Array[String]:
+	return [
+		GameState.GAME_DISPLAY_NAME,
+		"感谢体验",
+		"感谢陪伴小狸的你",
+	]
+
+
 func _pick_journal_lines(max_lines: int) -> Array[String]:
 	var lines: Array[String] = []
+	var seen: Dictionary = {}
 	for entry in GameState.day_journal:
 		if not entry is Dictionary:
 			continue
@@ -561,21 +565,24 @@ func _pick_journal_lines(max_lines: int) -> Array[String]:
 		if highlights is Array and highlights.size() > 0:
 			for highlight in highlights:
 				var line := str(highlight).strip_edges()
-				if line != "":
-					lines.append("· %s" % line)
+				if line == "" or _is_duplicate_journal_line(line, seen):
+					continue
+				lines.append("· %s" % line)
 			continue
 		var summary := str(entry.get("summary", "")).strip_edges()
-		if summary != "":
+		if summary != "" and not _is_duplicate_journal_line(summary, seen):
 			lines.append("· %s" % summary)
 	for summary_entry in GameState.get_week_summaries():
 		for highlight in summary_entry.get("highlights", []):
 			var line := str(highlight).strip_edges()
-			if line != "":
-				lines.append("· %s" % line)
+			if line == "" or _is_duplicate_journal_line(line, seen):
+				continue
+			lines.append("· %s" % line)
 		for highlight in summary_entry.get("merged_highlights", []):
 			var line := str(highlight).strip_edges()
-			if line != "":
-				lines.append("· %s" % line)
+			if line == "" or _is_duplicate_journal_line(line, seen):
+				continue
+			lines.append("· %s" % line)
 	if lines.is_empty():
 		return [
 			"· 她登门那天，你说可以留下帮工。",
@@ -585,6 +592,28 @@ func _pick_journal_lines(max_lines: int) -> Array[String]:
 	if lines.size() > max_lines:
 		return lines.slice(lines.size() - max_lines, lines.size())
 	return lines
+
+
+func _journal_line_key(line: String) -> String:
+	var cleaned := line.strip_edges()
+	if cleaned.begins_with("聊天 ·"):
+		cleaned = cleaned.substr(4).strip_edges()
+	if cleaned.begins_with("·"):
+		cleaned = cleaned.substr(1).strip_edges()
+	return cleaned
+
+
+func _is_duplicate_journal_line(line: String, seen: Dictionary) -> bool:
+	var key := _journal_line_key(line)
+	if key == "":
+		return true
+	if seen.has(key):
+		return true
+	for existing in seen.keys():
+		if key in str(existing) or str(existing) in key:
+			return true
+	seen[key] = true
+	return false
 
 
 func finalize_ending(ending_id: String) -> void:

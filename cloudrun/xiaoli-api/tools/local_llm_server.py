@@ -502,6 +502,10 @@ def looks_like_status_inquiry(message: str) -> bool:
         "熟了没", "熟了吗", "能收了吗", "能收吗", "可以收了吗", "收了没",
         "田怎么样", "田里怎么样", "田里怎样", "长好了没", "长好了吗",
         "看看田", "田况", "能收了没",
+        "种完", "种好了吗", "种了吗", "种上了吗", "你种完",
+        "浇完", "浇好了吗", "浇了吗", "你浇完",
+        "收完", "收好了吗", "收了吗", "你收完",
+        "买好了吗", "买到了吗", "买完了吗", "种子买了吗",
     )
     if any(p in text for p in phrases):
         return True
@@ -1377,9 +1381,14 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 田务/没种/浇过/未熟：随口 1～2 句，腹黑可爱；禁止「要不要我帮」「说个数字」菜单腔；与客户端点田 aside 同口径。",
         "- 不要 JSON、markdown、括号旁白、角色名前缀（不要写「小狸：」）。",
         "- 禁止输出 intent:/plot_id:/confidence: 等内部字段名或调试信息。",
+        "- 禁止输出「主线节点」「导演·勿复述」「变体」「锚点」等系统/导演字段。",
         "- 1～3 句口语。前期可轻微诙谐（泥、红薯、拨苗），不油、不讲主题；陌生化时立刻收起玩笑。",
         "- 记性不好就直说记不清、对不上。禁止比喻和文艺腔：雨帘、隔着雾、心里发紧、模模糊糊、毛玻璃、像隔着什么看。",
         "- 禁止主动报售价、行情、大盘、手头几包种子。说话必须符合你现在的位置和正在做的事。",
+        "- 亲密度不足（world_snapshot.can_harvest=false）时，禁止主动问「要不要我收/帮你收/去收萝卜」；可说「你来收，我馋规矩不让」。",
+        "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收或说明为何不能代收。",
+        "- 未完成 D3 约定节点（P_N11）前，禁止提「等萝卜长好一起看」或任何约定；禁止说「你说过/我们约过」。",
+        "- 约定须按 game_state.promise：这是她写进本子的提议，不要改口成玩家先开口。",
         "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",
         "- persona_vector、long_term_prefs、behavior_inferred 仅影响语气；禁止当作已发生的共同经历、具体日期或统计习惯引用。具体往事只能来自「可引用记忆」。",
@@ -1628,7 +1637,7 @@ def _beat_context_line(payload: dict[str, Any]) -> str:
     profile = str(ctx.get("profile") or payload.get("beat_profile", "")).strip()
     emotion = str(ctx.get("emotion") or payload.get("beat_emotion", "")).strip()
     invite_tone = str(ctx.get("invite_tone") or payload.get("invite_tone", "")).strip()
-    parts = [f"今日主线节点：{beat_id}（变体 {variant_id}）"]
+    parts = [f"【导演·勿复述】锚点 {beat_id} / {variant_id}"]
     if emotion:
         parts.append(f"节点情绪：{emotion}")
     if tier:
@@ -1979,6 +1988,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "好回复示例：玩家说「睡觉吧」→「好。今天先到这儿。」并返回 intent=sleep。",
             "坏回复示例：玩家说「睡觉吧」→报雨、叶片、种子包数，不推进下一天。",
             "坏回复示例：今日晴天 →「等雨停了再去镇上」「这雨下得人心潮」——错误，今日无雨。",
+            "若 recent_chat_turns 里已有「雨下得/雨下得挺密/廊下倒是干爽」等句，本轮禁止再用相同开头或相同雨势描写；换话题或接玩家上一句。",
             "输出 JSON：reply、intent、plot_id、confidence、affection_delta、bond_delta、"
             "memory_recovery_delta、relationship_reason、cited_memory_ids(字符串数组)。",
         ])
@@ -2148,7 +2158,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
         intent_rule = {
             "invite": "任务=邀请：用你自己的话把玩家轻轻带到今天的节点。不要念信纸正文，不要剧透选项，不要点名点击界面。语气须符合 beat_context 里的亲密度档与 profile。",
             "leak": "任务=渗漏：只用「渗漏锚点」里真实发生过的事，写一句身体先记得、脑子还对不上的话。禁止编造锚点没有的情节。",
-            "casual": "任务=闲聊：只说你此刻所在的位置和正在做的事。可以碰到天气。禁止报背包、种子包数、叶片、田块数字。禁止推销种田。",
+            "casual": "任务=闲聊：只说你此刻所在的位置和正在做的事。可以碰到天气或心情。禁止报背包、种子包数、叶片、田块数字。禁止主动问要不要种/浇/收。",
         }.get(intent, "任务=主动开口：1～2 句口语。")
         loc_line = ""
         companion_snap = (payload.get("world_snapshot") or {}).get("companion") or {}
@@ -2180,10 +2190,13 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_citable_memories(payload),
             "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿、留一步；S2 贴=敢靠近、敢提约定。profile=mid 时取 S1 近、勿写满 S2。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
+            "若 world_snapshot.can_harvest 为 false，禁止主动邀约代收萝卜。",
+            "若 memory/promise 为空或 D3 约定节点未发生，禁止提「等萝卜长好一起看」；禁止说「你说过/我们约过」。",
             f"关系阶段：{rel.get('stage', '?')}，亲密度 {rel.get('affection', '?')}，档 {affection_tier}，段 {sprout_tier}"
             + (f"，状态词「{sprout_word}」可极轻点一下" if sprout_word and sprout_tier >= 2 else "")
             + "。",
             f"禁止重复：{json.dumps(prev[-8:] if isinstance(prev, list) else [], ensure_ascii=False)}",
+            "若禁止重复里已有「雨下得/雨下得挺密/廊下倒是干爽」，本轮禁止再用相同雨势开头；换说别的或只接上一句。",
             "位置、局内时间与天气（只许用这些，不要展开背包）：",
             _time_context_line(payload),
             loc_line or _companion_brief(companion_snap if isinstance(companion_snap, dict) else {}),
@@ -2238,6 +2251,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "你是游戏《河可松》的日末日志助手，不是聊天角色。",
             "根据玩家与小狸的今日聊天记录，生成极短中文摘要，供次日个性化对话使用。",
             "禁止编造聊天中未出现的内容；禁止输出聊天原文长段；禁止客服腔。",
+            "禁止编造「约明天田边看萝卜」「等萝卜长好一起看」等聊天里没出现过的约定或邀请。",
             "输出必须是 JSON 对象，字段：",
             "- chat_summary: 字符串，≤80 字，第三人称或「你们」口吻，概括今日聊天要点；",
             "- companion_feel: 字符串，≤40 字，小狸内心一句（可空）；",

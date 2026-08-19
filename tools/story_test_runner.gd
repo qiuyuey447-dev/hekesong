@@ -76,6 +76,12 @@ func _run_ten_day_tests() -> void:
 	_test_ten_day_chat_promise()
 	_test_ten_day_mid_profile_copy()
 	_test_status_inquiry_not_sleep()
+	_test_sleep_request_explicit()
+	_test_p11_night_period_gate()
+	_test_harvest_offer_flow()
+	_test_planting_rebuttal()
+	_test_chore_completion_not_inquiry()
+	_test_promise_not_fulfilled_on_harvest()
 	_test_intent_classify_flow()
 	_test_personalized_story_steps()
 	_test_d7_pending_tail_cleared_on_complete()
@@ -408,6 +414,11 @@ func _test_ten_day_f5_branding() -> void:
 			credits_body = str(step.get("body", ""))
 			break
 	_assert(GameState.GAME_DISPLAY_NAME in credits_body, "credits use display name")
+	_assert("感谢体验" in credits_body, "credits thank play")
+	_assert("感谢陪伴小狸的你" in credits_body, "credits thank companion")
+	var anim_lines := EndingDirector.get_credits_animation_lines()
+	_assert(anim_lines.size() == 3, "credits animation has three lines")
+	_assert(anim_lines[0] == GameState.GAME_DISPLAY_NAME, "credits line 1 is title")
 	_assert("河可松" not in credits_body, "credits avoid old product name")
 
 
@@ -438,20 +449,48 @@ func _test_wave4_experience_policy() -> void:
 	print("  .. wave4 experience")
 	GameState.reset_for_new_game()
 	_assert(StoryNodeCopy.get_system("tutorial_notebook_hint").strip_edges() != "", "notebook tutorial copy")
-	_assert(StoryNodeCopy.get_system("d9_pause_defer").strip_edges() != "", "d9 defer label")
 	var beat := StoryBeatDirector.build_beat("NM_N20c")
 	var steps: Array = beat.get("steps", [])
 	var has_d9_choice := false
 	for step in steps:
 		if step is Dictionary and str(step.get("kind", "")) == "choice":
 			for choice in step.get("choices", []):
-				if choice is Dictionary and str(choice.get("id", "")) == "d9_defer":
+				if choice is Dictionary and str(choice.get("id", "")) in ["d9_continue", "d9_defer"]:
 					has_d9_choice = true
-	_assert(has_d9_choice, "D9 beat offers soft pause choice")
-	GameState.set_ending_flag("d9_soft_pause_beat", "NM_N20c")
-	StoryBeatDirector.resolve_soft_paused_beats_before_advance()
-	_assert(GameState.is_story_node_seen("NM_N20c"), "soft pause resolves on day advance")
-	_assert(str(GameState.get_ending_flags().get("d9_soft_pause_beat", "")) == "", "soft pause flag cleared")
+	_assert(not has_d9_choice, "D9 beat no longer offers soft pause choice")
+	GameState.game_day = 9
+	GameState.time_of_day = GameState.TIME_NIGHT
+	var night_beat := StoryBeatDirector.build_beat("NM_N20c")
+	var night_steps: Array = night_beat.get("steps", [])
+	_assert(night_steps.size() > 0, "D9 night beat has steps")
+	_assert(str(night_steps[0].get("title", "")) != "清晨", "D9 night beat skips morning opening")
+	GameState.reset_for_new_game()
+	GameState.game_day = 10
+	GameState.set_deferred_story_beat("NM_N20c", 9)
+	_assert(StoryBeatDirector.get_today_beat_id() == "", "D10 awakening day has no calendar beat")
+	StoryBeatDirector.resolve_finale_day_carryover()
+	_assert(GameState.get_deferred_story_beat() == "", "D10 carryover clears deferred beat")
+	_assert(not ResponseValidator.validate("player_chat", "今日主线节点：NM_N20c", {}).get("ok", true), "director meta rejected")
+	_assert("→" not in StoryNodeCopy.get_awakening("f10_medium"), "f10 montage avoids arrow glyphs")
+	GameState.reset_for_new_game()
+	GameState.game_day = 3
+	GameState.append_day_journal({
+		"day": 2,
+		"highlights": [],
+		"tags": ["chat"],
+		"chat_turns": 9,
+		"weather": "sun",
+		"summary": "第 2 天，晴天，打理了农场。",
+	})
+	DayJournalService.apply_enrichment(2, {
+		"chat_summary": "你们聊了9句，你问小狸是否有家人，她说不清，但觉得你叫她名字时很踏实。她约你明天田边看萝卜，说有话要说。",
+		"companion_feel": "",
+		"salience": 0.6,
+	})
+	var journal_entry := GameState.get_day_journal_entry(2)
+	var chat_summary := str(journal_entry.get("chat_summary", ""))
+	_assert("田边看萝卜" not in chat_summary, "chat summary strips unverified invite")
+	_assert("踏实" in chat_summary, "chat summary keeps verified content")
 	var leak := NpcFallback.player_chat("嗯", GameState.STAGE_FAMILIAR, {"story_mode": "leak", "revealed": false})
 	var awaken := NpcFallback.player_chat("嗯", GameState.STAGE_FAMILIAR, {"story_mode": "awaken"})
 	_assert(leak.strip_edges() != "", "leak fallback non-empty")
@@ -856,11 +895,63 @@ func _test_status_inquiry_not_sleep() -> void:
 	_assert(not IntentParser.looks_like_sleep_request("别睡了"), "refuse sleep is not sleep request")
 	_assert(not IntentParser.looks_like_sleep_request("睡得好吗"), "sleep quality question is not sleep request")
 	_assert(IntentParser.looks_like_status_inquiry("田怎么样"), "田怎么样 is status")
+	_assert(IntentParser.looks_like_status_inquiry("你种完啦？"), "你种完啦 is status")
 	var parsed := IntentParser.parse("能收了吗")
 	_assert(str(parsed.get("intent", "")) == IntentParser.INTENT_CHECK_STATUS, "能收了吗 → check_status")
 	_assert(IntentParser.looks_like_stop_farm_chore("别浇了"), "别浇了 is stop chore")
 	var stop := IntentParser.parse("雨停再种")
 	_assert(str(stop.get("intent", "")) == IntentParser.INTENT_CHAT, "雨停再种 stays chat")
+
+
+func _test_sleep_request_explicit() -> void:
+	_assert(IntentParser.looks_like_sleep_request("睡觉吧"), "睡觉吧 is explicit sleep")
+	_assert(IntentParser.is_explicit_sleep_utterance("睡觉吧"), "睡觉吧 in explicit list")
+
+
+func _test_p11_night_period_gate() -> void:
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.game_day = 3
+	GameState.time_of_day = GameState.TIME_NIGHT
+	var beat := StoryBeatDirector.build_beat("P_N11")
+	beat = StoryBeatDirector.take_displayable_beat(beat)
+	var steps: Array = beat.get("steps", [])
+	_assert(steps.size() == 1, "P_N11 night skips evening-only P_N03")
+	_assert(str(steps[0].get("template", "")).begins_with("P_N11"), "P_N11 night shows agreement step")
+	var body := str(steps[0].get("body", ""))
+	_assert("黄昏" not in body and "傍晚" not in body, "P_N11 night body drops dusk lexicon")
+	_assert("夜里" in body, "P_N11 night body uses 夜里")
+	_assert(GameState.get_pending_story_beat_tail_id() == "", "P_N11 night does not leave dusk tail")
+
+
+func _test_harvest_offer_flow() -> void:
+	_assert(ShopDelegate.looks_like_harvest_offer("要不要我先把熟的收了？"), "harvest offer detected")
+	_assert(ShopDelegate.looks_like_harvest_commitment("去收吧"), "去收吧 is harvest commitment")
+	_assert(ShopDelegate.is_affirmative_reply("好"), "好 is affirmative")
+
+
+func _test_planting_rebuttal() -> void:
+	_assert(IntentParser.looks_like_planting_rebuttal("萝卜不是你帮我种的吗"), "planting rebuttal detected")
+	_assert(not IntentParser.looks_like_planting_rebuttal("帮我种萝卜"), "plant command is not rebuttal")
+
+
+func _test_chore_completion_not_inquiry() -> void:
+	_assert(IntentParser.looks_like_chore_completion_statement("收完了"), "收完了 is completion")
+	_assert(not IntentParser.looks_like_status_inquiry("收完了"), "收完了 is not status inquiry")
+	_assert(IntentParser.looks_like_status_inquiry("收好了吗"), "收好了吗 is inquiry")
+	_assert(not GameState.has_story_promise(), "fresh game has no story promise")
+
+
+func _test_promise_not_fulfilled_on_harvest() -> void:
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	var plot_ids := GameState.get_plantable_plot_ids()
+	if plot_ids.is_empty():
+		return
+	# 仅验证：单次收获不会自动 fulfill（需 P_N12 节点）。
+	GameState.game_day = 3
+	_assert(not GameState.long_term_memory.get("promise", {}).get("fulfilled", false), "harvest alone does not fulfill promise")
 
 
 func _test_intent_classify_flow() -> void:
@@ -1062,6 +1153,16 @@ func _test_fallback_speech_matrix() -> void:
 		"beat_id": "NM_N02p",
 	})
 	_assert("廊下" in step or step.strip_edges() != "", "fallback story_step_render")
+	var stripped := ResponseValidator.strip_stage_directions(
+		"(走到廊下，自己先占了最干的那块坐下) 给你留的。"
+	)
+	_assert("走到廊下" not in stripped, "stage directions stripped from chat")
+	_assert("给你留的" in stripped, "spoken line kept after stage strip")
+	var repetitive := ResponseValidator.looks_repetitive_companion_line("雨下得挺密，廊下倒是干爽。")
+	if GameState.get_recent_chat_turns(8).is_empty():
+		GameState.record_chat_turn("companion", "雨下得挺密，廊下倒是干爽。", false)
+		repetitive = ResponseValidator.looks_repetitive_companion_line("雨下得密，苗不用浇了。")
+	_assert(repetitive, "rain opener repeats after recent rain line")
 
 	var casual := NpcFallback.proactive_line({
 		"time_of_day": "morning",

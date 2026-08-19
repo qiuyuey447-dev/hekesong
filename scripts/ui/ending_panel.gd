@@ -25,6 +25,11 @@ var _page_tween: Tween = null
 var _fade_tween: Tween = null
 var _arrow_tween: Tween = null
 var _is_credits: bool = false
+var _credits_layer: Control
+var _credits_line_labels: Array[Label] = []
+var _credits_continue: Button
+var _credits_seq_tween: Tween = null
+var _credits_ready: bool = false
 
 
 func _ready() -> void:
@@ -51,7 +56,11 @@ func open_game_over(ending_id: String) -> void:
 		if str(step.get("kind", "")) == "credits":
 			_steps.append(step)
 	if _steps.is_empty():
-		_steps = [{"title": "游戏结束", "body": "—— 感谢游玩 ——", "kind": "credits"}]
+		_steps = [{
+			"title": "",
+			"body": "\n".join(EndingDirector.get_credits_animation_lines()),
+			"kind": "credits",
+		}]
 	_begin_show()
 
 
@@ -70,7 +79,9 @@ func _begin_show() -> void:
 func close_panel() -> void:
 	_kill_typewriter()
 	_kill_page_tween()
+	_kill_credits_tween()
 	_stop_arrow()
+	_exit_credits_mode()
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	modulate = Color(1, 1, 1, 1)
@@ -107,6 +118,10 @@ func _show_step() -> void:
 	var step: Dictionary = _steps[_step_index]
 	var kind := str(step.get("kind", ""))
 	_is_credits = kind == "credits"
+	if _is_credits:
+		_enter_credits_mode()
+		return
+	_exit_credits_mode()
 	_title_label.text = str(step.get("title", ""))
 	_apply_kind_style(kind)
 	_pages = LetterPaperKit.paginate_body(LetterPaperKit.prettify_body(str(step.get("body", ""))))
@@ -186,16 +201,16 @@ func _pages_for_step(i: int) -> int:
 func _refresh_continue_label() -> void:
 	if _is_credits:
 		_continue_button.text = "回到标题"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	elif _page_index < _pages.size() - 1:
 		_continue_button.text = "翻页"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	elif _step_index < _steps.size() - 1:
 		_continue_button.text = "继续"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	else:
 		_continue_button.text = "继续"
-		_hint_label.text = "↘"
+		_hint_label.text = ""
 	_pulse_arrow()
 
 
@@ -291,8 +306,26 @@ func _on_paper_gui_input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_finish_typewriter_or_advance()
+		if _is_credits:
+			_on_credits_input()
+		else:
+			_finish_typewriter_or_advance()
 		accept_event()
+
+
+func _on_credits_gui_input(event: InputEvent) -> void:
+	if not visible or not _is_credits:
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_credits_input()
+		accept_event()
+
+
+func _on_credits_input() -> void:
+	if _credits_ready:
+		_finish("title")
+	else:
+		_skip_credits_animation()
 
 
 func _pulse_arrow() -> void:
@@ -309,6 +342,78 @@ func _stop_arrow() -> void:
 	if _arrow_tween != null and _arrow_tween.is_valid():
 		_arrow_tween.kill()
 	_arrow_tween = null
+
+
+func _enter_credits_mode() -> void:
+	var center := get_node_or_null("Center") as Control
+	if center:
+		center.visible = false
+	if _credits_layer:
+		_credits_layer.visible = true
+	_credits_ready = false
+	var lines := EndingDirector.get_credits_animation_lines()
+	for i in range(_credits_line_labels.size()):
+		var lab := _credits_line_labels[i]
+		lab.text = lines[i] if i < lines.size() else ""
+		lab.modulate.a = 0.0
+		lab.scale = Vector2(0.96, 0.96) if i == 0 else Vector2.ONE
+	if _credits_continue:
+		_credits_continue.visible = false
+		_credits_continue.modulate.a = 0.0
+	_play_credits_sequence()
+
+
+func _exit_credits_mode() -> void:
+	_kill_credits_tween()
+	var center := get_node_or_null("Center") as Control
+	if center:
+		center.visible = true
+	if _credits_layer:
+		_credits_layer.visible = false
+	_credits_ready = false
+
+
+func _play_credits_sequence() -> void:
+	_kill_credits_tween()
+	if _credits_line_labels.is_empty():
+		_show_credits_continue()
+		return
+	_credits_seq_tween = create_tween()
+	_credits_seq_tween.tween_property(_credits_line_labels[0], "modulate:a", 1.0, 1.25)
+	_credits_seq_tween.parallel().tween_property(_credits_line_labels[0], "scale", Vector2.ONE, 1.25)\
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if _credits_line_labels.size() > 1:
+		_credits_seq_tween.tween_interval(0.55)
+		_credits_seq_tween.tween_property(_credits_line_labels[1], "modulate:a", 1.0, 1.05)
+	if _credits_line_labels.size() > 2:
+		_credits_seq_tween.tween_interval(0.45)
+		_credits_seq_tween.tween_property(_credits_line_labels[2], "modulate:a", 1.0, 1.05)
+	_credits_seq_tween.tween_interval(0.35)
+	_credits_seq_tween.tween_callback(_show_credits_continue)
+
+
+func _skip_credits_animation() -> void:
+	_kill_credits_tween()
+	for i in range(_credits_line_labels.size()):
+		var lab := _credits_line_labels[i]
+		lab.modulate.a = 1.0
+		lab.scale = Vector2.ONE
+	_show_credits_continue()
+
+
+func _show_credits_continue() -> void:
+	_credits_ready = true
+	if _credits_continue == null:
+		return
+	_credits_continue.visible = true
+	var tw := create_tween()
+	tw.tween_property(_credits_continue, "modulate:a", 1.0, 0.45)
+
+
+func _kill_credits_tween() -> void:
+	if _credits_seq_tween != null and _credits_seq_tween.is_valid():
+		_credits_seq_tween.kill()
+	_credits_seq_tween = null
 
 
 func _build_shell() -> void:
@@ -379,7 +484,7 @@ func _build_shell() -> void:
 	vbox.add_child(foot)
 
 	_hint_label = Label.new()
-	_hint_label.text = "↘"
+	_hint_label.text = ""
 	_hint_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hint_label.add_theme_font_size_override("font_size", 16)
@@ -417,6 +522,8 @@ func _build_shell() -> void:
 	_wire_sticky_hover(_restart_button)
 	_wire_sticky_hover(_continue_button)
 
+	_build_credits_layer()
+
 	for node in [_title_label, _step_label, _hint_label, _restart_button, _continue_button]:
 		LetterPaperKit.apply_font(node)
 	LetterPaperKit.apply_font(_body_label)
@@ -432,6 +539,78 @@ func _wire_sticky_hover(button: Button) -> void:
 		var tw := button.create_tween()
 		tw.tween_property(button, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	)
+
+
+func _build_credits_layer() -> void:
+	_credits_layer = Control.new()
+	_credits_layer.name = "CreditsLayer"
+	_credits_layer.visible = false
+	_credits_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_credits_layer.set_offsets_preset(Control.PRESET_FULL_RECT)
+	_credits_layer.mouse_filter = Control.MOUSE_FILTER_STOP
+	_credits_layer.gui_input.connect(_on_credits_gui_input)
+	add_child(_credits_layer)
+
+	var credits_dim := ColorRect.new()
+	credits_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	credits_dim.set_offsets_preset(Control.PRESET_FULL_RECT)
+	credits_dim.color = Color(0.06, 0.05, 0.04, 0.94)
+	credits_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_credits_layer.add_child(credits_dim)
+
+	var stack := VBoxContainer.new()
+	stack.set_anchors_preset(Control.PRESET_CENTER)
+	stack.anchor_left = 0.5
+	stack.anchor_right = 0.5
+	stack.anchor_top = 0.5
+	stack.anchor_bottom = 0.5
+	stack.offset_left = -320
+	stack.offset_right = 320
+	stack.offset_top = -180
+	stack.offset_bottom = 120
+	stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	stack.add_theme_constant_override("separation", 22)
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_credits_layer.add_child(stack)
+
+	var title_sizes := [76, 34, 30]
+	var title_colors := [
+		Color(0.98, 0.94, 0.86, 1.0),
+		Color(0.92, 0.86, 0.74, 1.0),
+		Color(0.88, 0.78, 0.62, 1.0),
+	]
+	for i in range(3):
+		var line := Label.new()
+		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.add_theme_font_size_override("font_size", title_sizes[i])
+		line.add_theme_color_override("font_color", title_colors[i])
+		line.add_theme_constant_override("outline_size", 2 if i == 0 else 1)
+		line.add_theme_color_override("font_outline_color", Color(0.12, 0.08, 0.04, 0.55))
+		line.modulate.a = 0.0
+		LetterPaperKit.apply_font(line)
+		_credits_line_labels.append(line)
+		stack.add_child(line)
+
+	_credits_continue = Button.new()
+	_credits_continue.text = "回到标题"
+	_credits_continue.visible = false
+	_credits_continue.custom_minimum_size = Vector2(200, 52)
+	_credits_continue.add_theme_font_size_override("font_size", 18)
+	LetterPaperKit.apply_sticky_button(_credits_continue, Color(0.86, 0.70, 0.42, 1.0))
+	_credits_continue.pressed.connect(func() -> void: _finish("title"))
+	_credits_continue.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_credits_continue.anchor_left = 0.5
+	_credits_continue.anchor_right = 0.5
+	_credits_continue.anchor_top = 1.0
+	_credits_continue.anchor_bottom = 1.0
+	_credits_continue.offset_left = -100
+	_credits_continue.offset_right = 100
+	_credits_continue.offset_top = -88
+	_credits_continue.offset_bottom = -36
+	_credits_layer.add_child(_credits_continue)
+	LetterPaperKit.apply_font(_credits_continue)
+	_wire_sticky_hover(_credits_continue)
 
 
 func _sync_viewport_layout() -> void:

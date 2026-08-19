@@ -43,10 +43,10 @@ size = Vector2(44, 32)
 size = Vector2(300, 180)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_46lyr"]
-size = Vector2(400, 28)
+size = Vector2(919.75, 141)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_xkyr1"]
-size = Vector2(500, 200)
+size = Vector2(1894, 185)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_svqpo"]
 size = Vector2(120, 200)
@@ -58,7 +58,7 @@ size = Vector2(24, 280)
 size = Vector2(24, 280)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_11iy4"]
-size = Vector2(400, 28)
+size = Vector2(400, 33)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_onh2g"]
 size = Vector2(160, 36)
@@ -67,12 +67,12 @@ size = Vector2(160, 36)
 size = Vector2(160, 36)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_qwbdx"]
-size = Vector2(128, 72)
+size = Vector2(206, 113)
 
 [node name="FarmMap" type="Node2D" unique_id=1858206700]
 
 [node name="小狸" type="Marker2D" parent="." unique_id=1458088174]
-position = Vector2(1193, 328)
+position = Vector2(1163, 492)
 
 [node name="人" type="Marker2D" parent="." unique_id=1481563795]
 position = Vector2(272, 304)
@@ -846,11 +846,11 @@ position = Vector2(176, 784)
 shape = SubResource("RectangleShape2D_317kh")
 
 [node name="NorthLogFence" type="CollisionShape2D" parent="WorldCollision" unique_id=251373942]
-position = Vector2(352, 16)
+position = Vector2(580.125, 996)
 shape = SubResource("RectangleShape2D_46lyr")
 
 [node name="NorthCliff" type="CollisionShape2D" parent="WorldCollision" unique_id=1181506573]
-position = Vector2(1664, 112)
+position = Vector2(962, 105)
 shape = SubResource("RectangleShape2D_xkyr1")
 
 [node name="EastRiver" type="CollisionShape2D" parent="WorldCollision" unique_id=1842620145]
@@ -866,7 +866,7 @@ position = Vector2(1840, 752)
 shape = SubResource("RectangleShape2D_k3tis")
 
 [node name="FieldSouth" type="CollisionShape2D" parent="WorldCollision" unique_id=2114035611]
-position = Vector2(1640, 880)
+position = Vector2(1640, 901.5)
 shape = SubResource("RectangleShape2D_11iy4")
 
 [node name="FieldNorthW" type="CollisionShape2D" parent="WorldCollision" unique_id=1341452917]
@@ -878,5 +878,5 @@ position = Vector2(1760, 632)
 shape = SubResource("RectangleShape2D_0m03o")
 
 [node name="ShopStall" type="CollisionShape2D" parent="WorldCollision" unique_id=1864195460]
-position = Vector2(1544, 368)
+position = Vector2(1583, 347.5)
 shape = SubResource("RectangleShape2D_qwbdx")

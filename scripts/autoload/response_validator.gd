@@ -69,8 +69,26 @@ const LITERARY_PHRASES := [
 var debug_disable_fact_lock := false
 
 
-func validate(event: String, text: String, payload: Dictionary, cited_ids: Array = []) -> Dictionary:
+func strip_stage_directions(text: String) -> String:
+	## 聊天框只显示「说出口的话」，去掉 LLM 误写的括号舞台说明。
 	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return cleaned
+	var re := RegEx.new()
+	if re.compile("\\([^\\)]{2,120}\\)") == OK:
+		cleaned = re.sub(cleaned, "", true)
+	re = RegEx.new()
+	if re.compile("（[^）]{2,120}）") == OK:
+		cleaned = re.sub(cleaned, "", true)
+	while "\n\n\n" in cleaned:
+		cleaned = cleaned.replace("\n\n\n", "\n\n")
+	while "  " in cleaned:
+		cleaned = cleaned.replace("  ", " ")
+	return cleaned.strip_edges()
+
+
+func validate(event: String, text: String, payload: Dictionary, cited_ids: Array = []) -> Dictionary:
+	var cleaned := strip_stage_directions(text.strip_edges())
 	if cleaned == "":
 		return {"ok": false, "reason": "empty"}
 
@@ -89,7 +107,19 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 	if event in CHAT_LIKE_EVENTS and _violates_chat_timing(cleaned, payload):
 		return {"ok": false, "reason": "chat_timing"}
 
-	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_action_mismatch_reply(cleaned, payload):
+	if event in CHAT_LIKE_EVENTS and _is_repetitive_chat_reply(cleaned, payload):
+		return {"ok": false, "reason": "repetitive"}
+
+	if event in CHAT_LIKE_EVENTS and _violates_harvest_capability(cleaned, payload):
+		return {"ok": false, "reason": "harvest_capability"}
+
+	if event in CHAT_LIKE_EVENTS and _mentions_premature_promise(cleaned):
+		return {"ok": false, "reason": "premature_promise"}
+
+	if event in CHAT_LIKE_EVENTS and _leaks_director_meta(cleaned):
+		return {"ok": false, "reason": "director_meta"}
+
+	if event in ["companion_proactive", "companion_casual", "morning_sidewrite", "player_chat"] and _is_action_mismatch_reply(cleaned, payload):
 		return {"ok": false, "reason": "action_mismatch"}
 
 	if debug_disable_fact_lock:
@@ -128,6 +158,72 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 			return mode_check
 
 	return {"ok": true, "text": cleaned}
+
+
+func looks_repetitive_companion_line(text: String) -> bool:
+	return _is_repetitive_chat_reply(text.strip_edges(), {})
+
+
+func _collect_recent_companion_lines(_payload: Dictionary, limit: int = 6) -> Array:
+	var out: Array = []
+	var seen := {}
+	for turn in GameState.get_recent_chat_turns(12):
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "companion":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or seen.has(line):
+			continue
+		seen[line] = true
+		out.append(line)
+	for turn in GameState.today_chat_log:
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "companion":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or seen.has(line):
+			continue
+		seen[line] = true
+		out.append(line)
+	if out.size() <= limit:
+		return out
+	return out.slice(out.size() - limit, out.size())
+
+
+func _chat_opener(text: String) -> String:
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "":
+		return ""
+	var end := compact.length()
+	for sep in ["。", "，", ",", "！", "!", "？", "?", "…", "—"]:
+		var idx := compact.find(sep)
+		if idx > 0:
+			end = mini(end, idx)
+	return compact.substr(0, mini(end, 20))
+
+
+func _is_repetitive_chat_reply(text: String, _payload: Dictionary) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	var recent := _collect_recent_companion_lines(_payload, 6)
+	if recent.is_empty():
+		return false
+	var opener := _chat_opener(cleaned)
+	for line in recent:
+		var prev := str(line).strip_edges()
+		if prev == cleaned:
+			return true
+		if opener.length() >= 6 and _chat_opener(prev) == opener:
+			return true
+	for marker in ["雨下得密", "雨下得挺密", "雨下得", "廊下倒是干爽", "廊下那块干"]:
+		if marker in cleaned:
+			for line in recent:
+				if marker in str(line):
+					return true
+	return false
 
 
 func is_stranger_ooc_reply(text: String, payload: Dictionary) -> bool:
@@ -280,6 +376,49 @@ func _is_awkward_waiting_reply(text: String) -> bool:
 		if phrase in text:
 			return true
 	return false
+
+
+func _mentions_premature_promise(text: String) -> bool:
+	if GameState.has_story_promise():
+		return false
+	for phrase in [
+		"等萝卜长好", "长好了，我们一起", "长好了我们一起", "一起看看吧",
+		"我们约", "你说过等", "你说的等", "有个约定", "本子上写着",
+		"你说等",
+	]:
+		if phrase in text:
+			return true
+	if "约定" in text and ("萝卜" in text or "看看" in text):
+		return true
+	return false
+
+
+func _leaks_director_meta(text: String) -> bool:
+	for phrase in [
+		"主线节点",
+		"今日主线",
+		"导演·勿复述",
+		"导演勿复述",
+		"分支 profile",
+		"节点情绪：",
+		"亲密度档：",
+	]:
+		if phrase in text:
+			return true
+	if "变体" in text and ("_" in text or "N20" in text or "N16" in text):
+		return true
+	return false
+
+
+func _violates_harvest_capability(text: String, payload: Dictionary) -> bool:
+	var snapshot: Variant = payload.get("world_snapshot", {})
+	if not snapshot is Dictionary:
+		return false
+	if bool(snapshot.get("can_harvest", true)):
+		return false
+	if not ShopDelegate.looks_like_harvest_offer(text):
+		return false
+	return true
 
 
 func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:

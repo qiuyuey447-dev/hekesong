@@ -15,7 +15,8 @@ const TITLE_FRAME_PADDING := 72.0
 const TITLE_BACKDROP_COLOR := Color(0.77, 0.87, 0.97, 1.0)
 const DAY_MODULATE := Color(1.0, 1.0, 0.98)
 const CAMERA_COVER_OVERSCAN := 1.012
-const FOX_BASE_SCALE := 2.0
+const FOX_BASE_SCALE := 2.6
+const FOX_VIEW_OFFSET := Vector2(0.26, 0.20)
 const TITLE_FONT_SIZE := 78
 const MENU_BUTTON_SIZE := Vector2(372, 93)
 const MENU_FONT_SIZE := 42
@@ -124,21 +125,21 @@ func _build_world_background() -> void:
 	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
 	_farm_map = farm_map
 	world.add_child(farm_map)
-	# 院子已经烘进 farm_map.tscn，只补一个商店台子——游戏里那位置由 Shop 实体接管。
+	FarmSetdress.sync_markers(farm_map)
 	var stall := Node2D.new()
 	stall.name = "ShopStall"
 	stall.position = FarmSetdress.marker_position(farm_map, "商店", FarmSetdress.POS_SHOP)
 	FarmSetdress.ensure_actors(farm_map).add_child(stall)
 	FarmSetdress.build_shop_stall(stall)
 
-	_spawn_title_fox(farm_map)
-	_configure_title_camera(farm_map)
+	_spawn_title_fox(world, farm_map)
 
 	_world_camera = Camera2D.new()
-	_world_camera.position = _camera_base
-	_world_camera.zoom = _camera_zoom
 	_world_camera.enabled = true
 	world.add_child(_world_camera)
+
+	_configure_title_camera(farm_map)
+	_place_title_fox_in_view()
 
 
 func _sync_world_viewport_size() -> void:
@@ -153,6 +154,7 @@ func _sync_world_viewport_size() -> void:
 	if _world_camera != null:
 		_world_camera.zoom = _camera_zoom
 		_world_camera.position = _clamp_camera_position(_camera_base)
+	_place_title_fox_in_view()
 
 
 func _get_layout_viewport_size() -> Vector2:
@@ -177,6 +179,9 @@ func _configure_title_camera(farm_map: Node2D) -> void:
 	var zoom_value := maxf(zoom_x, zoom_y) * CAMERA_COVER_OVERSCAN
 	_camera_zoom = Vector2(zoom_value, zoom_value)
 	_camera_base = frame_rect.get_center()
+	var fox_marker := farm_map.get_node_or_null("小狸") as Node2D
+	if fox_marker != null:
+		_camera_base = _camera_base.lerp(fox_marker.position, 0.32)
 	_camera_base = _clamp_camera_position(_camera_base)
 
 
@@ -292,17 +297,15 @@ func _clamp_camera_position(target: Vector2) -> Vector2:
 	return result
 
 
-func _spawn_title_fox(farm_map: Node2D) -> void:
+func _spawn_title_fox(world: Node2D, farm_map: Node2D) -> void:
 	_title_fox = Node2D.new()
 	_title_fox.name = "TitleFox"
-	var marker := farm_map.get_node_or_null("小狸") as Node2D
-	if marker != null:
-		_title_fox.position = marker.position + Vector2(10, 14)
-	else:
-		_title_fox.position = FarmSetdress.POS_FOX + Vector2(10, 14)
+	var fox_pos := FarmSetdress.marker_position(farm_map, "小狸", FarmSetdress.POS_FOX)
+	_title_fox.position = fox_pos + Vector2(0, 8)
 	_title_fox.set_meta("base_x", _title_fox.position.x)
 	_title_fox.set_meta("base_y", _title_fox.position.y)
-	_title_fox.z_index = 6
+	_title_fox.z_as_relative = false
+	_title_fox.z_index = 24
 
 	var shadow := Sprite2D.new()
 	var shadow_img := Image.create(22, 8, false, Image.FORMAT_RGBA8)
@@ -328,8 +331,27 @@ func _spawn_title_fox(farm_map: Node2D) -> void:
 	_title_fox.add_child(_fox_body)
 
 	_title_fox.scale = Vector2(FOX_BASE_SCALE, FOX_BASE_SCALE)
-	var actors := FarmSetdress.ensure_actors(farm_map)
-	actors.add_child(_title_fox)
+	world.add_child(_title_fox)
+
+
+func _place_title_fox_in_view() -> void:
+	if _title_fox == null or _world_camera == null:
+		return
+	var vp_size := _get_layout_viewport_size()
+	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
+		return
+	var cam := _clamp_camera_position(_camera_base)
+	var half_w := vp_size.x / (2.0 * _camera_zoom.x)
+	var half_h := vp_size.y / (2.0 * _camera_zoom.y)
+	var pos := cam + Vector2(half_w * FOX_VIEW_OFFSET.x, half_h * FOX_VIEW_OFFSET.y)
+	_title_fox.position = pos
+	_title_fox.set_meta("base_x", pos.x)
+	_title_fox.set_meta("base_y", pos.y)
+	_title_fox.z_as_relative = false
+	_title_fox.z_index = 120
+	var world := _title_fox.get_parent()
+	if world != null:
+		world.move_child(_title_fox, world.get_child_count() - 1)
 
 
 func _build_overlay() -> void:

@@ -81,6 +81,8 @@ func get_beat_id_for_day(route: String, game_day: int) -> String:
 
 
 func should_inject_morning_opening(beat_id: String) -> bool:
+	if GameState.time_of_day != GameState.TIME_MORNING:
+		return false
 	if is_night_beat(beat_id):
 		return false
 	if GameState.has_pending_absence() and not StoryDirector.is_stranger_mode():
@@ -128,7 +130,18 @@ func render_body(beat_id: String, template_key: String = "") -> String:
 	if beat_id.ends_with("_N15") and GameState.IS_TEN_DAY_EDITION:
 		ctx_extra["journal_max_lines"] = StoryBeatDirector.get_n15_journal_max_lines(beat_id)
 	var raw := _render_template(beat_id, template_key)
-	return StorySlotService.apply(raw, StorySlotService.build_context(ctx_extra))
+	var body := StorySlotService.apply(raw, StorySlotService.build_context(ctx_extra))
+	return _adapt_body_for_period(body, template_key)
+
+
+func _adapt_body_for_period(body: String, template_key: String) -> String:
+	if GameState.time_of_day != GameState.TIME_NIGHT:
+		return body
+	if template_key == "P_N03":
+		return ""
+	if template_key.begins_with("P_N11"):
+		return body.replace("傍晚，", "夜里，").replace("黄昏，", "夜里，")
+	return body
 
 
 func get_route_for_ending(ending_id: String) -> String:
