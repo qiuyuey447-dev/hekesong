@@ -89,6 +89,7 @@ var ambient_volume_linear: float = 1.0
 var time_of_day: String = TIME_MORNING
 var _period_elapsed: float = 0.0
 var _awaiting_sleep: bool = false
+var _time_pause_depth: int = 0
 var watered_plots: Array[int] = []
 var inventory: Dictionary = {
 	"turnip_seed": 5,
@@ -205,8 +206,11 @@ func _process(delta: float) -> void:
 		return
 	if _awaiting_sleep:
 		return
-	_period_elapsed += delta
+	if not is_time_paused():
+		_period_elapsed += delta
 	StoryBeatDirector.check_schedule()
+	if is_time_paused():
+		return
 	if _period_elapsed < get_period_seconds():
 		return
 	_period_elapsed = 0.0
@@ -403,6 +407,18 @@ func get_period_seconds(time_key: String = time_of_day) -> float:
 
 func is_awaiting_sleep() -> bool:
 	return _awaiting_sleep
+
+
+func push_time_pause() -> void:
+	_time_pause_depth += 1
+
+
+func pop_time_pause() -> void:
+	_time_pause_depth = maxi(_time_pause_depth - 1, 0)
+
+
+func is_time_paused() -> bool:
+	return _time_pause_depth > 0
 
 
 func can_manual_sleep() -> bool:
@@ -1045,7 +1061,26 @@ func has_pending_absence() -> bool:
 	var latest: Variant = notes[notes.size() - 1]
 	if not latest is Dictionary:
 		return false
-	return not bool(latest.get("shown", false)) and int(latest.get("return_day", -1)) == game_day
+	if bool(latest.get("shown", false)):
+		return false
+	return int(latest.get("return_day", -1)) == game_day
+
+
+func get_chat_timing_context_for_llm() -> Dictionary:
+	var today_lines: Array[String] = []
+	for item in today_chat_log:
+		if not item is Dictionary:
+			continue
+		if str(item.get("role", "")) != "player":
+			continue
+		var line := str(item.get("text", "")).strip_edges()
+		if line != "":
+			today_lines.append(line)
+	return {
+		"game_day": game_day,
+		"can_reference_yesterday": game_day >= 2 and has_yesterday_journal(),
+		"today_player_lines": today_lines.slice(-8),
+	}
 
 
 func get_pending_absence_facts() -> Dictionary:
@@ -1301,6 +1336,7 @@ func _apply_new_game_defaults(player: String, companion: String) -> void:
 	time_of_day = TIME_MORNING
 	_period_elapsed = 0.0
 	_awaiting_sleep = false
+	_time_pause_depth = 0
 	watered_plots.clear()
 	inventory = {
 		"turnip_seed": 5,
@@ -2194,11 +2230,13 @@ func mark_plot_watered(plot_id: int, by_companion: bool = false) -> void:
 	save_game()
 
 
-func record_chat_turn(role: String, text: String) -> void:
+func record_chat_turn(role: String, text: String, ephemeral: bool = false) -> void:
 	var cleaned := text.strip_edges()
 	if cleaned.is_empty():
 		return
 	var turn := {"role": role, "text": cleaned, "game_day": game_day}
+	if ephemeral:
+		turn["ephemeral"] = true
 	recent_chat_turns.append(turn)
 	while recent_chat_turns.size() > MAX_CHAT_TURNS:
 		recent_chat_turns.remove_at(0)
@@ -2206,6 +2244,21 @@ func record_chat_turn(role: String, text: String) -> void:
 	while today_chat_log.size() > MAX_TODAY_CHAT:
 		today_chat_log.remove_at(0)
 	save_game()
+
+
+func purge_ephemeral_chat_turns() -> void:
+	var kept_recent: Array[Dictionary] = []
+	for turn in recent_chat_turns:
+		if turn is Dictionary and bool(turn.get("ephemeral", false)):
+			continue
+		kept_recent.append(turn)
+	recent_chat_turns = kept_recent
+	var kept_today: Array[Dictionary] = []
+	for turn in today_chat_log:
+		if turn is Dictionary and bool(turn.get("ephemeral", false)):
+			continue
+		kept_today.append(turn)
+	today_chat_log = kept_today
 
 
 func get_chat_history_for_ui(limit: int = MAX_CHAT_TURNS) -> Array[Dictionary]:
@@ -2363,6 +2416,8 @@ func reset_daily_plots() -> void:
 func advance_day() -> void:
 	if not can_advance_day():
 		return
+	if not has_player_name_set():
+		return
 	StoryBeatDirector.resolve_soft_paused_beats_before_advance()
 	var current_loop_day := get_loop_day()
 	var previous_weather := weather_today
@@ -2372,6 +2427,7 @@ func advance_day() -> void:
 	last_day_summary = str(journal_entry.get("summary", ""))
 	append_day_journal(journal_entry)
 	DayJournalService.request_llm_enrich(journal_entry, chat_snapshot)
+	purge_ephemeral_chat_turns()
 	archive_today_chat_log()
 	clear_today_chat_log()
 	reset_daily_plots()

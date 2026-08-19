@@ -1490,6 +1490,57 @@ def _weather_tomorrow_label(payload: dict[str, Any], snap: dict[str, Any] | None
     return label or code
 
 
+def _weather_code(payload: dict[str, Any], snap: dict[str, Any] | None = None) -> str:
+    snap = snap if isinstance(snap, dict) else (payload.get("world_snapshot") or {})
+    if not isinstance(snap, dict):
+        snap = {}
+    return str(payload.get("weather_today") or snap.get("weather_today") or "").strip()
+
+
+def _prompt_weather_facts(payload: dict[str, Any]) -> str:
+    code = _weather_code(payload)
+    today = _weather_label(payload)
+    tomorrow = _weather_tomorrow_label(payload)
+    lines = ["[天气事实 — 台词须与此一致，勿与下方矛盾]"]
+    lines.append(f"今日：{today}")
+    if tomorrow:
+        lines.append(
+            f"明日预报：{tomorrow}（仅可预告未来，勿写成现在正在下雨、等雨停或地面湿滑）"
+        )
+    if code == "sun":
+        lines.append(
+            "今日晴天：禁止描述正在下雨、等雨停、雨声、淋雨、地面积水/水渍；"
+            "出门、去镇上不必等雨停。"
+        )
+    elif code == "rain":
+        lines.append("今日雨天：可以提雨；禁止说今天不下雨、天气很好、晒太阳。")
+    return "\n".join(lines)
+
+
+def _prompt_chat_timing(payload: dict[str, Any]) -> str:
+    timing = payload.get("chat_timing") or {}
+    if not isinstance(timing, dict):
+        timing = {}
+    day = int(timing.get("game_day") or (payload.get("relationship") or {}).get("game_day") or 0)
+    lines = ["[对话时间 — 勿搞错「昨天/今天/刚才」]"]
+    lines.append(f"当前第 {day} 游戏日。")
+    if not timing.get("can_reference_yesterday", day >= 2):
+        lines.append("禁止把今日或刚才的对话说成「昨天」；用「刚才/今天/早些时候」。")
+    else:
+        lines.append("只有上一游戏日的事才用「昨天」；今日聊过的用「刚才/今天」。")
+    today_lines = timing.get("today_player_lines") or []
+    if isinstance(today_lines, list) and today_lines:
+        bits = [str(x).strip()[:24] for x in today_lines if str(x).strip()]
+        if bits:
+            lines.append("玩家今日已说过：" + "、".join(f"「{b}」" for b in bits[:6]))
+    absence = payload.get("absence_facts") or {}
+    if isinstance(absence, dict) and payload.get("include_absence_comeback"):
+        gap_h = int(absence.get("gap_hours", int(absence.get("gap_days", 0)) * 24))
+        if gap_h < 24:
+            lines.append(f"玩家约 {gap_h} 小时前离开又回来：用「刚才/早些时候」，不要说「昨天」。")
+    return "\n".join(lines)
+
+
 def _time_context(payload: dict[str, Any]) -> dict[str, Any]:
     snap_raw = payload.get("world_snapshot") or {}
     snap = snap_raw if isinstance(snap_raw, dict) else {}
@@ -1628,7 +1679,7 @@ def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str
     lines = [
         f"玩家：{player_label}",
         _time_context_line(payload),
-        f"天气：{weather_today}（明日约 {weather_tomorrow}）",
+        f"天气：{weather_today}（明日预报 {weather_tomorrow}，勿当作现在正在发生）",
         f"关系：{rel.get('stage', '')}（亲密度 {rel.get('affection', 0)}）",
     ]
     if chat_mode and topic in ("general", "emotion", "empty", "sleep"):
@@ -1910,6 +1961,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"世界观：{worldview_brief}" if worldview_brief else "",
             "[背景事实（相关时才用，勿硬塞）]",
             _scene_brief(payload, chat_mode=True, topic=topic),
+            _prompt_weather_facts(payload),
+            _prompt_chat_timing(payload),
             "[可引用记忆（引用时必须把 id 写入 cited_memory_ids；无则 []）]",
             _prompt_citable_memories(payload),
             "[禁止]",
@@ -1925,6 +1978,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "坏回复示例：玩家说「我们以前认识吗」→「很多事都像隔着雨帘看田，模模糊糊的。」",
             "好回复示例：玩家说「睡觉吧」→「好。今天先到这儿。」并返回 intent=sleep。",
             "坏回复示例：玩家说「睡觉吧」→报雨、叶片、种子包数，不推进下一天。",
+            "坏回复示例：今日晴天 →「等雨停了再去镇上」「这雨下得人心潮」——错误，今日无雨。",
             "输出 JSON：reply、intent、plot_id、confidence、affection_delta、bond_delta、"
             "memory_recovery_delta、relationship_reason、cited_memory_ids(字符串数组)。",
         ])
@@ -1990,6 +2044,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             *_story_speech_context_lines(payload),
             "世界事实：",
             _scene_brief(payload),
+            _prompt_weather_facts(payload),
+            _prompt_chat_timing(payload),
         ])
         user_lines = ["（玩家刚上线，请打招呼）"]
         if payload.get("include_yesterday_echo"):
@@ -2132,6 +2188,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _time_context_line(payload),
             loc_line or _companion_brief(companion_snap if isinstance(companion_snap, dict) else {}),
             f"天气：{_weather_label(payload, payload.get('world_snapshot') or {})}",
+            _prompt_weather_facts(payload),
         ])
         return [
             {"role": "system", "content": system},

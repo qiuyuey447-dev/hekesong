@@ -22,6 +22,8 @@ const ALLOWED_INTENTS := [
 
 var _http: HTTPRequest
 var _pending_classify: Dictionary = {}
+var _classify_in_flight: bool = false
+var _classify_waiters: Array = []
 
 
 func _ready() -> void:
@@ -76,26 +78,17 @@ func classify_message(text: String) -> Dictionary:
 	if not is_enabled() or text.strip_edges().is_empty():
 		return {}
 
-	var request_key := str(Time.get_ticks_msec())
-	_pending_classify[request_key] = {"text": text, "done": false, "intent": {}}
+	var request_key := str(Time.get_ticks_msec()) + ":" + str(randi())
+	_pending_classify[request_key] = {"text": text, "done": false, "intent": {}, "success": false}
+	_classify_waiters.append(request_key)
+	_pump_classify_queue()
 
-	var url := _get_classify_url()
-	var headers := _build_headers()
-	var body := JSON.stringify(_build_classify_payload(text))
-	var timeout_sec := float(NpcBridge.get_config_value("intent_timeout_sec", 8.0))
-	_http.timeout = timeout_sec
-
-	var err := _http.request(url, headers, HTTPClient.METHOD_POST, body)
-	if err != OK:
-		_pending_classify.erase(request_key)
-		return {}
-
-	while true:
-		if not _pending_classify.has(request_key):
+	while not bool(_pending_classify.get(request_key, {}).get("done", false)):
+		await get_tree().process_frame
+		if not is_inside_tree():
+			_pending_classify.erase(request_key)
+			_classify_waiters.erase(request_key)
 			return {}
-		if bool(_pending_classify[request_key].get("done", false)):
-			break
-		await classify_finished
 
 	var entry: Dictionary = _pending_classify.get(request_key, {})
 	_pending_classify.erase(request_key)
@@ -104,6 +97,36 @@ func classify_message(text: String) -> Dictionary:
 	if entry.get("intent") is Dictionary:
 		return entry["intent"]
 	return {}
+
+
+func _pump_classify_queue() -> void:
+	if _classify_in_flight or _classify_waiters.is_empty():
+		return
+	var request_key := str(_classify_waiters[0])
+	if not _pending_classify.has(request_key):
+		_classify_waiters.pop_front()
+		call_deferred("_pump_classify_queue")
+		return
+	var text := str(_pending_classify[request_key].get("text", "")).strip_edges()
+	if text.is_empty():
+		_pending_classify[request_key]["done"] = true
+		_classify_waiters.pop_front()
+		call_deferred("_pump_classify_queue")
+		return
+
+	var url := _get_classify_url()
+	var headers := _build_headers()
+	var body := JSON.stringify(_build_classify_payload(text))
+	var timeout_sec := float(NpcBridge.get_config_value("intent_timeout_sec", 8.0))
+	_http.timeout = timeout_sec
+	_classify_in_flight = true
+
+	var err := _http.request(url, headers, HTTPClient.METHOD_POST, body)
+	if err != OK:
+		_classify_in_flight = false
+		_pending_classify[request_key]["done"] = true
+		_classify_waiters.pop_front()
+		call_deferred("_pump_classify_queue")
 
 
 func _build_classify_payload(text: String) -> Dictionary:
@@ -161,8 +184,12 @@ func _on_http_completed(
 	_headers: PackedStringArray,
 	body: PackedByteArray
 ) -> void:
-	var request_key := _find_pending_key()
-	if request_key == "":
+	_classify_in_flight = false
+	var request_key := ""
+	if not _classify_waiters.is_empty():
+		request_key = str(_classify_waiters[0])
+	if request_key == "" or not _pending_classify.has(request_key):
+		call_deferred("_pump_classify_queue")
 		return
 
 	var text: String = _pending_classify[request_key].get("text", "")
@@ -181,10 +208,5 @@ func _on_http_completed(
 		"intent": intent,
 	}
 	classify_finished.emit(text, intent, success)
-
-
-func _find_pending_key() -> String:
-	for key in _pending_classify.keys():
-		if not bool(_pending_classify[key].get("done", false)):
-			return str(key)
-	return ""
+	_classify_waiters.pop_front()
+	call_deferred("_pump_classify_queue")

@@ -21,6 +21,11 @@ func _run_all() -> void:
 	get_tree().quit(_failures.size())
 
 
+func _ensure_player_named() -> void:
+	if not GameState.has_player_name_set():
+		GameState.set_player_display_name("阿松")
+
+
 func _run_core_tests() -> void:
 	print("-- Core --")
 	_test_advance_day_writes_journal()
@@ -83,10 +88,19 @@ func _run_ten_day_tests() -> void:
 	_test_player_notebook_awakening_reveal()
 	_test_persona_regression_suite()
 	_test_ten_day_e_polish()
+	_test_n15_mid_tier_render()
+	_test_p_n11_cold_contract_phrases()
+	_test_ten_day_letter_skips_system_followup()
+	_test_ten_day_route_refresh_follows_ending()
+	_test_time_pause_depth()
+	_test_advance_day_blocked_without_name()
+	_test_companion_offer_affirmative()
+	_test_task_stale_reconcile()
 
 
 func _test_advance_day_writes_journal() -> void:
 	GameState.reset_for_new_game()
+	_ensure_player_named()
 	var day_before := GameState.game_day
 	GameState.advance_day()
 	_assert(GameState.game_day == day_before + 1, "advance_day increments game_day")
@@ -103,6 +117,7 @@ func _test_advance_day_writes_journal() -> void:
 
 func _test_weather_aligns_with_story_days() -> void:
 	GameState.reset_for_new_game()
+	_ensure_player_named()
 	_assert(
 		GameState.weather_tomorrow_hint == GameState.WEATHER_RAIN,
 		"day 2 preview is rainy for P_N02"
@@ -182,6 +197,7 @@ func _test_week_wrap_includes_day7_preview() -> void:
 
 func _test_week_archive_after_day7_advance() -> void:
 	GameState.reset_for_new_game()
+	_ensure_player_named()
 	GameState.game_day = 7
 	for loop_day in range(1, 7):
 		GameState.day_journal.append({
@@ -223,6 +239,7 @@ func _test_ten_day_no_week_wrap() -> void:
 
 func _test_ten_day_day7_advance_keeps_journal() -> void:
 	GameState.reset_for_new_game()
+	_ensure_player_named()
 	GameState.game_day = 7
 	GameState.day_journal.append({
 		"day": 6,
@@ -578,7 +595,7 @@ func _test_ten_day_smoke_keep_path() -> void:
 	StoryBeatDirector.refresh_story_route()
 	for day in range(6, 10):
 		GameState.game_day = day
-		StoryBeatDirector.ensure_story_route_locked()
+		StoryBeatDirector.refresh_story_route()
 		var beat_id := StoryBeatDirector.get_today_beat_id()
 		_assert(beat_id.strip_edges() != "", "keep D%d has pending beat" % day)
 		if day == 7:
@@ -750,6 +767,88 @@ func _test_ten_day_mid_profile_copy() -> void:
 	_assert(d7_mid != d7_warm, "D7 mid differs from warm at high affection")
 
 
+func _test_n15_mid_tier_render() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 8
+	GameState.affection = 40
+	var body := StoryRouteData.render_body("NM_N15", "NM_N15_mid")
+	_assert(body.strip_edges() != "", "N15 mid tier body non-empty")
+	_assert("本子" in body, "N15 mid mentions notebook")
+
+
+func _test_p_n11_cold_contract_phrases() -> void:
+	GameState.reset_for_new_game()
+	var cold := StoryRouteData.render_body("P_N11", "P_N11_cold")
+	_assert("一起看" in cold, "P_N11_cold keeps 一起看 contract phrase")
+	_assert("写进本子" in cold, "P_N11_cold keeps 写进本子 contract phrase")
+	_assert("这一句我不想拿它赖掉" in cold, "P_N11_cold keeps D3 knife line")
+	_assert("拿这个砸我" in cold, "P_N11_cold keeps notebook smash line")
+	_assert(not ("你忙你的" in cold), "P_N11_cold has no companion-wait filler")
+
+
+func _test_ten_day_letter_skips_system_followup() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.affection = 40
+	GameState.long_term_memory["memory_recovery"] = 0.55
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 6
+	var beat := StoryBeatDirector.build_beat("NM_N02p")
+	var steps: Array = beat.get("steps", [])
+	_assert(not steps.is_empty(), "D6 letter still has story steps")
+	for raw in steps:
+		if not raw is Dictionary:
+			continue
+		_assert(str(raw.get("title", "")) != "小狸想说", "ten-day letter has no 小狸想说 followup")
+		_assert(not ("脑子里又清楚" in str(raw.get("body", ""))), "ten-day letter has no recovery_warm")
+
+
+func _test_ten_day_route_refresh_follows_ending() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_w2_keep_choice()
+	GameState.game_day = 5
+	GameState.affection = 0
+	StoryBeatDirector.refresh_story_route()
+	_assert(
+		GameState.get_story_route() != StoryRouteData.ROUTE_TRUE,
+		"D5 low-stats keep does not lock True"
+	)
+	GameState.game_day = 7
+	_seed_true_ending_stats()
+	StoryBeatDirector.refresh_story_route()
+	_assert(GameState.get_story_route() == StoryRouteData.ROUTE_TRUE, "later refresh upgrades to True")
+	_assert(StoryBeatDirector.get_today_beat_id() == "TR_N16", "D7 calendar follows True route")
+
+
+func _test_time_pause_depth() -> void:
+	GameState.reset_for_new_game()
+	_assert(not GameState.is_time_paused(), "time starts unpaused")
+	GameState.push_time_pause()
+	_assert(GameState.is_time_paused(), "single push pauses time")
+	GameState.push_time_pause()
+	_assert(GameState.is_time_paused(), "nested push keeps pause")
+	GameState.pop_time_pause()
+	_assert(GameState.is_time_paused(), "one pop leaves nested pause")
+	GameState.pop_time_pause()
+	_assert(not GameState.is_time_paused(), "all pops restore time")
+	GameState.pop_time_pause()
+	_assert(not GameState.is_time_paused(), "extra pop is safe")
+
+
+func _test_advance_day_blocked_without_name() -> void:
+	GameState.reset_for_new_game()
+	var day_before := GameState.game_day
+	GameState.advance_day()
+	_assert(GameState.game_day == day_before, "advance_day blocked without player name")
+	_ensure_player_named()
+	GameState.advance_day()
+	_assert(GameState.game_day == day_before + 1, "advance_day works after naming")
+
+
 func _test_status_inquiry_not_sleep() -> void:
 	_assert(not IntentParser.looks_like_sleep_request("熟了没"), "熟了没 is not sleep")
 	_assert(IntentParser.looks_like_sleep_request("你还不睡觉吗"), "sleep nudge recognized")
@@ -813,7 +912,10 @@ func _test_personalized_story_steps() -> void:
 	for step in beat.get("steps", []):
 		if step is Dictionary and str(step.get("llm_render", "")) == "chat_digest":
 			has_llm = true
-	_assert(has_llm, "N02p chat track marks llm_render")
+	if GameState.IS_TEN_DAY_EDITION:
+		_assert(not has_llm, "ten-day N02p skips chat_digest step")
+	else:
+		_assert(has_llm, "N02p chat track marks llm_render")
 
 
 func _test_d7_pending_tail_cleared_on_complete() -> void:
@@ -838,6 +940,7 @@ func _test_d7_pending_tail_cleared_on_complete() -> void:
 
 func _test_chat_archive_on_advance() -> void:
 	GameState.reset_for_new_game()
+	_ensure_player_named()
 	GameState.record_chat_turn("player", "今天有点累")
 	GameState.record_chat_turn("companion", "那先歇一会儿")
 	GameState.advance_day()
@@ -1006,7 +1109,7 @@ func _test_fallback_keep_path_d1_d10() -> void:
 	StoryBeatDirector.refresh_story_route()
 	for day in range(6, 10):
 		GameState.game_day = day
-		StoryBeatDirector.ensure_story_route_locked()
+		StoryBeatDirector.refresh_story_route()
 		var beat_id := StoryBeatDirector.get_today_beat_id()
 		_assert(beat_id.strip_edges() != "", "fallback keep D%d spine" % day)
 		_assert_fallback_beat_playable(beat_id, "fallback keep D%d spine" % day)
@@ -1168,6 +1271,46 @@ func _test_persona_regression_suite() -> void:
 	var literary := ResponseValidator.validate("player_chat", "雨帘后面，心里发紧。", payload, [])
 	_assert(not bool(literary.get("ok", true)), "literary phrase rejected in chat")
 
+	var sunny_payload := {
+		"weather_today": GameState.WEATHER_SUN,
+		"story_mode": "keep",
+	}
+	var rain_hallucination := ResponseValidator.validate(
+		"player_chat",
+		"那我先把柴搬进屋，等雨停了就去镇上买种子。",
+		sunny_payload,
+		[]
+	)
+	_assert(not bool(rain_hallucination.get("ok", true)), "sunny day rain talk rejected")
+	_assert(str(rain_hallucination.get("reason", "")) == "weather_mismatch", "weather mismatch reason")
+	var tomorrow_ok := ResponseValidator.validate(
+		"player_chat",
+		"明天可能要下雨，今天先把种子买好。",
+		sunny_payload,
+		[]
+	)
+	_assert(bool(tomorrow_ok.get("ok", true)), "tomorrow rain forecast allowed on sunny day")
+	var rain_small := ResponseValidator.validate(
+		"player_chat",
+		"等雨小了我就去买种子。",
+		sunny_payload,
+		[]
+	)
+	_assert(not bool(rain_small.get("ok", true)), "等雨小了 rejected on sunny day")
+	var timing_bad := ResponseValidator.validate(
+		"player_chat",
+		"你昨天倒是走得利索，就留了句拜拜。",
+		{
+			"weather_today": GameState.WEATHER_SUN,
+			"story_mode": "keep",
+			"relationship": {"game_day": 1},
+			"chat_timing": GameState.get_chat_timing_context_for_llm(),
+		},
+		[]
+	)
+	_assert(not bool(timing_bad.get("ok", true)), "day1 yesterday reference rejected")
+	_assert(str(timing_bad.get("reason", "")) == "chat_timing", "chat timing reason")
+
 
 func _test_ten_day_e_polish() -> void:
 	print("  .. E polish")
@@ -1289,6 +1432,47 @@ func _assert(condition: bool, message: String) -> void:
 	else:
 		print("  FAIL: %s" % message)
 		_failures.append(message)
+
+
+func _test_companion_offer_affirmative() -> void:
+	print("  .. companion offer affirmative")
+	_assert(
+		ShopDelegate.looks_like_shop_offer("要不要我去商店看看？"),
+		"shop offer detects 去商店 without 种子"
+	)
+	_assert(
+		ShopDelegate.looks_like_shop_seed_offer("我去商店买几包种子吧？"),
+		"shop seed offer accepts 吧 question ending"
+	)
+	_assert(
+		ShopDelegate.looks_like_water_offer("需要我帮你浇一下吗？"),
+		"water offer accepts 吗 question ending"
+	)
+	_assert(
+		ShopDelegate.looks_like_water_offer("垄还干着。要浇你说一声。"),
+		"water offer detects 你说一声 phrasing"
+	)
+	_assert(
+		ShopDelegate.looks_like_plant_offer("要不要帮你种点萝卜？"),
+		"plant offer accepts 种点 phrasing"
+	)
+	for word in ["好", "行", "去吧", "可以"]:
+		_assert(ShopDelegate.is_affirmative_reply(word), "affirmative reply: %s" % word)
+	_assert(not ShopDelegate.is_affirmative_reply("不用"), "negative reply not affirmative")
+	_assert(
+		ShopDelegate.looks_like_sleep_commitment("好，听你的。我先去把廊下那盏灯熄了。你先进屋歇着吧。"),
+		"sleep commitment detects 先进屋歇着"
+	)
+
+
+func _test_task_stale_reconcile() -> void:
+	print("  .. task stale reconcile")
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	TaskSystem.current_task = TaskSystem.TaskType.SHOP
+	TaskSystem.reconcile_stale_task()
+	_assert(not TaskSystem.is_busy(), "stale task cleared when companion has no job")
+	TaskSystem.cancel_task()
 
 
 func _print_report() -> void:

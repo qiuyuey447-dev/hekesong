@@ -81,10 +81,10 @@ func hide_sleep_prompt() -> void:
 			BgmDirector.resume_after_sleep()
 
 
-func run_sleep_sequence(advance_callback: Callable) -> void:
+func run_sleep_sequence(advance_callback: Callable, force: bool = false) -> void:
 	if _busy:
 		return
-	if GameState.is_awaiting_sleep() and not _prompt_visible:
+	if not force and GameState.is_awaiting_sleep() and not _prompt_visible:
 		return
 	_busy = true
 	_prompt_visible = false

@@ -177,25 +177,40 @@ static func looks_like_shop_seed_offer(text: String) -> bool:
 	return _looks_like_offer_question(normalized)
 
 
+static func looks_like_shop_offer(text: String) -> bool:
+	## 小狸在征求：要不要去商店/代买（LLM 常只说「去商店」不说「种子」）。
+	if looks_like_shop_seed_offer(text):
+		return true
+	var normalized := text.strip_edges()
+	if normalized.is_empty():
+		return false
+	return "商店" in normalized and _looks_like_offer_question(normalized)
+
+
 static func looks_like_plant_offer(text: String) -> bool:
 	## 小狸在征求：要不要代种空田。买种子邀约优先归 shop offer。
 	var normalized := text.strip_edges()
 	if normalized.is_empty():
 		return false
-	if looks_like_shop_seed_offer(normalized):
+	if looks_like_shop_seed_offer(normalized) or looks_like_shop_offer(normalized):
 		return false
 	if not ("种" in normalized):
 		return false
 	## 「买种子」问句不算种植邀约。
 	if "种子" in normalized and "买" in normalized:
 		return false
-	return _looks_like_offer_question(normalized) and (
+	if not _looks_like_offer_question(normalized):
+		return false
+	return (
 		"种上" in normalized
 		or "空田" in normalized
 		or "种萝卜" in normalized
 		or "帮你种" in normalized
 		or "去种" in normalized
 		or "先种" in normalized
+		or "种点" in normalized
+		or "种些" in normalized
+		or "种下" in normalized
 	)
 
 
@@ -205,7 +220,9 @@ static func looks_like_water_offer(text: String) -> bool:
 		return false
 	if not ("浇" in normalized):
 		return false
-	return _looks_like_offer_question(normalized)
+	if _looks_like_offer_question(normalized):
+		return true
+	return "你说一声" in normalized or "你吩咐" in normalized or "要浇" in normalized
 
 
 static func looks_like_water_commitment(text: String) -> bool:
@@ -263,12 +280,15 @@ static func looks_like_sleep_commitment(text: String) -> bool:
 	if normalized.is_empty():
 		return false
 	for phrase in [
-		"去睡觉", "该睡觉了", "我们去睡", "一起休息吧", "进入下一天",
-		"帮你睡", "收工睡觉", "今天就到这", "该歇了", "去休息吧",
-		"睡觉吧", "去睡吧", "我们睡觉",
+		"去睡觉", "该睡觉了", "该睡了", "我们去睡", "一起休息吧", "进入下一天",
+		"帮你睡", "收工睡觉", "今天就到这", "今天就到这儿", "该歇了", "去休息吧",
+		"睡觉吧", "去睡吧", "我们睡觉", "先进屋", "进屋歇", "歇着吧", "歇会儿吧",
+		"你先进屋", "今天先到这儿", "今天也累得", "熄了那盏灯", "熄了灯",
 	]:
 		if phrase in normalized:
 			return true
+	if normalized.ends_with("歇着吧") or normalized.ends_with("休息吧"):
+		return true
 	return false
 
 
@@ -326,6 +346,11 @@ static func _looks_like_offer_question(normalized: String) -> bool:
 		"要不要" in normalized
 		or "好不好" in normalized
 		or "可以吗" in normalized
+		or "行不行" in normalized
+		or "能不能" in normalized
+		or "可不可以" in normalized
 		or normalized.ends_with("？")
 		or normalized.ends_with("?")
+		or normalized.ends_with("吗")
+		or normalized.ends_with("嘛")
 	)

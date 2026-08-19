@@ -31,6 +31,7 @@ func cancel_from_agent() -> void:
 func reconcile_stale_task() -> void:
 	if current_task == TaskType.NONE:
 		return
+	CompanionAgent.reconcile_stuck_job()
 	if CompanionAgent.has_current_job():
 		return
 	current_task = TaskType.NONE

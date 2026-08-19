@@ -175,7 +175,10 @@ func get_invite_goal(beat_id: String, as_remind: bool = false) -> String:
 	var base := ""
 	match _invite_copy_key(beat_id):
 		"d2":
-			base = "雨天。廊下有干处，红薯还热。想让对方过来坐。可以俏皮一句，不要把信纸里的话提前说完。"
+			if GameState.weather_today == GameState.WEATHER_RAIN:
+				base = "雨天。廊下有干处，红薯还热。想让对方过来坐。可以俏皮一句，不要把信纸里的话提前说完。"
+			else:
+				base = "廊下有干处，红薯还热。想让对方过来坐。可以俏皮一句，不要把信纸里的话提前说完；今日非雨，勿提下雨或等雨停。"
 		"d3":
 			base = "苗齐了。你有个笨主意，想等对方忙完再讲。轻松开口，不要替对方做决定，不要剧透约定内容。"
 		"d4":
@@ -742,7 +745,7 @@ func _inject_opening_steps(
 		)
 		if morning.strip_edges() != "":
 			result.append({"title": "清晨", "body": morning})
-	if StoryRouteData.should_inject_proactive_nudge(beat_id):
+	if not GameState.IS_TEN_DAY_EDITION and StoryRouteData.should_inject_proactive_nudge(beat_id):
 		var nudge := StorySlotService.apply(
 			StoryRouteData.render_proactive_nudge(),
 			StorySlotService.build_context({"beat_id": beat_id})
@@ -754,6 +757,8 @@ func _inject_opening_steps(
 
 
 func _append_followup_step(beat_id: String, steps: Array[Dictionary]) -> Array[Dictionary]:
+	if GameState.IS_TEN_DAY_EDITION:
+		return steps
 	for step in steps:
 		if str(step.get("kind", "")) == "choice":
 			return steps
@@ -1149,7 +1154,7 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 					step["template"] = "%s_nochat" % tpl
 				elif tpl.ends_with("_b"):
 					step["template"] = "%s_nochat" % tpl
-		elif _d6_has_chat_track():
+		elif _d6_has_chat_track() and not GameState.IS_TEN_DAY_EDITION:
 			var insert_idx := -1
 			for i in range(steps.size()):
 				if str(steps[i].get("template", "")).ends_with("_b"):

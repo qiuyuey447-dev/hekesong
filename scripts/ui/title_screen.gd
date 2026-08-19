@@ -40,6 +40,7 @@ var _time := 0.0
 
 
 func _ready() -> void:
+	GameState.push_time_pause()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	RenderingServer.set_default_clear_color(TITLE_BACKDROP_COLOR)
@@ -535,6 +536,7 @@ func _on_continue_pressed() -> void:
 		_refresh_save_state()
 		return
 	GameState.continue_from_save()
+	GameState.pop_time_pause()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 
@@ -562,6 +564,7 @@ func _start_new_game_confirmed() -> void:
 	AmbientAudio.ensure_unlocked()
 	BgmDirector.ensure_unlocked()
 	GameState.start_new_game_fresh()
+	GameState.pop_time_pause()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 

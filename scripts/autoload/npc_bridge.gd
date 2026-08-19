@@ -205,6 +205,7 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"time_context": GameState.get_time_context_for_llm(),
 		"memory_context": memory_context,
 		"recent_chat_turns": extra.get("recent_chat_turns", GameState.get_recent_chat_turns(8)),
+		"chat_timing": GameState.get_chat_timing_context_for_llm(),
 		"world_snapshot": extra.get("world_snapshot", WorldSnapshot.capture(extra)),
 		"companion_profile": WorldSnapshot.get_companion_profile(),
 		"story_hint": _resolve_story_hint(event, extra),
@@ -574,7 +575,7 @@ func _on_http_completed(
 			call_deferred("_pump_api_queue")
 			return
 		var reason := str(validation.get("reason", ""))
-		if reason == "literary" or reason == "action_mismatch" or reason == "l3_episodic" or reason == "awkward_waiting":
+		if reason in ["literary", "action_mismatch", "l3_episodic", "awkward_waiting", "weather_mismatch", "chat_timing"]:
 			var literary_fallback := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, literary_fallback, true)
 			call_deferred("_pump_api_queue")

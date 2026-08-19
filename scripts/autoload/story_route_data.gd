@@ -580,11 +580,15 @@ func _is_n20c_tier_key(key: String) -> bool:
 func _is_n15_tier_key(key: String) -> bool:
 	if not key.contains("_N15"):
 		return false
-	return key.ends_with("_warm") or key.ends_with("_cold")
+	return key.ends_with("_warm") or key.ends_with("_cold") or key.ends_with("_mid")
 
 
 func _render_n15_tier_line(beat_id: String, key: String, route_tone: String) -> String:
-	var tier := "warm" if key.ends_with("_warm") else "cold"
+	var tier := "warm"
+	if key.ends_with("_cold"):
+		tier = "cold"
+	elif key.ends_with("_mid"):
+		tier = "mid"
 	var ctx := StorySlotService.build_context({
 		"beat_id": beat_id,
 		"journal_max_lines": StoryBeatDirector.get_n15_journal_max_lines(beat_id),

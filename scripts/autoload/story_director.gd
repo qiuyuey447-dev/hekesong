@@ -267,6 +267,33 @@ func _narrative_constraints() -> Array[String]:
 
 	constraints.append("禁止提及未实现的作物（本游戏仅萝卜田）")
 
+	if GameState.weather_today == GameState.WEATHER_SUN:
+		constraints.append(
+			"今日晴天：禁止描述正在下雨、等雨停、雨声、淋雨、地面积水；"
+			+ "若要提雨，仅限明日预报，勿写成此刻正在发生。"
+		)
+	elif GameState.weather_today == GameState.WEATHER_RAIN:
+		constraints.append("今日雨天：可以提雨；禁止说今天不下雨、天气很好、晒太阳。")
+
+	var timing := GameState.get_chat_timing_context_for_llm()
+	if not bool(timing.get("can_reference_yesterday", false)):
+		constraints.append(
+			"第 1 日或无昨日日记：禁止用「昨天」描述玩家说过的话；今日对话须用「刚才/今天/早些时候」。"
+		)
+	else:
+		constraints.append(
+			"只有上一游戏日的事可用「昨天」；今日聊天里出现过的字句须用「刚才/今天」，勿写成昨天。"
+		)
+	var today_lines: Variant = timing.get("today_player_lines", [])
+	if today_lines is Array and not today_lines.is_empty():
+		var bits: Array[String] = []
+		for raw in today_lines:
+			var line := str(raw).strip_edges()
+			if line != "":
+				bits.append("「%s」" % line.substr(0, min(line.length(), 24)))
+		if not bits.is_empty():
+			constraints.append("玩家今日已说过：" + "、".join(bits) + "（再提起时用「刚才/今天」，不是昨天）")
+
 	# 田况硬约束：避免空田却说「去浇水」这类幻觉
 	var plots := GameState.get_plot_summary()
 	var empty := int(plots.get("empty", 0))

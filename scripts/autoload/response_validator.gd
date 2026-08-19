@@ -30,6 +30,24 @@ const L3_EPISODIC_PHRASES := [
 	"以前你",
 ]
 
+const SUNNY_RAIN_PHRASES := [
+	"等雨停",
+	"等雨小",
+	"雨还没停",
+	"雨小了",
+	"这雨停",
+	"这雨下",
+	"还在下雨",
+	"正在下雨",
+	"下雨了",
+	"下起雨",
+	"雨下得",
+	"雨声",
+	"雨打",
+	"淋湿",
+	"淋雨",
+]
+
 const LITERARY_PHRASES := [
 	"雨帘",
 	"隔着雾",
@@ -64,6 +82,12 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 
 	if event in CHAT_LIKE_EVENTS and _is_awkward_waiting_reply(cleaned):
 		return {"ok": false, "reason": "awkward_waiting"}
+
+	if event in CHAT_LIKE_EVENTS and _violates_weather_facts(cleaned, payload):
+		return {"ok": false, "reason": "weather_mismatch"}
+
+	if event in CHAT_LIKE_EVENTS and _violates_chat_timing(cleaned, payload):
+		return {"ok": false, "reason": "chat_timing"}
 
 	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_action_mismatch_reply(cleaned, payload):
 		return {"ok": false, "reason": "action_mismatch"}
@@ -184,6 +208,63 @@ func _mentions_forbidden_crop(text: String) -> bool:
 	for crop_name in ["向日葵", "番茄", "蓝莓", "小麦", "玉米", "南瓜"]:
 		if crop_name in text:
 			return true
+	return false
+
+
+func _weather_code(payload: Dictionary) -> String:
+	var code := str(payload.get("weather_today", "")).strip_edges()
+	if code != "":
+		return code
+	var snap: Dictionary = payload.get("world_snapshot", {})
+	if snap is Dictionary and snap.has("weather_today"):
+		return str(snap.get("weather_today", "")).strip_edges()
+	return GameState.weather_today
+
+
+func _violates_weather_facts(text: String, payload: Dictionary) -> bool:
+	if _weather_code(payload) != GameState.WEATHER_SUN:
+		return false
+	for phrase in SUNNY_RAIN_PHRASES:
+		if phrase in text:
+			return true
+	if "雨停" in text and ("这" in text or "等" in text or "还没" in text):
+		return true
+	return false
+
+
+func _game_day_from_payload(payload: Dictionary) -> int:
+	var rel: Dictionary = payload.get("relationship", {})
+	if rel is Dictionary and rel.has("game_day"):
+		return int(rel.get("game_day", GameState.game_day))
+	var timing: Dictionary = payload.get("chat_timing", {})
+	if timing is Dictionary and timing.has("game_day"):
+		return int(timing.get("game_day", GameState.game_day))
+	return GameState.game_day
+
+
+func _violates_chat_timing(text: String, payload: Dictionary) -> bool:
+	var day := _game_day_from_payload(payload)
+	if day <= 1 and "昨天" in text:
+		return true
+	if "昨天" not in text:
+		return false
+	var timing: Dictionary = payload.get("chat_timing", {})
+	if not timing is Dictionary:
+		timing = GameState.get_chat_timing_context_for_llm()
+	var today_lines: Variant = timing.get("today_player_lines", [])
+	if not today_lines is Array:
+		return false
+	for raw in today_lines:
+		var line := str(raw).strip_edges()
+		if line == "":
+			continue
+		if line in text:
+			return true
+		if line.length() >= 2 and line in text.replace("昨天", ""):
+			return true
+		for token in ["拜拜", "再见", "回见"]:
+			if token in line and token in text:
+				return true
 	return false
 
 

@@ -16,6 +16,7 @@ const PROACTIVE_NEAR_DISTANCE := 56.0
 const PROACTIVE_SHOUT_DISTANCE := 120.0
 const PROACTIVE_SHOUT_COOLDOWN := 5.0
 const PROACTIVE_FOLLOW_OFFSET := Vector2(0, 20.0)
+const TRAVEL_STUCK_TIMEOUT := 22.0
 
 enum ProactiveMode { NONE, APPROACHING, FOLLOWING }
 enum Activity { IDLE, WALKING, WORKING }
@@ -40,6 +41,7 @@ var _current_job: Dictionary = {}
 var _idle_cooldown := 3.0
 var _idle_stand_left := 0.0
 var _work_left := 0.0
+var _travel_stuck_time := 0.0
 var _ready := false
 var _snuggle_paused := false
 
@@ -218,6 +220,7 @@ func _walk_to_target(
 	urgent: bool = true,
 	arrive_distance: float = ARRIVE_DISTANCE
 ) -> void:
+	_travel_stuck_time = 0.0
 	_set_activity(Activity.WALKING, travel_label)
 	if _visual != null and _visual.has_method("show_status_bubble"):
 		_visual.show_status_bubble(bubble_text)
@@ -313,6 +316,27 @@ func has_current_job() -> bool:
 	return not _current_job.is_empty()
 
 
+func reconcile_stuck_job() -> bool:
+	## 移动/工时卡死或 job 与 activity 不同步时自愈，避免「她还在忙」却站着不动。
+	if not _ready:
+		return false
+	if _current_job.is_empty():
+		if _activity in [Activity.WALKING, Activity.WORKING]:
+			cancel_current_job()
+			return true
+		return false
+	if _activity == Activity.IDLE:
+		cancel_current_job()
+		return true
+	if _activity == Activity.WORKING and _work_left <= 0.0:
+		_finish_work_step()
+		return true
+	if _activity == Activity.WALKING and _travel_stuck_time >= TRAVEL_STUCK_TIMEOUT:
+		cancel_current_job()
+		return true
+	return false
+
+
 func cancel_current_job() -> void:
 	if _current_job.is_empty() and _activity == Activity.IDLE:
 		return
@@ -322,6 +346,7 @@ func cancel_current_job() -> void:
 		_visual.hide_status_bubble()
 	_current_job = {}
 	_work_left = 0.0
+	_travel_stuck_time = 0.0
 	_set_activity(Activity.IDLE, "闲逛")
 	_idle_cooldown = randf_range(2.0, 4.0)
 	TaskSystem.cancel_from_agent()
@@ -410,6 +435,7 @@ func _process(delta: float) -> void:
 	_update_location_from_position()
 
 	if _activity == Activity.WORKING:
+		_travel_stuck_time = 0.0
 		_work_left = maxf(_work_left - delta, 0.0)
 		TaskSystem.report_progress(_work_left)
 		if _work_left <= 0.0:
@@ -417,7 +443,12 @@ func _process(delta: float) -> void:
 		return
 
 	if _activity == Activity.WALKING:
+		_travel_stuck_time += delta
+		if _travel_stuck_time >= TRAVEL_STUCK_TIMEOUT:
+			reconcile_stuck_job()
 		return
+
+	_travel_stuck_time = 0.0
 
 	if is_proactive_active():
 		return

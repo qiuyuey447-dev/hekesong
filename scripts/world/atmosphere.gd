@@ -20,8 +20,8 @@ func _ready() -> void:
 	_ensure_modulate()
 	call_deferred("_ensure_layers")
 	GameState.atmosphere_changed.connect(_refresh)
-	GameState.time_changed.connect(_refresh)
-	GameState.day_advanced.connect(_refresh)
+	GameState.time_changed.connect(_on_clock_refresh)
+	GameState.day_advanced.connect(_on_clock_refresh)
 
 
 func _exit_tree() -> void:
@@ -110,6 +110,10 @@ func _process(_delta: float) -> void:
 	_sync_layout()
 	if GameState.weather_today == GameState.WEATHER_RAIN:
 		_update_rain_shelter()
+
+
+func _on_clock_refresh(_arg = null) -> void:
+	_refresh(false)
 
 
 func _refresh(instant: bool = false) -> void:
