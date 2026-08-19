@@ -589,7 +589,7 @@ func complete_beat(beat_id: String) -> void:
 		if promise.is_empty() or str(promise.get("summary", "")).strip_edges() == "":
 			GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
 		GameState.unlock_fragment("F02", beat_id)
-	if beat_id in ["P_N12", "BE_N12"]:
+	if beat_id in ["P_N12", "BE_N12"] and not GameState.IS_TEN_DAY_EDITION:
 		var promise: Dictionary = GameState.long_term_memory.get("promise", {})
 		if not promise.is_empty() and not bool(promise.get("fulfilled", false)):
 			GameState.fulfill_promise("萝卜快熟了。她按约定照看着这片田。")
@@ -650,9 +650,9 @@ func get_fragment_display_lines() -> Array[String]:
 		var subtitle := str(meta.get("subtitle", "")).strip_edges()
 		if GameState.has_fragment(fid):
 			if subtitle != "":
-				lines.append("✦ %s — %s" % [title, subtitle])
+				lines.append("· %s — %s" % [title, subtitle])
 			else:
-				lines.append("✦ %s" % title)
+				lines.append("· %s" % title)
 		else:
 			lines.append("? %s" % title)
 	return lines
@@ -1181,6 +1181,7 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 				step["period_gate"] = [GameState.TIME_EVENING]
 			if tpl in ["P_N11", "BE_N11"]:
 				step["template"] = "P_N11_%s" % profile
+				step["period_gate"] = [GameState.TIME_EVENING, GameState.TIME_NIGHT]
 	elif beat_id.ends_with("_N02p"):
 		if not bool(variant.get("chat_track", true)):
 			for step in steps:

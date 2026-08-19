@@ -30,6 +30,9 @@ const ABSENCE_MIN_GAP_HOURS := 2
 const STORY_WEEKS := 2
 const FINAL_GAME_DAY := 10
 const IS_TEN_DAY_EDITION := true
+## True 线：D3 约定后随机抽两天须各投喂一次（D4–D9，不含终章日）
+const TRUE_FEED_DAY_MIN := 4
+const TRUE_FEED_DAY_MAX := 9
 const CROP_TURNIP := "turnip"
 const MATURE_STAGE := 3
 const SAVE_VERSION := 2
@@ -1392,6 +1395,8 @@ func _default_long_term_memory() -> Dictionary:
 		"anchors": [],
 		"week_summaries": [],
 		"promise": {},
+		"true_feed_days": [],
+		"true_feed_days_hit": [],
 		"revealed": false,
 		"w2_stranger_seen": false,
 		"awakening_seen": false,
@@ -2390,6 +2395,8 @@ func set_promise(promise_id: String, summary: String) -> void:
 		"summary": summary,
 		"fulfilled": false,
 	}
+	if IS_TEN_DAY_EDITION and promise_id != "chat_promise":
+		roll_true_feed_days()
 	record_memory_event("promise", "小狸写进本子：%s" % summary, 0.95, {"promise_id": promise_id})
 
 
@@ -2415,6 +2422,83 @@ func fulfill_promise(summary: String) -> void:
 	promise["fulfilled"] = true
 	long_term_memory["promise"] = promise
 	record_memory_event("promise_done", summary, 1.0, {"promise_id": promise.get("id", "")})
+
+
+func roll_true_feed_days() -> void:
+	## D3 约定写入后抽两天（D4–D9 各一次），第二次命中日投喂时兑现约定。
+	if not IS_TEN_DAY_EDITION:
+		return
+	var existing: Variant = long_term_memory.get("true_feed_days", [])
+	if existing is Array and existing.size() >= 2:
+		return
+	var pool: Array[int] = []
+	for day in range(TRUE_FEED_DAY_MIN, TRUE_FEED_DAY_MAX + 1):
+		pool.append(day)
+	pool.shuffle()
+	var picked: Array = [pool[0], pool[1]]
+	picked.sort()
+	long_term_memory["true_feed_days"] = picked
+	long_term_memory["true_feed_days_hit"] = []
+
+
+func get_true_feed_days() -> Array:
+	var days: Variant = long_term_memory.get("true_feed_days", [])
+	if days is Array:
+		return days.duplicate()
+	return []
+
+
+func is_true_feed_target_day(day: int = -1) -> bool:
+	if day < 0:
+		day = game_day
+	return day in get_true_feed_days()
+
+
+func record_true_feed_day_hit(day: int = -1) -> void:
+	if day < 0:
+		day = game_day
+	if not is_true_feed_target_day(day):
+		return
+	var hit: Variant = long_term_memory.get("true_feed_days_hit", [])
+	if not hit is Array:
+		hit = []
+	if day in hit:
+		return
+	hit.append(day)
+	long_term_memory["true_feed_days_hit"] = hit
+
+
+func true_feed_days_completed() -> bool:
+	var targets := get_true_feed_days()
+	if targets.size() < 2:
+		return false
+	var hit: Variant = long_term_memory.get("true_feed_days_hit", [])
+	return hit is Array and hit.size() >= 2
+
+
+func try_fulfill_promise_from_feed() -> bool:
+	## 十日版：在随机指定的两天各投喂一次，第二次命中日兑现 D3「一起」约定。
+	if not IS_TEN_DAY_EDITION:
+		return false
+	if not has_story_promise():
+		return false
+	var promise: Dictionary = long_term_memory.get("promise", {})
+	if bool(promise.get("fulfilled", false)):
+		return false
+	if get_true_feed_days().is_empty():
+		roll_true_feed_days()
+	if not is_true_feed_target_day():
+		return false
+	record_true_feed_day_hit()
+	if not true_feed_days_completed():
+		return false
+	if int(RelationshipDirector.get_signals().get("gifts_given", 0)) < 2:
+		return false
+	var summary := StoryNodeCopy.get_system("promise_fulfilled_feed").strip_edges()
+	if summary == "":
+		summary = "你说过的「一起」，不是等萝卜熟——是这些日子，你还愿意分她一口零食。"
+	fulfill_promise(summary)
+	return true
 
 
 func reset_daily_plots() -> void:
@@ -2590,6 +2674,12 @@ func _ensure_long_term_defaults() -> void:
 		long_term_memory["week_summaries"] = []
 	if not long_term_memory.has("promise"):
 		long_term_memory["promise"] = {}
+	if not long_term_memory.has("true_feed_days"):
+		long_term_memory["true_feed_days"] = []
+	if not long_term_memory.has("true_feed_days_hit"):
+		long_term_memory["true_feed_days_hit"] = []
+	if IS_TEN_DAY_EDITION and has_story_promise():
+		roll_true_feed_days()
 	if not long_term_memory.has("revealed"):
 		long_term_memory["revealed"] = false
 	if not long_term_memory.has("w2_stranger_seen"):

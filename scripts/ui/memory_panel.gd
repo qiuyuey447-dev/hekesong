@@ -2,48 +2,66 @@ extends PanelContainer
 
 signal closed
 
+enum ViewMode { FULL, COMPANION, PLAYER }
+
+const CARD_SIZE_FULL := Vector2(1360, 640)
+const CARD_SIZE_SINGLE := Vector2(640, 520)
+
+var _dim: ColorRect
+var _card: PanelContainer
+var _card_style: StyleBoxFlat
 var _summary_label: Label
-var _journal_label: RichTextLabel
+var _title_label: Label
 var _memory_label: RichTextLabel
 var _anchor_label: RichTextLabel
 var _player_notebook_label: RichTextLabel
 var _fragment_label: RichTextLabel
+var _memory_wrap: PanelContainer
+var _player_wrap: PanelContainer
+var _fragment_wrap: PanelContainer
+var _view_mode := ViewMode.FULL
 
 
 func _ready() -> void:
 	visible = false
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_styles()
 	_build_shell()
+	_sync_layout()
+	if not get_viewport().size_changed.is_connected(_sync_layout):
+		get_viewport().size_changed.connect(_sync_layout)
 	GameState.memory_changed.connect(refresh)
 	GameState.day_advanced.connect(refresh)
 	refresh()
 
 
-func open() -> void:
+func open(mode: ViewMode = ViewMode.FULL) -> void:
+	_view_mode = mode
+	_apply_view_mode()
+	_sync_layout()
 	visible = true
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	move_to_front()
 	refresh()
+
+
+func open_companion_notebook() -> void:
+	open(ViewMode.COMPANION)
+
+
+func open_player_notebook() -> void:
+	open(ViewMode.PLAYER)
 
 
 func close() -> void:
 	visible = false
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	closed.emit()
 
 
 func refresh() -> void:
 	var snapshot := GameState.get_memory_snapshot()
 	_summary_label.text = "第 %d 天" % GameState.game_day
-
-	_journal_label.text = ""
-	var journal_entries: Array = snapshot.get("day_journal", [])
-	if journal_entries.is_empty():
-		_journal_label.append_text("这几天的字，还没写下。")
-	else:
-		for entry in journal_entries:
-			var day_n := int(entry.get("loop_day", entry.get("game_day", 0)))
-			var summary := str(entry.get("summary", "")).strip_edges()
-			if summary == "":
-				continue
-			_journal_label.append_text("第 %d 天\n%s\n\n" % [day_n, summary])
 
 	_memory_label.text = ""
 	var pages: Array = MemoryService.get_anchor_pages()
@@ -72,9 +90,9 @@ func refresh() -> void:
 	if not promise.is_empty():
 		_memory_label.append_text("约定\n%s\n\n" % str(promise.get("summary", "")))
 		wrote = true
-	var name := GameState.get_player_display_name()
-	if name != "":
-		_memory_label.append_text("名字\n%s\n\n" % name)
+	var player_name := GameState.get_player_display_name()
+	if player_name != "":
+		_memory_label.append_text("名字\n%s\n\n" % player_name)
 		wrote = true
 	if not wrote:
 		_memory_label.append_text("本子还空着。日子过了，字会来。")
@@ -105,6 +123,8 @@ func refresh() -> void:
 
 
 func _build_styles() -> void:
+	add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.99, 0.96, 0.9, 0.97)
 	panel_style.border_color = Color(0.82, 0.68, 0.48, 0.65)
@@ -117,22 +137,37 @@ func _build_styles() -> void:
 	panel_style.shadow_color = Color(0, 0, 0, 0.14)
 	panel_style.shadow_size = 10
 	panel_style.shadow_offset = Vector2(0, 4)
-	add_theme_stylebox_override("panel", panel_style)
+	_card_style = panel_style
 
 
 func _build_shell() -> void:
-	anchors_preset = Control.PRESET_CENTER
-	offset_left = -680.0
-	offset_top = -320.0
-	offset_right = 680.0
-	offset_bottom = 320.0
+	_dim = ColorRect.new()
+	_dim.name = "Dim"
+	_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dim.set_offsets_preset(Control.PRESET_FULL_RECT)
+	_dim.color = Color(0.03, 0.03, 0.06, 0.45)
+	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(_dim)
+
+	var center := CenterContainer.new()
+	center.name = "Center"
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.set_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(center)
+
+	_card = PanelContainer.new()
+	_card.name = "Card"
+	_card.custom_minimum_size = CARD_SIZE_FULL
+	_card.add_theme_stylebox_override("panel", _card_style)
+	center.add_child(_card)
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_top", 18)
 	margin.add_theme_constant_override("margin_right", 20)
 	margin.add_theme_constant_override("margin_bottom", 18)
-	add_child(margin)
+	_card.add_child(margin)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 12)
@@ -144,6 +179,7 @@ func _build_shell() -> void:
 	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Color(0.42, 0.3, 0.18))
 	root.add_child(title)
+	_title_label = title
 
 	_summary_label = Label.new()
 	_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -155,14 +191,15 @@ func _build_shell() -> void:
 	columns.add_theme_constant_override("separation", 12)
 	root.add_child(columns)
 
-	_journal_label = _make_rich_box("日记")
-	columns.add_child(_wrap_box("这些日子", _journal_label))
 	_memory_label = _make_rich_box("本子")
-	columns.add_child(_wrap_box("她的本子", _memory_label))
+	_memory_wrap = _wrap_box("她的本子", _memory_label)
+	columns.add_child(_memory_wrap)
 	_player_notebook_label = _make_rich_box("我的本子")
-	columns.add_child(_wrap_box("我的本子", _player_notebook_label))
+	_player_wrap = _wrap_box("我的本子", _player_notebook_label)
+	columns.add_child(_player_wrap)
 	_fragment_label = _make_rich_box("记起的片段")
-	columns.add_child(_wrap_box("记起的片段", _fragment_label))
+	_fragment_wrap = _wrap_box("记起的片段", _fragment_label)
+	columns.add_child(_fragment_wrap)
 	_anchor_label = _memory_label
 
 	var close_button := Button.new()
@@ -212,3 +249,47 @@ func _make_rich_box(_name: String) -> RichTextLabel:
 	rich.add_theme_color_override("default_color", LetterPaperKit.INK)
 	rich.add_theme_color_override("font_selected_color", LetterPaperKit.INK_SOFT)
 	return rich
+
+
+func _apply_view_mode() -> void:
+	if _title_label == null:
+		return
+	match _view_mode:
+		ViewMode.COMPANION:
+			_title_label.text = "小狸的本子"
+			_memory_wrap.visible = true
+			_player_wrap.visible = false
+			_fragment_wrap.visible = false
+			_memory_label.custom_minimum_size = Vector2(560, 360)
+			if _card:
+				_card.custom_minimum_size = CARD_SIZE_SINGLE
+		ViewMode.PLAYER:
+			_title_label.text = "你的本子"
+			_memory_wrap.visible = false
+			_player_wrap.visible = true
+			_fragment_wrap.visible = false
+			_player_notebook_label.custom_minimum_size = Vector2(560, 360)
+			if _card:
+				_card.custom_minimum_size = CARD_SIZE_SINGLE
+		_:
+			_title_label.text = "记忆与本子"
+			_memory_wrap.visible = true
+			_player_wrap.visible = true
+			_fragment_wrap.visible = true
+			_memory_label.custom_minimum_size = Vector2(280, 360)
+			_player_notebook_label.custom_minimum_size = Vector2(280, 360)
+			_fragment_label.custom_minimum_size = Vector2(280, 360)
+			if _card:
+				_card.custom_minimum_size = CARD_SIZE_FULL
+
+
+func _sync_layout() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_offsets_preset(Control.PRESET_FULL_RECT)
+	if _dim:
+		_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_dim.set_offsets_preset(Control.PRESET_FULL_RECT)
+	var center := get_node_or_null("Center") as CenterContainer
+	if center:
+		center.set_anchors_preset(Control.PRESET_FULL_RECT)
+		center.set_offsets_preset(Control.PRESET_FULL_RECT)

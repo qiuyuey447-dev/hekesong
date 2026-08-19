@@ -45,9 +45,8 @@ func _ready() -> void:
 		PLOT_FRAME_SIZE,
 		PLOT_FRAME_OFFSET,
 		48.0,
-		1.0,
 		0.025,
-		2.0,
+		1.5,
 		true
 	)
 	_refresh_state()

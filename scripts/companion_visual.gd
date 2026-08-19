@@ -55,12 +55,13 @@ func _ready() -> void:
 	_build_status_bubble()
 	InteractHover.attach(
 		self,
-		COMPANION_FRAME,
-		Vector2(0, -8),
+		Vector2(14, 18),
+		Vector2(0, -10),
 		80.0,
-		0.0,
-		0.0,
-		2.5
+		0.02,
+		1.4,
+		false,
+		InteractHighlight.Shape.ELLIPSE
 	)
 
 

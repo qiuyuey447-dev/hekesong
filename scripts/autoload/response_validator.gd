@@ -30,6 +30,21 @@ const L3_EPISODIC_PHRASES := [
 	"以前你",
 ]
 
+const RAIN_SUNNY_PHRASES := [
+	"天晴",
+	"出太阳",
+	"晒太阳",
+	"大晴天",
+	"艳阳",
+	"天气很好",
+	"天气不错",
+	"天气真好",
+	"今天不下雨",
+	"没下雨",
+	"不会下雨",
+	"水汽还没干",
+]
+
 const SUNNY_RAIN_PHRASES := [
 	"等雨停",
 	"等雨小",
@@ -318,13 +333,18 @@ func _weather_code(payload: Dictionary) -> String:
 
 
 func _violates_weather_facts(text: String, payload: Dictionary) -> bool:
-	if _weather_code(payload) != GameState.WEATHER_SUN:
-		return false
-	for phrase in SUNNY_RAIN_PHRASES:
-		if phrase in text:
+	var code := _weather_code(payload)
+	if code == GameState.WEATHER_SUN:
+		for phrase in SUNNY_RAIN_PHRASES:
+			if phrase in text:
+				return true
+		if "雨停" in text and ("这" in text or "等" in text or "还没" in text):
 			return true
-	if "雨停" in text and ("这" in text or "等" in text or "还没" in text):
-		return true
+		return false
+	if code == GameState.WEATHER_RAIN:
+		for phrase in RAIN_SUNNY_PHRASES:
+			if phrase in text:
+				return true
 	return false
 
 

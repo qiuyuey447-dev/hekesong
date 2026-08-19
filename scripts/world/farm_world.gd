@@ -5,6 +5,7 @@ const PLOT_SCENE: PackedScene = preload("res://scenes/plot.tscn")
 const COMPANION_SCENE: PackedScene = preload("res://scenes/companion.tscn")
 const SHOP_SCENE: PackedScene = preload("res://scenes/shop_spot.tscn")
 const TREE_HOLLOW_SCENE: PackedScene = preload("res://scenes/tree_hollow_spot.tscn")
+const NOTEBOOK_SPOT_SCENE: PackedScene = preload("res://scenes/notebook_spot.tscn")
 
 const TILE_SIZE := 16
 const PLAYER_SPAWN_HOME_CELL := Vector2i(6, 7)
@@ -269,6 +270,7 @@ func _ensure_entities() -> void:
 	GameState.register_farm_plots(plot_count)
 	_spawn_shop(entities)
 	_spawn_tree_hollow(entities)
+	_spawn_notebook_spots(entities)
 	call_deferred("_setup_companion_agent", entities)
 
 
@@ -289,6 +291,30 @@ func _spawn_tree_hollow(entities: Node2D) -> void:
 	hollow.name = "TreeHollow"
 	hollow.position = pos
 	entities.add_child(hollow)
+
+
+func _spawn_notebook_spots(entities: Node2D) -> void:
+	var hollow_book := _farm_map.get_node_or_null("Entities/HollowBook") as Node2D
+	var my_book := _farm_map.get_node_or_null("Entities/廊下/MyNotebook") as Node2D
+	_ensure_notebook_spot(entities, "CompanionNotebook", NotebookSpot.Kind.COMPANION, hollow_book)
+	_ensure_notebook_spot(entities, "PlayerNotebook", NotebookSpot.Kind.PLAYER, my_book)
+
+
+func _ensure_notebook_spot(entities: Node2D, spot_name: String, kind: NotebookSpot.Kind, anchor: Node2D) -> void:
+	if anchor == null:
+		return
+	var existing := entities.get_node_or_null(spot_name) as NotebookSpot
+	if existing != null:
+		existing.global_position = anchor.global_position
+		existing.kind = kind
+		return
+	var spot := NOTEBOOK_SPOT_SCENE.instantiate() as NotebookSpot
+	if spot == null:
+		return
+	spot.name = spot_name
+	spot.kind = kind
+	spot.global_position = anchor.global_position
+	entities.add_child(spot)
 
 
 func _spawn_shop(entities: Node2D) -> void:

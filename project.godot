@@ -18,7 +18,7 @@ config/name="去狸的岛"
 config/description="十日完整故事 · 与 AI 伙伴小狸一起种田、聊天、留下约定；她会忘记你，也会在雾里慢慢认出你。"
 run/main_scene="res://scenes/title_screen.tscn"
 config/features=PackedStringArray("4.7")
-config/icon="res://icon.svg"
+config/icon="res://assets/ui/companion_icon.png"
 
 [autoload]
 

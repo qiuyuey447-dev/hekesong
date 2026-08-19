@@ -25,8 +25,9 @@ func _ready() -> void:
 func _boot() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
 	_packed = load("res://scenes/main.tscn") as PackedScene
-	_print("=== PERSONA20 FULLPLAY START ===")
-	for spec in _persona_specs():
+	var specs := _persona_specs_filtered()
+	_print("=== PERSONA20 FULLPLAY START n=%d ===" % specs.size())
+	for spec in specs:
 		await _play_one(spec)
 	_write_report()
 	_print("=== PERSONA20 FULLPLAY DONE n=%d ===" % _runs.size())
@@ -81,7 +82,7 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 	var keep_chosen := false
 	var expel_chosen := false
 	var sit := false
-	var d9 := ""
+	var eviction_ui_ok := false
 	var letter_titles: PackedStringArray = []
 	var max_day := 12
 	var safety := 0
@@ -92,9 +93,6 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 		var day := GameState.game_day
 		if _ui:
 			_ui.set("_pending_morning_sidewrite", false)
-		if day == 10 or GameState.should_show_awakening():
-			await _flip_awakening_and_ending(run)
-			break
 		if bool(spec.get("skip_first", false)) and day == 1 and not bool(run.get("tried_skip", false)):
 			run["tried_skip"] = true
 			var blocked := await _try_sleep_now()
@@ -144,24 +142,36 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 			expel_chosen = true
 		if GameState.get_ending_flags().get("companionship_nights", 0):
 			sit = true
-		await _wait_snuggle_if_any()
-		await _auto_resolve_notebook_eviction()
+		var feed_days: Array = spec.get("feed_days", [])
+		if bool(spec.get("feed_true_targets", false)):
+			if GameState.is_true_feed_target_day(day):
+				await _feed_treat_harness(day)
+		elif day in feed_days:
+			await _feed_treat_harness(day)
+		await _wait_snuggle_if_any(spec)
+		await _resolve_notebook_eviction(spec, run)
 		await _await_npc_idle(90)
 		if GameState.is_story_complete() or _ending_visible():
 			await _flip_awakening_and_ending(run)
 			break
+		if day >= GameState.FINAL_GAME_DAY or GameState.should_show_awakening():
+			await _flip_awakening_and_ending(run)
+			break
 		var slept := await _sleep_through_night()
 		if not slept:
-			_err("D%d 睡觉失败 toast=%s beat=%s seen=%s" % [
-				day, _toast(), StoryBeatDirector.get_today_beat_id(),
-				str(GameState.is_story_node_seen(StoryBeatDirector.get_today_beat_id())),
-			])
 			var bid := StoryBeatDirector.get_today_beat_id()
-			if bid != "" and not GameState.is_story_node_seen(bid):
-				StoryBeatDirector.complete_beat(bid)
+			_err("D%d 睡觉失败 toast=%s beat=%s seen=%s" % [
+				day, _toast(), bid,
+				str(StoryBeatDirector.is_beat_seen(bid)),
+			])
+			await _settle(0.2)
+			await _flip_story(spec)
+			await _wait_snuggle_if_any(spec)
+			if bid != "" and not StoryBeatDirector.is_beat_seen(bid):
+				_force_clear_sleep_blockers(bid)
 				_note("D%d 兜底 complete_beat %s" % [day, bid])
 				run["needed_force"] = true
-				slept = await _sleep_through_night()
+			slept = await _sleep_through_night()
 			if not slept:
 				run["stuck"] = true
 				run["stuck_day"] = day
@@ -173,7 +183,7 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 			run["stuck"] = true
 			run["stuck_day"] = GameState.game_day
 			break
-	run["knife"] = knife
+	run["knife"] = knife or ("看到 D3 刀垫" in " | ".join(_notes))
 	run["telegraph"] = telegraph or ("清晨风很凉" in " ".join(_notes))
 	run["sleep_blocked"] = sleep_blocked
 	run["chat_ok"] = chat_ok
@@ -184,9 +194,11 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 	run["keep_chosen"] = keep_chosen
 	run["expel_chosen"] = expel_chosen
 	run["sit"] = sit
+	run["eviction_ui_ok"] = eviction_ui_ok or bool(run.get("eviction_ui_ok", false))
 	run["letters"] = ", ".join(letter_titles).substr(0, 400)
 	if _ending_visible() or GameState.should_show_awakening():
-		await _flip_awakening_and_ending(run)
+		if not bool(run.get("_awakening_done", false)):
+			await _flip_awakening_and_ending(run)
 	return not bool(run.get("stuck", false))
 
 
@@ -225,7 +237,7 @@ func _reset_live_game() -> void:
 		_ui.set("_snuggle_blocked", false)
 		_ui.set("_name_prompt_blocked", false)
 		_ui.set("_defer_day_content", false)
-		for path in ["StoryBeatPanel", "AwakeningPanel", "EndingPanel", "NamePromptPanel"]:
+		for path in ["StoryBeatPanel", "AwakeningPanel", "EndingPanel", "NamePromptPanel", "StoryChoicePanel"]:
 			var p: Node = _ui.get_node_or_null(path)
 			if p and p.has_method("close_panel"):
 				p.call("close_panel")
@@ -245,13 +257,25 @@ func _despawn_main() -> void:
 
 
 func _ensure_period_for_beat() -> void:
-	## 早晨若无 pending beat，切到傍晚再试（D3 约定等 evening gate）。
+	## D3 约定等 evening-only step：早晨 take_displayable_beat 会空，需切傍晚或等 tail resume。
+	if GameState.get_pending_story_beat_tail_id() != "":
+		if GameState.time_of_day == GameState.TIME_MORNING:
+			GameState.time_of_day = GameState.TIME_EVENING
+			GameState.time_changed.emit(GameState.time_of_day)
+		return
 	var beat := StoryBeatDirector.get_pending_session_beat(false)
-	if not beat.is_empty():
+	if beat.is_empty():
+		if GameState.time_of_day == GameState.TIME_MORNING:
+			GameState.time_of_day = GameState.TIME_EVENING
+			GameState.time_changed.emit(GameState.time_of_day)
 		return
 	if GameState.time_of_day == GameState.TIME_MORNING:
-		GameState.time_of_day = GameState.TIME_EVENING
-		GameState.time_changed.emit(GameState.time_of_day)
+		var split := StoryBeatDirector.split_steps_by_period_gate(beat.get("steps", []))
+		var now_steps: Array = split.get("now", [])
+		var later_steps: Array = split.get("later", [])
+		if now_steps.is_empty() and not later_steps.is_empty():
+			GameState.time_of_day = GameState.TIME_EVENING
+			GameState.time_changed.emit(GameState.time_of_day)
 
 
 func _flip_remaining_periods(spec: Dictionary) -> PackedStringArray:
@@ -261,11 +285,12 @@ func _flip_remaining_periods(spec: Dictionary) -> PackedStringArray:
 		GameState.time_changed.emit(GameState.time_of_day)
 		if _ui and _ui.has_method("_maybe_resume_beat_tail"):
 			await _ui.call("_maybe_resume_beat_tail")
-			await _settle(0.06)
+			await _settle(0.12)
 		if _ui and _ui.has_method("_maybe_show_story_beat"):
 			await _ui.call("_maybe_show_story_beat", true)
-			await _settle(0.06)
+			await _settle(0.12)
 		titles.append_array(await _flip_story(spec))
+	await _ensure_today_beat_flipped(spec)
 	return titles
 
 
@@ -278,47 +303,111 @@ func _flip_story(spec: Dictionary) -> PackedStringArray:
 		return titles
 	var guard := 0
 	var last_title := ""
-	while panel.visible and guard < 80:
+	while panel.visible and guard < 120:
 		guard += 1
-		if bool(panel.get("_page_turning")):
-			await get_tree().process_frame
-			continue
+		await _wait_letter_panel_stable(panel)
 		var title := _panel_title(panel)
 		var body := _panel_body(panel)
+		if body.strip_edges() != "":
+			_day_letters.append(body)
+		_check_story_body(body)
 		if title != last_title:
 			last_title = title
 			titles.append(title)
-			_day_letters.append(body)
 			_print("%s LETTER %s | %s" % [_pid, title, body.substr(0, 90).replace("\n", " / ")])
-			if "这一句我不想拿它赖掉" in body or "拿这个砸我" in body:
-				_note("看到 D3 刀垫")
-			if "像不认得" in body and "清晨风很凉" in body:
-				_note("信纸里有 telegraph")
 		if bool(panel.get("_is_choice_step")) and not panel.get("_choice_buttons").is_empty():
 			var cid := _choice_for_spec(spec, panel)
 			_print("%s CHOICE %s" % [_pid, cid])
 			_emit_choice(cid)
-			await _settle(0.12)
+			await _settle(0.15)
 			continue
-		if panel.has_method("_on_continue_pressed"):
-			panel.call("_on_continue_pressed")
-			await _settle(0.04)
-			if panel.visible and panel.has_method("_on_continue_pressed") and not bool(panel.get("_is_choice_step")):
-				panel.call("_on_continue_pressed")
-		await _settle(0.05)
-	await _settle(0.08)
+		if not await _story_panel_continue(panel):
+			break
+		await _settle(0.08)
+	await _settle(0.1)
 	return titles
 
 
+func _ensure_today_beat_flipped(spec: Dictionary) -> void:
+	var bid := StoryBeatDirector.get_today_beat_id()
+	if bid == "" or StoryBeatDirector.is_beat_seen(bid):
+		return
+	for period in [GameState.time_of_day, GameState.TIME_EVENING, GameState.TIME_NIGHT]:
+		GameState.time_of_day = period
+		GameState.time_changed.emit(GameState.time_of_day)
+		if _ui and _ui.has_method("_maybe_resume_beat_tail"):
+			await _ui.call("_maybe_resume_beat_tail")
+			await _settle(0.12)
+		if _ui and _ui.has_method("_maybe_show_story_beat"):
+			await _ui.call("_maybe_show_story_beat", true)
+			await _settle(0.12)
+		await _flip_story(spec)
+		if StoryBeatDirector.is_beat_seen(bid):
+			return
+
+
+func _wait_letter_panel_stable(panel: Node, max_frames: int = 90) -> void:
+	var n := 0
+	while n < max_frames:
+		n += 1
+		var turning := bool(panel.get("_page_turning"))
+		var typing := bool(panel.get("_typing"))
+		if not turning and not typing:
+			return
+		await get_tree().process_frame
+
+
+func _story_panel_continue(panel: Node) -> bool:
+	if not panel.visible or not panel.has_method("_on_continue_pressed"):
+		return false
+	panel.call("_on_continue_pressed")
+	await _settle(0.06)
+	await _wait_letter_panel_stable(panel)
+	if bool(panel.get("_typing")):
+		panel.call("_on_continue_pressed")
+		await _settle(0.06)
+		await _wait_letter_panel_stable(panel)
+	return panel.visible
+
+
+func _richtext_body(node: Node) -> String:
+	if node == null:
+		return ""
+	if node.has_method("get_parsed_text"):
+		var parsed := str(node.call("get_parsed_text")).strip_edges()
+		if parsed != "":
+			return parsed
+	return str(node.get("text")).strip_edges()
+
+
+func _force_clear_sleep_blockers(beat_id: String) -> void:
+	_clear_stuck_story_beat_ui()
+	_close_eviction_ui()
+	if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+		StoryBeatDirector.complete_beat(beat_id)
+	GameState.clear_pending_story_beat_tail()
+	StoryBeatDirector.mark_schedule_fired()
+	if _ui != null:
+		_ui.set("_story_beat_blocked", false)
+		_ui.set("_story_choice_blocked", false)
+		_ui.set("_pending_post_snuggle_day_advance", false)
+
+
 func _choice_for_spec(spec: Dictionary, panel: Node) -> String:
+	var beat_id := str(panel.call("get_beat_id")) if panel.has_method("get_beat_id") else ""
+	var title := _panel_title(panel)
+	if beat_id == "P_N06p":
+		if "真的" in title or "确定" in title:
+			if bool(spec.get("keep", true)):
+				return "w2_expel_cancel"
+			return "w2_expel_confirm"
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
 	var buttons: Array = panel.get("_choice_buttons")
 	var labels := PackedStringArray()
 	for b in buttons:
 		if b is Button:
 			labels.append(str(b.text))
 	var joined := " ".join(labels)
-	if "留下" in joined:
-		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
 	if "确定" in joined or "送她" in joined:
 		if bool(spec.get("keep", true)):
 			return "w2_expel_cancel"
@@ -327,6 +416,10 @@ func _choice_for_spec(spec: Dictionary, panel: Node) -> String:
 		return "companion_sit" if bool(spec.get("sit", true)) else "companion_leave"
 	if "继续听" in joined:
 		return str(spec.get("d9", "d9_continue"))
+	if "让她走" in joined and "留下" in joined:
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
+	if "留下" in joined:
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
 	return "w2_keep"
 
 
@@ -408,13 +501,42 @@ func _sleep_through_night() -> bool:
 	return GameState.game_day > day0
 
 
-func _wait_snuggle_if_any() -> void:
+func _feed_treat_harness(day: int) -> void:
+	GameState.reset_daily_feed()
+	GameState.add_item("berry", 1)
+	var commit := GameState.commit_feed_treat("berry")
+	if not bool(commit.get("ok", false)):
+		_err("D%d 投喂失败" % day)
+		return
+	GameState.try_fulfill_promise_from_feed()
+	var gifts := int(RelationshipDirector.get_signals().get("gifts_given", 0))
+	var fulfilled := bool(GameState.long_term_memory.get("promise", {}).get("fulfilled", false))
+	_note("D%d 投喂 berry gifts=%d promise_fulfilled=%s" % [day, gifts, str(fulfilled)])
+
+
+func _wait_snuggle_if_any(spec: Dictionary = {}) -> void:
 	if _ui == null:
 		return
 	var n := 0
 	while bool(_ui.get("_snuggle_blocked")) and n < 120:
 		n += 1
 		await get_tree().process_frame
+	var panel: Node = _ui.get_node_or_null("StoryBeatPanel")
+	if panel != null and panel.visible and (
+		bool(_ui.get("_pending_post_snuggle_day_advance")) or bool(_ui.get("_story_beat_blocked"))
+	):
+		await _flip_story(spec)
+		await _settle(0.08)
+
+
+func _clear_stuck_story_beat_ui() -> void:
+	if _ui == null:
+		return
+	_ui.set("_story_beat_blocked", false)
+	_ui.set("_pending_post_snuggle_day_advance", false)
+	var panel: Node = _ui.get_node_or_null("StoryBeatPanel")
+	if panel != null and panel.visible and panel.has_method("close_panel"):
+		panel.call("close_panel")
 
 
 func _await_npc_idle(max_frames: int = 60) -> void:
@@ -424,6 +546,13 @@ func _await_npc_idle(max_frames: int = 60) -> void:
 	while bool(_ui.get("_npc_busy")) and n < max_frames:
 		n += 1
 		await get_tree().process_frame
+
+
+func _resolve_notebook_eviction(spec: Dictionary, run: Dictionary) -> void:
+	if bool(spec.get("eviction_manual", false)):
+		await _pick_notebook_eviction_ui(run)
+		return
+	await _auto_resolve_notebook_eviction()
 
 
 func _auto_resolve_notebook_eviction() -> void:
@@ -437,37 +566,197 @@ func _auto_resolve_notebook_eviction() -> void:
 	if pick != "":
 		MemoryService.resolve_eviction(pick)
 		_note("本子满自动划掉 %s" % pick)
-	if _ui:
-		_ui.set("_notebook_eviction_active", false)
-		_ui.set("_story_choice_blocked", false)
-		var choice_panel: Node = _ui.get_node_or_null("StoryChoicePanel")
-		if choice_panel and choice_panel.has_method("close_panel"):
-			choice_panel.call("close_panel")
+	_close_eviction_ui()
+
+
+func _pick_notebook_eviction_ui(run: Dictionary) -> void:
+	if not MemoryService.has_pending_eviction():
+		return
+	var anchors_before := _anchor_count()
+	var candidates := MemoryService.get_pending_eviction_candidates()
+	if candidates.size() < 2:
+		_err("本子划掉 UI 候选不足 n=%d" % candidates.size())
+		await _auto_resolve_notebook_eviction()
+		return
+	if _ui and _ui.has_method("_maybe_resume_pending_eviction"):
+		_ui.call("_maybe_resume_pending_eviction")
+	var panel: Node = _ui.get_node_or_null("StoryChoicePanel") if _ui else null
+	var guard := 0
+	while guard < 240:
+		guard += 1
+		if panel != null and panel.visible:
+			break
+		var story: Node = _ui.get_node_or_null("StoryBeatPanel") if _ui else null
+		if story != null and story.visible:
+			await get_tree().process_frame
+			continue
+		if MemoryService.has_pending_eviction() and _ui and _ui.has_method("_maybe_resume_pending_eviction"):
+			_ui.call("_maybe_resume_pending_eviction")
+		await get_tree().process_frame
+	if panel == null or not panel.visible:
+		_err("本子划掉 UI 未弹出 pending=%s" % str(MemoryService.has_pending_eviction()))
+		run["eviction_ui_fail"] = true
+		await _auto_resolve_notebook_eviction()
+		return
+	var title := _eviction_panel_title(panel)
+	var body := _eviction_panel_body(panel)
+	_print("%s EVICTION %s | %s" % [_pid, title, body.substr(0, 90).replace("\n", " / ")])
+	if title != "她的本子":
+		_err("本子划掉 UI 标题异常=%s" % title)
+	var raw_choices: Variant = panel.get("_choices")
+	var choices: Array = raw_choices if raw_choices is Array else []
+	if choices.size() < 2:
+		_err("本子划掉 UI 选项不足 n=%d" % choices.size())
+		run["eviction_ui_fail"] = true
+		await _auto_resolve_notebook_eviction()
+		return
+	var pick: Dictionary = choices[0]
+	var pick_id := str(pick.get("id", ""))
+	var pick_label := str(pick.get("label", ""))
+	var chat_before := _chat_tail()
+	var clicked := _press_first_story_choice_button(panel)
+	if not clicked and panel.has_signal("chosen"):
+		panel.emit_signal("chosen", pick_id)
+	elif not clicked:
+		_err("StoryChoicePanel 无法点击选项")
+		run["eviction_ui_fail"] = true
+		await _auto_resolve_notebook_eviction()
+		return
+	await _settle(0.18)
+	if panel.visible and panel.has_method("close_panel"):
+		panel.call("close_panel")
+	var pending_wait := 0
+	while MemoryService.has_pending_eviction() and pending_wait < 45:
+		pending_wait += 1
+		await get_tree().process_frame
+	if panel.visible:
+		_err("本子划掉 UI 点击后仍可见")
+	if MemoryService.has_pending_eviction():
+		_err("本子划掉 UI 后仍 pending，改自动划页")
+		run["eviction_ui_fail"] = true
+		await _auto_resolve_notebook_eviction()
+		return
+	run["eviction_ui_ok"] = true
+	_note("本子划掉 UI pick=%s「%s」anchors %d→%d" % [
+		pick_id, pick_label, anchors_before, _anchor_count(),
+	])
+	var chat_after := _chat_tail()
+	if chat_after != chat_before and "划掉了" in chat_after:
+		run["eviction_chat_ok"] = true
+		_note("本子划掉 UI 小狸回话=%s" % chat_after.substr(0, 60).replace("\n", " "))
+
+
+func _press_first_story_choice_button(panel: Node) -> bool:
+	var row: Node = panel.get("_buttons_row")
+	if row == null:
+		return false
+	for child in row.get_children():
+		if child is Button:
+			child.pressed.emit()
+			return true
+	return false
+
+
+func _close_eviction_ui() -> void:
+	if _ui == null:
+		return
+	_ui.set("_notebook_eviction_active", false)
+	_ui.set("_story_choice_blocked", false)
+	var choice_panel: Node = _ui.get_node_or_null("StoryChoicePanel")
+	if choice_panel and choice_panel.has_method("close_panel"):
+		choice_panel.call("close_panel")
+
+
+func _anchor_count() -> int:
+	var anchors: Variant = GameState.long_term_memory.get("anchors", [])
+	if anchors is Array:
+		return anchors.size()
+	return 0
+
+
+func _eviction_panel_title(panel: Node) -> String:
+	var n: Node = panel.get("_title_label")
+	return str(n.text) if n else ""
+
+
+func _eviction_panel_body(panel: Node) -> String:
+	return _richtext_body(panel.get("_body_label"))
+
+
+func _log_true_ending_gates(run: Dictionary) -> void:
+	if not GameState.IS_TEN_DAY_EDITION:
+		return
+	var factors := RelationshipDirector.get_ending_factors()
+	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
+	var recovery := float(factors.get("memory_recovery", 0.0))
+	var fragments := int(factors.get("fragments", 0))
+	var nights := int(factors.get("companionship_nights", 0))
+	var interaction := float(factors.get("interaction_score", 0.0))
+	var chat_days := int(factors.get("chat_days", 0))
+	var gaps := PackedStringArray()
+	if recovery < 0.48:
+		gaps.append("recovery %.2f<0.48" % recovery)
+	if fragments < 3:
+		gaps.append("fragments %d<3" % fragments)
+	if nights < 1:
+		gaps.append("nights %d<1" % nights)
+	if promise.is_empty() or not bool(promise.get("fulfilled", false)):
+		gaps.append("promise未兑现")
+	var gifts := int(factors.get("gifts_given", 0))
+	if gifts < 2:
+		gaps.append("gifts_given %d<2" % gifts)
+	if interaction < 0.40:
+		gaps.append("interaction %.2f<0.40" % interaction)
+	if chat_days < 3:
+		gaps.append("chat_days %d<3" % chat_days)
+	var resolved := EndingDirector.resolve_ending(false)
+	run["true_gate_gaps"] = ", ".join(gaps)
+	run["ending_factors"] = factors.duplicate(true)
+	run["promise_fulfilled"] = bool(promise.get("fulfilled", false))
+	if gaps.is_empty():
+		_note("D10 True门槛全过 resolved=%s" % resolved)
+	else:
+		_note("D10 resolved=%s True缺口: %s" % [resolved, ", ".join(gaps)])
+	_print("%s TRUE_GATE resolved=%s gaps=%s frags=%d chat_days=%d promise_fulfilled=%s" % [
+		_pid, resolved, ", ".join(gaps), fragments, chat_days,
+		str(promise.get("fulfilled", false)),
+	])
 
 
 func _flip_awakening_and_ending(run: Dictionary) -> void:
 	if _ui == null:
 		return
+	if bool(run.get("_awakening_done", false)):
+		return
+	run["_awakening_done"] = true
+	_log_true_ending_gates(run)
 	if GameState.should_show_awakening() and _ui.has_method("_maybe_show_awakening"):
 		_ui.call("_maybe_show_awakening")
-		await _settle(0.1)
+		await _settle(0.35)
 	var aw: Node = _ui.get_node_or_null("AwakeningPanel")
+	var wait_aw := 0
+	while (aw == null or not aw.visible) and wait_aw < 60 and GameState.should_show_awakening():
+		wait_aw += 1
+		await get_tree().process_frame
+		aw = _ui.get_node_or_null("AwakeningPanel")
 	var guard := 0
-	while aw != null and aw.visible and guard < 40:
+	while aw != null and aw.visible and guard < 80:
 		guard += 1
+		await _wait_letter_panel_stable(aw)
 		var title := ""
 		if aw.get("_title_label"):
 			title = str(aw.get("_title_label").text)
 		var body := ""
 		if aw.get("_body_label"):
-			body = str(aw.get("_body_label").get("text"))
+			body = _richtext_body(aw.get("_body_label"))
 		_print("%s AWAKEN %s | %s" % [_pid, title, body.substr(0, 100).replace("\n", " / ")])
-		if "忘的，从来不只是我" in body or "忘的从来不只是我" in body:
-			run["two_way"] = true
-			_note("D10 双向遗忘")
+		_check_two_way_text(body, run)
 		if aw.has_method("_on_continue_pressed"):
 			aw.call("_on_continue_pressed")
-		await _settle(0.08)
+			await _settle(0.06)
+			if bool(aw.get("_typing")):
+				aw.call("_on_continue_pressed")
+		await _settle(0.12)
 	await _settle(0.15)
 	var en: Node = _ui.get_node_or_null("EndingPanel")
 	guard = 0
@@ -485,10 +774,9 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 			et = str(en.get("_title_label").text)
 		var eb := ""
 		if en.get("_body_label"):
-			eb = str(en.get("_body_label").get("text"))
+			eb = _richtext_body(en.get("_body_label"))
 		pages.append("%s:%s" % [et, eb.substr(0, 70).replace("\n", " ")])
-		if "忘的" in eb:
-			run["two_way"] = true
+		_check_two_way_text(eb, run)
 		var steps: Array = en.get("_steps")
 		var idx := int(en.get("_step_index"))
 		var pages_arr: PackedStringArray = PackedStringArray()
@@ -576,8 +864,7 @@ func _panel_title(panel: Node) -> String:
 
 
 func _panel_body(panel: Node) -> String:
-	var n: Node = panel.get("_body_label")
-	return str(n.get("text")).strip_edges() if n else ""
+	return _richtext_body(panel.get("_body_label"))
 
 
 func _last_letter_body() -> String:
@@ -636,6 +923,36 @@ func _settle(sec: float = 0.12) -> void:
 	await get_tree().create_timer(sec).timeout
 
 
+func _check_story_body(body: String) -> void:
+	if body.strip_edges() == "":
+		return
+	if "这一句我不想拿它赖掉" in body or "拿这个砸我" in body:
+		_note("看到 D3 刀垫")
+	if "像不认得" in body and "清晨风很凉" in body:
+		_note("信纸里有 telegraph")
+
+
+func _check_two_way_text(text: String, run: Dictionary) -> void:
+	if text.strip_edges() == "":
+		return
+	var markers := [
+		"忘的，从来不只是我",
+		"忘的从来不只是我",
+		"忘的，好像从来不只是我",
+		"被忘记的滋味",
+		"原来我也怕忘",
+		"你也会忘",
+		"你也有一本",
+		"你也怕忘",
+		"你也早该写进本子",
+	]
+	for marker in markers:
+		if marker in text:
+			run["two_way"] = true
+			_note("D10 双向遗忘")
+			return
+
+
 func _note(text: String) -> void:
 	_notes.append(text)
 	_print("%s NOTE %s" % [_pid, text])
@@ -666,6 +983,11 @@ func _score_run(spec: Dictionary, run: Dictionary) -> void:
 		score += 0.4
 	if bool(run.get("needed_force", false)):
 		score -= 0.6
+	if bool(spec.get("eviction_manual", false)):
+		if bool(run.get("eviction_ui_ok", false)):
+			score += 0.2
+		elif bool(run.get("eviction_ui_fail", false)):
+			score -= 0.4
 	if int(run.get("chat_fail", 0)) > 0 and int(run.get("chat_ok", 0)) == 0:
 		score -= 0.5
 	if bool(spec.get("keep", true)) == false and str(run.get("ending", "")).contains("bad"):
@@ -683,13 +1005,46 @@ func _score_run(spec: Dictionary, run: Dictionary) -> void:
 	run["why"] = why
 
 
+func _persona_specs_filtered() -> Array[Dictionary]:
+	var all := _persona_specs()
+	var filter := _persona_filter_ids()
+	if filter.is_empty():
+		return all
+	var out: Array[Dictionary] = []
+	for spec in all:
+		if str(spec.get("id", "")) in filter:
+			out.append(spec)
+	return out
+
+
+func _persona_filter_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for arg in OS.get_cmdline_user_args():
+		var token := str(arg).strip_edges()
+		if token != "":
+			ids.append(token)
+	if not ids.is_empty():
+		return ids
+	var filter_path := "res://tools/persona20_filter.txt"
+	if not FileAccess.file_exists(filter_path):
+		return ids
+	var f := FileAccess.open(filter_path, FileAccess.READ)
+	if f == null:
+		return ids
+	while f.get_position() < f.get_length():
+		var line := f.get_line().strip_edges()
+		if line != "" and not line.begins_with("#"):
+			ids.append(line)
+	return ids
+
+
 func _persona_specs() -> Array[Dictionary]:
 	return [
 		{"id": "N1", "label": "第一次玩独立游戏的小白", "player": "小白", "keep": true, "sit": true, "walk": true, "basket": true, "chats": ["你是谁呀"], "chat_days": [1]},
 		{"id": "N2", "label": "只会点按钮的种田新手", "player": "阿田", "keep": true, "sit": false, "basket": true, "chats": []},
 		{"id": "N3", "label": "Steam前30分钟差评猎人", "player": "差评", "keep": true, "sit": false, "walk": true, "basket": true, "chats": []},
 		{"id": "S1", "label": "Stardew种田老手", "player": "星露", "keep": true, "sit": false, "basket": true, "chats": []},
-		{"id": "G1", "label": "Gal泣き老炮", "player": "阿松", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["我会把你写进本子"], "chat_days": [2, 6]},
+		{"id": "G1", "label": "Gal泣き老炮", "player": "阿松", "keep": true, "sit": true, "eviction_manual": true, "d9": "d9_continue", "chats": ["我会把你写进本子"], "chat_days": [2, 6]},
 		{"id": "G2", "label": "结构路线表党", "player": "表党", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["昨天的约定还在吗"], "chat_days": [6]},
 		{"id": "G3", "label": "选择肢洁癖", "player": "洁癖", "keep": true, "sit": true, "d9": "d9_defer", "chats": []},
 		{"id": "C1", "label": "把她当短暂同居的人", "player": "同居", "keep": true, "sit": true, "chats": ["你还记得我叫什么吗", "雨停之前你在哪"], "chat_days": [1, 2, 4, 6]},
@@ -699,7 +1054,7 @@ func _persona_specs() -> Array[Dictionary]:
 		{"id": "P1", "label": "带小孩一起看的家长", "player": "家长", "keep": true, "sit": true, "chats": []},
 		{"id": "P2", "label": "失智陪护敏感读者", "player": "陪护", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["我会等你想起来"], "chat_days": [4]},
 		{"id": "B1", "label": "专门开赶走线", "player": "路人", "keep": false, "sit": false, "chats": []},
-		{"id": "E1", "label": "全收集True猎人", "player": "收集", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["萝卜长好了我们一起看", "我记下了", "你的名字我不会忘"], "chat_days": [1, 3, 6, 8]},
+		{"id": "E1", "label": "全收集True猎人", "player": "收集", "keep": true, "sit": true, "eviction_manual": true, "d9": "d9_continue", "feed_true_targets": true, "chats": ["萝卜长好了我们一起看", "我记下了", "你的名字我不会忘"], "chat_days": [1, 3, 6, 8]},
 		{"id": "F1", "label": "不聊天纯种田", "player": "农夫", "keep": true, "sit": false, "basket": true, "chats": []},
 		{"id": "R1", "label": "速通跳过所有字", "player": "速通", "keep": true, "sit": false, "skip_first": true, "chats": []},
 		{"id": "L1", "label": "直播吐槽", "player": "主播", "keep": true, "sit": true, "walk": true, "basket": true, "chats": ["观众问你从哪来的"], "chat_days": [2]},
@@ -714,15 +1069,20 @@ func _write_report() -> void:
 	var lines := PackedStringArray()
 	lines.append("# 二十画像十日实机 · %s" % Time.get_datetime_string_from_system())
 	lines.append("")
-	lines.append("方法：`tools/persona20_fullplay.tscn` 每局 **重新实例化 `main.tscn`**，从第 1 天打到结局或卡死。走信纸翻页、取名窗、篮子、WASD、玩家聊天、夜里睡觉过天、觉醒/结局信纸。不截图。聊天等待按真实时间（time_scale=1）。")
+	lines.append("方法：`tools/persona20_fullplay.tscn` 每局 **重新实例化 `main.tscn`**，从第 1 天打到结局或卡死。走信纸翻页、取名窗、篮子、WASD、玩家聊天、夜里睡觉过天、觉醒/结局信纸。G1/E1 走真实 `StoryChoicePanel` 划页 UI；其余画像本子满时仍自动 resolve。不截图。聊天等待按真实时间（time_scale=1）。")
 	lines.append("")
-	lines.append("| ID | 画像 | 天 | 结局 | 路线 | /5 | 卡关 | 刀垫 | 双向 | 聊天 |")
-	lines.append("|----|------|----|------|------|----|------|------|------|------|")
+	lines.append("| ID | 画像 | 天 | 结局 | 路线 | /5 | 卡关 | 刀垫 | 双向 | 划页UI | 聊天 |")
+	lines.append("|----|------|----|------|------|----|------|------|------|--------|------|")
 	for run in _runs:
 		avg += float(run.get("score", 0.0))
 		if bool(run.get("complete", false)) or str(run.get("ending_pages", "")) != "" or int(run.get("day", 0)) >= 10:
 			finished += 1
-		lines.append("| %s | %s | %s | %s | %s | %.1f | %s | %s | %s | %s/%s |" % [
+		var ev_ui := "-"
+		if bool(run.get("eviction_ui_ok", false)):
+			ev_ui = "是"
+		elif bool(run.get("eviction_ui_fail", false)):
+			ev_ui = "失败"
+		lines.append("| %s | %s | %s | %s | %s | %.1f | %s | %s | %s | %s | %s/%s |" % [
 			str(run.get("id", "")),
 			str(run.get("label", "")),
 			str(run.get("day", "")),
@@ -732,6 +1092,7 @@ func _write_report() -> void:
 			"是D%s" % str(run.get("stuck_day", "")) if bool(run.get("stuck", false)) else "否",
 			"是" if bool(run.get("knife", false)) else "否",
 			"是" if bool(run.get("two_way", false)) else "否",
+			ev_ui,
 			str(run.get("chat_ok", 0)),
 			str(run.get("chat_fail", 0)),
 		])

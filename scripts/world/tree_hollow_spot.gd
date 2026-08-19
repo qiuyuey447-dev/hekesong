@@ -21,9 +21,8 @@ func _ready() -> void:
 		HOLLOW_FRAME,
 		HOLLOW_FRAME_OFFSET,
 		INTERACT_RANGE,
-		8.0,
-		0.09,
-		4.0,
+		0.03,
+		1.5,
 		true
 	)
 	GameState.time_changed.connect(_refresh_hint)

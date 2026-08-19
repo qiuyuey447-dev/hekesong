@@ -1,7 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128">
-  <rect width="128" height="128" rx="16" fill="#6fbf73"/>
-  <circle cx="64" cy="58" r="28" fill="#e8a64b"/>
-  <circle cx="52" cy="52" r="4" fill="#2f2f2f"/>
-  <circle cx="76" cy="52" r="4" fill="#2f2f2f"/>
-  <path d="M58 66 Q64 72 70 66" stroke="#2f2f2f" stroke-width="3" fill="none"/>
+  <rect width="128" height="128" rx="18" fill="#f5e6c7"/>
+  <text x="64" y="78" text-anchor="middle" font-size="42" fill="#c46a2a" font-family="sans-serif">狸</text>
 </svg>

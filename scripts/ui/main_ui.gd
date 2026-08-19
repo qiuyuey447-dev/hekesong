@@ -1434,6 +1434,8 @@ func _on_story_beat_finished(beat_id: String) -> void:
 	if _pending_post_snuggle_day_advance:
 		_pending_post_snuggle_day_advance = false
 		_story_beat_blocked = false
+		if beat_id.strip_edges() != "":
+			_finalize_story_beat_after_companion_night(beat_id)
 		call_deferred("_finish_night_after_snuggle")
 		return
 
@@ -1572,7 +1574,20 @@ func _on_companion_snuggle_finished(beat_id: String) -> void:
 		PlayerNotebookService.on_first_write_d7()
 	if _try_show_post_snuggle_fragment(beat_id):
 		return
+	_finalize_story_beat_after_companion_night(beat_id)
 	call_deferred("_finish_night_after_snuggle")
+
+
+func _finalize_story_beat_after_companion_night(beat_id: String) -> void:
+	if beat_id.strip_edges() == "":
+		return
+	if GameState.is_story_node_seen(beat_id):
+		if GameState.get_pending_story_beat_tail_id() == beat_id:
+			GameState.clear_pending_story_beat_tail()
+		return
+	if StoryBeatDirector.should_complete_beat_after_panel(beat_id):
+		StoryBeatDirector.complete_beat(beat_id)
+		_debug_note("主线完成：%s" % beat_id)
 
 
 func _try_show_post_snuggle_fragment(beat_id: String) -> bool:
@@ -1833,17 +1848,39 @@ func _on_market_pressed() -> void:
 	_sell_turnips_from_basket()
 
 
-func _on_memory_pressed() -> void:
-	if _is_gameplay_locked():
-		return
+func _dismiss_overlays_for_memory() -> void:
+	if _basket_drawer and _basket_drawer.is_open():
+		_basket_drawer.close_drawer()
 	if _feed_panel.visible:
 		_feed_panel.close()
 	if _shop_panel.visible:
 		_shop_panel.close()
 	if _market_panel.visible:
 		_market_panel.close()
+
+
+func _on_memory_pressed() -> void:
+	if _is_gameplay_locked():
+		return
+	_dismiss_overlays_for_memory()
 	_memory_panel.open()
 	_maybe_show_d4_memory_panel_hint()
+
+
+func on_companion_notebook_clicked() -> void:
+	if _is_gameplay_locked() or _story_beat_blocked:
+		return
+	CompanionDirector.notify_player_active()
+	_dismiss_overlays_for_memory()
+	_memory_panel.open_companion_notebook()
+
+
+func on_player_notebook_clicked() -> void:
+	if _is_gameplay_locked() or _story_beat_blocked:
+		return
+	CompanionDirector.notify_player_active()
+	_dismiss_overlays_for_memory()
+	_memory_panel.open_player_notebook()
 
 
 func _maybe_resume_pending_eviction() -> void:
@@ -1902,22 +1939,27 @@ func _show_notebook_eviction(candidates: Array) -> void:
 
 
 func _on_story_choice_chosen(choice_id: String) -> void:
-	if not _notebook_eviction_active:
+	choice_id = choice_id.strip_edges()
+	if choice_id == "":
 		return
-	_notebook_eviction_active = false
-	_story_choice_blocked = false
-	var erased_summary := ""
-	for entry in MemoryService.get_pending_eviction_candidates():
-		if str(entry.get("id", "")) == choice_id:
-			erased_summary = str(entry.get("summary", "")).strip_edges()
-			break
-	MemoryService.resolve_eviction(choice_id)
-	if erased_summary != "":
-		if erased_summary.length() > 28:
-			erased_summary = erased_summary.substr(0, 28) + "…"
-		_append_companion_message("……划掉了。「%s」——以后想不起来，别怪我。" % erased_summary)
-	else:
-		_append_companion_message("……划掉了。以后想不起来，别怪我。")
+	# 本子划页：StoryChoicePanel 仅用于 eviction；勿依赖 _notebook_eviction_active（自动化/harness 可能竞态）
+	if MemoryService.has_pending_eviction():
+		_notebook_eviction_active = false
+		_story_choice_blocked = false
+		var erased_summary := ""
+		for entry in MemoryService.get_pending_eviction_candidates():
+			if str(entry.get("id", "")) == choice_id:
+				erased_summary = str(entry.get("summary", "")).strip_edges()
+				break
+		MemoryService.resolve_eviction(choice_id)
+		if _story_choice_panel.has_method("close_panel"):
+			_story_choice_panel.close_panel()
+		if erased_summary != "":
+			if erased_summary.length() > 28:
+				erased_summary = erased_summary.substr(0, 28) + "…"
+			_append_companion_message("……划掉了。「%s」——以后想不起来，别怪我。" % erased_summary)
+		else:
+			_append_companion_message("……划掉了。以后想不起来，别怪我。")
 
 
 func _maybe_trigger_persona_shift() -> void:
@@ -2138,12 +2180,7 @@ func open_memory_from_companion() -> void:
 	if TaskSystem.is_busy():
 		_hint("她还在走动。")
 		return
-	if _feed_panel.visible:
-		_feed_panel.close()
-	if _shop_panel.visible:
-		_shop_panel.close()
-	if _market_panel.visible:
-		_market_panel.close()
+	_dismiss_overlays_for_memory()
 	_memory_panel.open()
 	_maybe_show_d4_memory_panel_hint()
 
@@ -2540,6 +2577,10 @@ func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: 
 	_refresh_hud()
 	# 投喂结果由她的回话交代，不再叠系统旁白。
 	_append_companion_message(reply)
+	if GameState.try_fulfill_promise_from_feed():
+		var fulfill_line := StoryNodeCopy.get_system("promise_fulfilled_feed_companion").strip_edges()
+		if fulfill_line != "":
+			_append_companion_message(fulfill_line)
 	_show_api_source_hint(request_id, used_fallback)
 	_feed_panel.set_status_message("")
 	_feed_panel.rebuild()

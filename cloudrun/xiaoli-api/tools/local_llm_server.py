@@ -1000,6 +1000,8 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
 
 
 def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
+    import random
+
     event = str(payload.get("event", "player_chat"))
     player_message = str(payload.get("player_message", "")).strip()
     weather = _weather_label(payload)
@@ -1027,7 +1029,13 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
         if payload.get("include_yesterday_echo") and isinstance(yesterday, dict) and yesterday.get("summary"):
             reply = "你来了。昨天的事我还记挂着，今天一起看看吧。"
             return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
-        reply = "你来了。田埂上风挺轻的。"
+        if _weather_code(payload) == "rain":
+            reply = random.choice([
+                "你来了。雨还在下，田自己会喝饱。",
+                "早。雨天里廊下挺安静，我在这儿。",
+            ])
+        else:
+            reply = "你来了。田埂上风挺轻的。"
         return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
 
     if event in ("morning_sidewrite", "companion_casual", "companion_proactive"):

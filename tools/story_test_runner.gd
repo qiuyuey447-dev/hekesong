@@ -63,6 +63,7 @@ func _run_ten_day_tests() -> void:
 	_test_wave4_experience_policy()
 	_test_wave5_trust_ui_policy()
 	_test_ten_day_promise_on_d3_beat()
+	_test_ten_day_promise_fulfill_from_feed()
 	_test_ten_day_awakening_copy_no_week5()
 	_test_ten_day_true_ending_reachable()
 	_test_ten_day_node_copy_polish()
@@ -85,6 +86,8 @@ func _run_ten_day_tests() -> void:
 	_test_intent_classify_flow()
 	_test_personalized_story_steps()
 	_test_d7_pending_tail_cleared_on_complete()
+	_test_d7_snuggle_fragment_completes_beat()
+	_test_persona_w2_expel_choice_mapping()
 	_test_chat_archive_on_advance()
 	_test_ten_day_bad_early_flow_guards()
 	_test_ten_day_tier_copy_diff()
@@ -260,7 +263,7 @@ func _test_ten_day_day7_advance_keeps_journal() -> void:
 
 
 func _test_awakening_json_keys() -> void:
-	for key in ["open", "act1_footer_true", "act2_intro", "act3_true", "f10_full"]:
+	for key in ["open", "act1_footer_true", "act2_intro", "act2_twoway_tease", "act3_true", "f10_full"]:
 		var text := StoryNodeCopy.get_awakening(key)
 		_assert(text.strip_edges() != "", "awakening.%s present" % key)
 
@@ -279,6 +282,30 @@ func _test_awakening_steps_structure() -> void:
 	)
 	var bad_steps := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_BAD)
 	_assert(bad_steps.size() == 3, "bad ending has 3 steps (no F10 montage)")
+	_test_awakening_two_way_gated()
+
+
+func _test_awakening_two_way_gated() -> void:
+	GameState.reset_for_new_game()
+	_seed_true_ending_stats()
+	var bare := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_NORMAL)
+	var bare_act2 := str(bare[1].get("body", ""))
+	_assert("忘的，从来不只是我" not in bare_act2 and "忘的从来不只是我" not in bare_act2, "act2 intro alone does not spoil two-way")
+	var bare_act3 := str(bare[2].get("body", ""))
+	_assert("你也有一本" in bare_act3, "normal act3 B-fallback mentions player notebook")
+
+	GameState.reset_for_new_game()
+	_seed_true_ending_stats()
+	PlayerNotebookService.on_beat_completed("P_N05")
+	var hinted := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_NORMAL)
+	var hinted_act2 := str(hinted[1].get("body", ""))
+	_assert("忘的，好像从来不只是我" in hinted_act2, "act2 tease after D4 dark line")
+	_assert("被忘记的滋味" in hinted_act2, "act2 reveals mutual_forgetting question")
+
+	var happy_act3 := str(EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_HAPPY)[2].get("body", ""))
+	_assert("你也怕忘" in happy_act3, "happy act3 B-fallback")
+	var bad_act3 := str(EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_BAD)[2].get("body", ""))
+	_assert("你也早该写进本子" in bad_act3, "bad act3 B-fallback")
 
 
 func _test_fragment_wall_lists_unlocked() -> void:
@@ -529,6 +556,34 @@ func _test_ten_day_promise_on_d3_beat() -> void:
 	_assert(not promise.is_empty(), "D3 P_N11 sets promise")
 	_assert(str(promise.get("summary", "")).strip_edges() != "", "promise summary non-empty")
 	_assert(GameState.get_fragment_count() >= 1, "D3 unlocks F02 fragment")
+	var feed_days := GameState.get_true_feed_days()
+	_assert(feed_days.size() == 2, "D3 promise rolls two true feed days")
+	for day in feed_days:
+		_assert(day >= GameState.TRUE_FEED_DAY_MIN and day <= GameState.TRUE_FEED_DAY_MAX, "true feed day in D4-D9")
+
+
+func _test_ten_day_promise_fulfill_from_feed() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_story_node_seen("P_N11")
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	var target_days: Array = GameState.get_true_feed_days()
+	_assert(target_days.size() == 2, "promise sets two random feed days")
+	GameState.add_item("berry", 4)
+	GameState.game_day = 3
+	GameState.reset_daily_feed()
+	var first := GameState.commit_feed_treat("berry")
+	_assert(bool(first.get("ok", false)), "first feed succeeds")
+	_assert(not bool(GameState.long_term_memory.get("promise", {}).get("fulfilled", false)), "off-target feed does not fulfill promise")
+	for day in target_days:
+		GameState.game_day = int(day)
+		GameState.reset_daily_feed()
+		GameState.add_item("berry", 1)
+		GameState.commit_feed_treat("berry")
+		GameState.try_fulfill_promise_from_feed()
+	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
+	_assert(bool(promise.get("fulfilled", false)), "feeds on both random target days fulfill promise")
+	_assert(int(RelationshipDirector.get_signals().get("gifts_given", 0)) >= 2, "two gifts recorded for fulfill")
 
 
 func _test_ten_day_awakening_copy_no_week5() -> void:
@@ -827,6 +882,10 @@ func _test_p_n11_cold_contract_phrases() -> void:
 	_assert("这一句我不想拿它赖掉" in cold, "P_N11_cold keeps D3 knife line")
 	_assert("拿这个砸我" in cold, "P_N11_cold keeps notebook smash line")
 	_assert(not ("你忙你的" in cold), "P_N11_cold has no companion-wait filler")
+	var mid := StoryRouteData.render_body("P_N11", "P_N11_mid")
+	_assert("这一句我不想拿它赖掉" in mid, "P_N11_mid keeps D3 knife line")
+	_assert("拿这个砸我" in mid, "P_N11_mid keeps notebook smash line")
+	_assert(mid != cold, "P_N11 mid differs from cold")
 
 
 func _test_ten_day_letter_skips_system_followup() -> void:
@@ -913,6 +972,9 @@ func _test_p11_night_period_gate() -> void:
 	GameState.reset_for_new_game()
 	_ensure_player_named()
 	GameState.game_day = 3
+	GameState.time_of_day = GameState.TIME_MORNING
+	var morning_beat := StoryBeatDirector.take_displayable_beat(StoryBeatDirector.build_beat("P_N11"))
+	_assert(morning_beat.is_empty(), "P_N11 morning defers agreement to evening")
 	GameState.time_of_day = GameState.TIME_NIGHT
 	var beat := StoryBeatDirector.build_beat("P_N11")
 	beat = StoryBeatDirector.take_displayable_beat(beat)
@@ -1028,6 +1090,58 @@ func _test_d7_pending_tail_cleared_on_complete() -> void:
 	_assert(StoryBeatDirector.should_complete_beat_after_panel("NM_N16"), "D7 night tail can complete")
 	StoryBeatDirector.complete_beat("NM_N16")
 	_assert(not GameState.has_pending_story_beat_tail(), "complete clears pending tail")
+
+
+func _test_d7_snuggle_fragment_completes_beat() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_HAPPY)
+	GameState.game_day = 7
+	GameState.time_of_day = GameState.TIME_NIGHT
+	var beat := StoryBeatDirector.build_beat("HP_N16")
+	beat = StoryBeatDirector.take_displayable_beat(beat)
+	GameState.time_of_day = GameState.TIME_NIGHT
+	var tail := StoryBeatDirector.build_beat_tail_resume()
+	_assert(not tail.is_empty(), "D7 night resumes choice tail")
+	GameState.set_pending_story_beat_tail("HP_N16", [{
+		"title": "名字",
+		"template": "F07",
+		"kind": "fragment",
+		"period_gate": [GameState.TIME_EVENING, GameState.TIME_NIGHT],
+	}])
+	_assert(not StoryBeatDirector.should_complete_beat_after_panel("HP_N16"), "fragment tail blocks complete")
+	StoryBeatDirector.complete_beat("HP_N16")
+	_assert(GameState.is_story_node_seen("HP_N16"), "post-snuggle path can mark D7 seen")
+	_assert(not GameState.has_pending_story_beat_tail(), "complete clears fragment tail")
+
+
+func _test_persona_w2_expel_choice_mapping() -> void:
+	var spec := {"keep": false}
+	_assert(_persona_choice_for_labels(spec, "P_N06p", "你的选择", ["留下她，再告诉她一遍", "让她走"]) == "w2_expel", "B1 W2 picks expel")
+	_assert(_persona_choice_for_labels(spec, "P_N06p", "真的要让她走吗？", ["确定，送她离开", "再想想"]) == "w2_expel_confirm", "B1 W2 confirms expel")
+	_assert(_persona_choice_for_labels({"keep": true, "sit": false}, "HP_N16", "你的选择", ["过去坐下", "先回屋"]) == "companion_leave", "night choice not confused with W2")
+
+
+func _persona_choice_for_labels(spec: Dictionary, beat_id: String, title: String, labels: Array) -> String:
+	if beat_id == "P_N06p":
+		if "真的" in title or "确定" in title:
+			if bool(spec.get("keep", true)):
+				return "w2_expel_cancel"
+			return "w2_expel_confirm"
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
+	var joined := " ".join(PackedStringArray(labels.map(func(l): return str(l))))
+	if "确定" in joined or "送她" in joined:
+		if bool(spec.get("keep", true)):
+			return "w2_expel_cancel"
+		return "w2_expel_confirm"
+	if "过去" in joined or "坐下" in joined:
+		return "companion_sit" if bool(spec.get("sit", true)) else "companion_leave"
+	if "让她走" in joined and "留下" in joined:
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
+	if "留下" in joined:
+		return "w2_keep" if bool(spec.get("keep", true)) else "w2_expel"
+	return "w2_keep"
 
 
 func _test_chat_archive_on_advance() -> void:
@@ -1385,6 +1499,14 @@ func _test_persona_regression_suite() -> void:
 	)
 	_assert(not bool(rain_hallucination.get("ok", true)), "sunny day rain talk rejected")
 	_assert(str(rain_hallucination.get("reason", "")) == "weather_mismatch", "weather mismatch reason")
+	var sunny_on_rain := ResponseValidator.validate(
+		"session_start",
+		"早。今天天晴了，田里的水汽还没干透，正好省了浇水。",
+		{"weather_today": GameState.WEATHER_RAIN, "story_mode": "stranger"},
+		[]
+	)
+	_assert(not bool(sunny_on_rain.get("ok", true)), "rain day sunny talk rejected")
+	_assert(str(sunny_on_rain.get("reason", "")) == "weather_mismatch", "rain sunny mismatch reason")
 	var tomorrow_ok := ResponseValidator.validate(
 		"player_chat",
 		"明天可能要下雨，今天先把种子买好。",
@@ -1509,8 +1631,8 @@ func _seed_true_ending_stats() -> void:
 	for fid in ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09", "F10"]:
 		GameState.unlock_fragment(fid, "test")
 	GameState.long_term_memory["memory_recovery"] = 0.9
-	GameState.affection = 60
-	GameState.bond = 50
+	GameState.affection = 12
+	GameState.bond = 8
 	GameState.set_ending_flag("companionship_nights", 3)
 	GameState.long_term_memory["promise"] = {"summary": "一起看萝卜", "fulfilled": true}
 	GameState.long_term_memory["relationship_signals"] = {

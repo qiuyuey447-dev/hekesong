@@ -192,6 +192,11 @@ func reveal_for_awakening() -> Array[String]:
 	return lines
 
 
+func has_deep_two_way_hint() -> bool:
+	var triggered: Array = _ensure_notebook().get("dark_lines_triggered", [])
+	return "mutual_forgetting_d4" in triggered or "two_notebooks_d8" in triggered
+
+
 func _trigger_dark_line(line_id: String) -> void:
 	line_id = line_id.strip_edges()
 	if line_id == "" or line_id not in DARK_LINES:

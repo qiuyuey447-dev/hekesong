@@ -13,7 +13,7 @@ func _ready() -> void:
 		Mode.PLANT: _build_cursor(Color(0.52, 0.88, 0.48), Color(0.12, 0.28, 0.1)),
 		Mode.WATER: _build_cursor(Color(0.42, 0.74, 1.0), Color(0.08, 0.16, 0.28)),
 		Mode.HARVEST: _build_cursor(Color(1.0, 0.62, 0.18), Color(0.28, 0.14, 0.04)),
-		Mode.INTERACT: _build_cursor(Color(1.0, 0.88, 0.12), Color(0.28, 0.2, 0.06)),
+		Mode.INTERACT: _build_cursor(Color(1.0, 0.96, 0.72), Color(0.34, 0.28, 0.12)),
 	}
 	set_mode(Mode.DEFAULT)
 

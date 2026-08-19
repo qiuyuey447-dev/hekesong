@@ -114,6 +114,9 @@ func _update_interact_cursor() -> void:
 		if target.is_in_group("shop_interact") or target.is_in_group("companion_interact") or target.is_in_group("door_interact"):
 			InteractCursor.set_mode(InteractCursor.Mode.INTERACT)
 			return
+		if target.is_in_group("notebook_interact"):
+			InteractCursor.set_mode(InteractCursor.Mode.INTERACT)
+			return
 		if target.is_in_group("tree_hollow_interact") and target.has_method("should_show_night_hint") and target.should_show_night_hint():
 			InteractCursor.set_mode(InteractCursor.Mode.INTERACT)
 			return
@@ -257,6 +260,8 @@ func _try_interact() -> void:
 
 
 func _try_tree_hollow_interact() -> bool:
+	if not StoryBeatDirector.has_pending_night_beat():
+		return false
 	var best: Node2D = null
 	var best_dist := 9999.0
 	for node in get_tree().get_nodes_in_group("tree_hollow_interact"):
@@ -317,6 +322,8 @@ func _find_nearest_interactable() -> Node2D:
 		var range_limit := INTERACT_RANGE
 		if target.is_in_group("shop_interact"):
 			range_limit = 110.0
+		if target.is_in_group("notebook_interact"):
+			range_limit = 72.0
 		var dist := global_position.distance_to(center)
 		if dist <= range_limit and (best == null or dist < best_dist):
 			best_dist = dist

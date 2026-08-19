@@ -4,14 +4,14 @@ extends Node
 @export var frame_size := Vector2(40, 40)
 @export var frame_offset := Vector2.ZERO
 @export var player_near_distance := 48.0
-@export var glow_grow := 4.0
-@export var pulse_amount := 0.06
-@export var line_width := 3.5
+@export var pulse_amount := 0.03
+@export var line_width := 1.5
 
 var _area: Area2D
 var _highlight: InteractHighlight
 var _was_near := false
 var _manual_focus := false
+var _shape := InteractHighlight.Shape.RECT
 
 
 static func attach(
@@ -19,19 +19,19 @@ static func attach(
 	size: Vector2,
 	offset: Vector2 = Vector2.ZERO,
 	near_distance: float = 48.0,
-	hover_glow_grow: float = 4.0,
-	hover_pulse_amount: float = 0.06,
-	hover_line_width: float = 3.5,
-	manual_focus: bool = false
+	hover_pulse_amount: float = 0.03,
+	hover_line_width: float = 1.5,
+	manual_focus: bool = false,
+	shape: InteractHighlight.Shape = InteractHighlight.Shape.RECT
 ) -> InteractHover:
 	var hover := InteractHover.new()
 	hover.frame_size = size
 	hover.frame_offset = offset
 	hover.player_near_distance = near_distance
-	hover.glow_grow = hover_glow_grow
 	hover.pulse_amount = hover_pulse_amount
 	hover.line_width = hover_line_width
 	hover._manual_focus = manual_focus
+	hover._shape = shape
 	area.add_child(hover)
 	hover._bind(area)
 	return hover
@@ -51,9 +51,9 @@ func _bind(area: Area2D) -> void:
 	_highlight = InteractHighlight.new()
 	_highlight.frame_size = frame_size
 	_highlight.frame_offset = frame_offset
-	_highlight.glow_grow = glow_grow
 	_highlight.pulse_amount = pulse_amount
 	_highlight.line_width = line_width
+	_highlight.shape = _shape
 	_area.add_child(_highlight)
 	set_process(not _manual_focus)
 
@@ -73,4 +73,7 @@ func _is_player_near() -> bool:
 	var player := get_tree().get_first_node_in_group("player") as Node2D
 	if player == null:
 		return false
-	return player.global_position.distance_to(_area.global_position) <= player_near_distance
+	var center := _area.global_position
+	if _area.has_method("get_interact_center"):
+		center = _area.call("get_interact_center")
+	return player.global_position.distance_to(center) <= player_near_distance

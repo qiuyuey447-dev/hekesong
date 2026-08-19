@@ -71,15 +71,15 @@ func _meets_true(
 	if GameState.IS_TEN_DAY_EDITION:
 		if recovery < 0.48 or fragments < 3:
 			return false
-		if nights < 1 or GameState.bond < 20:
+		if nights < 1:
 			return false
 		if promise.is_empty() or not bool(promise.get("fulfilled", false)):
-			return false
-		if GameState.affection < 28:
 			return false
 		if float(factors.get("interaction_score", 0.0)) < 0.40:
 			return false
 		if int(factors.get("chat_days", 0)) < 3:
+			return false
+		if int(factors.get("gifts_given", 0)) < 2:
 			return false
 		return true
 	if recovery < 0.85 or fragments < 10:
@@ -324,6 +324,10 @@ func _awakening_act2_body(journal_lines: Array[String]) -> String:
 	var question_lines := PlayerNotebookService.reveal_for_awakening()
 	if not question_lines.is_empty():
 		body_lines.append("\n".join(question_lines))
+	if PlayerNotebookService.has_deep_two_way_hint():
+		var tease := _awakening_text("act2_twoway_tease")
+		if tease.strip_edges() != "":
+			body_lines.append(tease)
 	return "\n\n".join(body_lines)
 
 

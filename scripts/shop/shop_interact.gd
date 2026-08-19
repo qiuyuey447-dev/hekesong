@@ -8,7 +8,14 @@ func _ready() -> void:
 	add_to_group("shop_interact")
 	_build_collision()
 	FarmSetdress.build_shop_stall(self)
-	InteractHover.attach(self, Vector2(108, 96), Vector2(0, -36), INTERACT_RANGE)
+	InteractHover.attach(
+		self,
+		Vector2(108, 96),
+		Vector2(0, -36),
+		INTERACT_RANGE,
+		0.03,
+		1.5
+	)
 
 
 func activate() -> void:
