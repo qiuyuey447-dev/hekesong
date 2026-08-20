@@ -293,6 +293,14 @@ script = ExtResource("6_week_wrap")
 
 [node name="StoryChoicePanel" type="PanelContainer" parent="UI"]
 visible = false
+z_index = 80
+z_as_relative = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
 script = ExtResource("6_story_choice")
 
 [node name="StoryBeatPanel" type="PanelContainer" parent="UI"]

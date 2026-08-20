@@ -34,6 +34,8 @@ body {
 	height: 100%;
 	outline: none;
 	touch-action: none;
+	image-rendering: pixelated;
+	image-rendering: crisp-edges;
 }
 
 #canvas:focus {
@@ -169,6 +171,19 @@ body {
 
 		<script src="$GODOT_URL"></script>
 		<script>
+(function capWebPixelRatio() {
+	const raw = window.devicePixelRatio || 1;
+	if (raw <= 1) {
+		return;
+	}
+	try {
+		Object.defineProperty(window, 'devicePixelRatio', {
+			configurable: true,
+			get: function () { return 1; },
+		});
+	} catch (e) {}
+})();
+
 function hekesongIsMobilePortrait() {
 	const narrow = Math.min(window.innerWidth, window.innerHeight) < 900;
 	return narrow && window.matchMedia('(orientation: portrait)').matches;

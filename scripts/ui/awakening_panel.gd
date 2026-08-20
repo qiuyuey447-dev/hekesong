@@ -92,6 +92,10 @@ func _show_step() -> void:
 		_finish(false)
 		return
 	var step: Dictionary = _steps[_step_index]
+	if bool(step.get("needs_notebook_reveal", false)) and not bool(step.get("notebook_revealed", false)):
+		step["notebook_revealed"] = true
+		step["body"] = EndingDirector.append_act2_notebook_reveal(str(step.get("body", "")))
+		_steps[_step_index] = step
 	_title_label.text = str(step.get("title", ""))
 	_apply_title_scale(str(step.get("kind", "")))
 	_pages = LetterPaperKit.paginate_body(LetterPaperKit.prettify_body(str(step.get("body", ""))))

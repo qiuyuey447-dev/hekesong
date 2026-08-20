@@ -29,6 +29,10 @@ var _started_at_msec := 0
 
 
 func _ready() -> void:
+	if not OS.has_feature("editor"):
+		set_process(false)
+		set_process_internal(false)
+		return
 	_project_path = ProjectSettings.globalize_path("res://")
 	_started_at_msec = Time.get_ticks_msec()
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -37,6 +41,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if not OS.has_feature("editor"):
+		return
 	_socket.poll()
 	var st := _socket.get_ready_state()
 

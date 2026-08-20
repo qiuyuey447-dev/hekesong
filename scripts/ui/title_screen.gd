@@ -36,6 +36,8 @@ var _camera_zoom := WORLD_ZOOM
 var _title_map_bounds := TITLE_MAP_BOUNDS
 var _title_fox: Node2D
 var _fox_body: Sprite2D
+var _fox_frames: Array[Texture2D] = []
+var _fox_frame_col := -1
 var _menu_buttons: Array[Button] = []
 var _time := 0.0
 
@@ -94,13 +96,17 @@ func _update_title_fox() -> void:
 		frame_col = 2
 	elif wag < -0.42:
 		frame_col = 0
-	_fox_body.texture = SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, frame_col, 0)
+	if frame_col != _fox_frame_col:
+		_fox_frame_col = frame_col
+		_fox_body.texture = _fox_frame_texture(frame_col)
 
 
 func _build_world_background() -> void:
 	_world_viewport_container = SubViewportContainer.new()
 	_world_viewport_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_world_viewport_container.stretch = true
+	if OS.has_feature("web"):
+		_world_viewport_container.stretch_shrink = 2
 	_world_viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_world_viewport_container)
 
@@ -110,6 +116,7 @@ func _build_world_background() -> void:
 	_world_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_world_viewport.handle_input_locally = false
 	_world_viewport.gui_disable_input = true
+	_world_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
 	_world_viewport_container.add_child(_world_viewport)
 
 	var world := Node2D.new()
@@ -158,10 +165,17 @@ func _sync_world_viewport_size() -> void:
 
 
 func _get_layout_viewport_size() -> Vector2:
+	if _world_viewport != null:
+		var vp_size := Vector2(_world_viewport.size)
+		if vp_size.x > 1.0 and vp_size.y > 1.0:
+			return vp_size
 	if _world_viewport_container != null:
 		var container_size := _world_viewport_container.get_rect().size
+		var shrink := 1
+		if _world_viewport_container.stretch:
+			shrink = maxi(1, _world_viewport_container.stretch_shrink)
 		if container_size.x > 1.0 and container_size.y > 1.0:
-			return container_size
+			return container_size / float(shrink)
 	return get_viewport_rect().size
 
 
@@ -297,6 +311,13 @@ func _clamp_camera_position(target: Vector2) -> Vector2:
 	return result
 
 
+func _fox_frame_texture(col: int) -> Texture2D:
+	var idx := clampi(col, 0, 2)
+	while _fox_frames.size() <= idx:
+		_fox_frames.append(SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, _fox_frames.size(), 0))
+	return _fox_frames[idx]
+
+
 func _spawn_title_fox(world: Node2D, farm_map: Node2D) -> void:
 	_title_fox = Node2D.new()
 	_title_fox.name = "TitleFox"
@@ -324,7 +345,8 @@ func _spawn_title_fox(world: Node2D, farm_map: Node2D) -> void:
 	_title_fox.add_child(shadow)
 
 	_fox_body = Sprite2D.new()
-	_fox_body.texture = SpriteSheet.grid_frame(FOX_TEX, FOX_FRAME, 1, 0)
+	_fox_body.texture = _fox_frame_texture(1)
+	_fox_frame_col = 1
 	_fox_body.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_fox_body.centered = false
 	_fox_body.offset = Vector2(-8, -18)

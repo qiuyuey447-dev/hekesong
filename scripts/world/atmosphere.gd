@@ -14,6 +14,8 @@ var _night_veil: ColorRect
 var _tween: Tween
 var _overlay_tween: Tween
 var _layers_ready := false
+var _shelter_age := 0.0
+const SHELTER_CHECK_SEC := 0.18
 
 
 func _ready() -> void:
@@ -92,6 +94,9 @@ func _ensure_layers() -> void:
 		_rain_world.call("configure", _splash_root)
 
 	_layers_ready = true
+	var vp := get_viewport()
+	if vp != null and not vp.size_changed.is_connected(_sync_layout):
+		vp.size_changed.connect(_sync_layout)
 	_refresh(true)
 
 
@@ -104,12 +109,16 @@ func _get_main_root() -> Node:
 	return node
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not _layers_ready:
 		return
-	_sync_layout()
-	if GameState.weather_today == GameState.WEATHER_RAIN:
-		_update_rain_shelter()
+	if GameState.weather_today != GameState.WEATHER_RAIN:
+		return
+	_shelter_age += delta
+	if _shelter_age < SHELTER_CHECK_SEC:
+		return
+	_shelter_age = 0.0
+	_update_rain_shelter()
 
 
 func _on_clock_refresh(_arg = null) -> void:

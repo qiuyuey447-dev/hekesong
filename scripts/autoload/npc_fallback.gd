@@ -58,7 +58,7 @@ const FALLBACK_TASK_WATER := [
 
 const FALLBACK_CHAT_WATER_HINT := [
 	"田还干着。要浇你说一声。",
-	"垄还没润。我耳朵好使，不用喊两遍。",
+	"垄还干。你点头我就去。",
 ]
 
 const FALLBACK_CHAT_HELLO := [
@@ -170,6 +170,23 @@ const FALLBACK_CASUAL_LEAK := {
 		"我不太敢问。问了，又怕答案从手指缝里漏走。",
 	],
 }
+
+const FALLBACK_QUIET_TODAY := [
+	"今天怎么一句话也没有。我还在这儿。",
+	"你忙也行。不说话的话，我就在旁边。",
+]
+
+const FALLBACK_QUIET_SEVERAL := [
+	"这几天你都不怎么开口。我还在的。",
+	"田里转了一圈，你都没跟我说一句。",
+	"你这几天都不跟我说话。不是怪你，就是……有点空。",
+]
+
+const FALLBACK_QUIET_STRANGER := [
+	"你一直不说话。我也不知道该问什么。",
+	"站那儿也不吭声。随你。",
+	"……你怎么不开口。",
+]
 
 const FALLBACK_CASUAL_AWAKEN := {
 	"morning": [
@@ -326,6 +343,20 @@ static func ambient_sidewrite(weather: String = "") -> String:
 	return "……风从廊下过来。她没说话，只是看着田。"
 
 
+static func quiet_nudge_line(previous: Array = [], extra: Dictionary = {}) -> String:
+	var ctx: Dictionary = extra.get("player_quiet", {})
+	if ctx.is_empty():
+		ctx = RelationshipDirector.get_player_quiet_context()
+	if not bool(ctx.get("should_nudge", false)):
+		return ""
+	var story_mode := str(extra.get("story_mode", StoryDirector.get_story_mode()))
+	if story_mode == "stranger":
+		return pick_non_duplicate(FALLBACK_QUIET_STRANGER, previous)
+	if str(ctx.get("nudge_kind", "")) == "today":
+		return pick_non_duplicate(FALLBACK_QUIET_TODAY, previous)
+	return pick_non_duplicate(FALLBACK_QUIET_SEVERAL, previous)
+
+
 static func casual_chat(
 	story_mode: String,
 	sprout_tier: int,
@@ -378,12 +409,21 @@ static func proactive_line(extra: Dictionary) -> String:
 	var intent := str(extra.get("proactive_intent", extra.get("channel", "casual")))
 	var leak: Dictionary = extra.get("leak_context", {})
 	var summary := str(leak.get("anchor_summary", "")).strip_edges()
+	if MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary):
+		summary = ""
 	if intent == "leak" and summary != "":
 		var wraps := [
 			"手比脑子先动了一下。……%s。" % summary,
-			"刚才那一下，像真做过：%s。" % summary,
 			"……%s。想不起来是哪一回。" % summary,
+			"这事像做过。不是刚才。",
 		]
+		var quiet := quiet_nudge_line(previous, extra)
+		if quiet != "" and str(extra.get("story_mode", StoryDirector.get_story_mode())) != "stranger":
+			wraps = [
+				"手比脑子先动了一下。……%s。你这几天都不怎么开口。" % summary,
+				"……%s。想不起来是哪一回。你也不说话。" % summary,
+				"这事像做过。不是刚才。你这几天都不怎么开口。",
+			]
 		var leak_line := pick_non_duplicate(wraps, previous)
 		if leak_line != "":
 			return leak_line
@@ -417,6 +457,9 @@ static func proactive_line(extra: Dictionary) -> String:
 			"……你过来一下。我有句话想说。",
 			"你方便的话，过来听我说一句。",
 		], previous)
+	var quiet := quiet_nudge_line(previous, extra)
+	if quiet != "":
+		return quiet
 	var grounded := _location_grounded_line(extra)
 	if grounded != "":
 		return grounded
@@ -521,9 +564,6 @@ static func greet(
 	if game_day <= 1 and affection == 0 and not include_absence_comeback:
 		return pick_random(FALLBACK_GREET_FIRST)
 
-	if _is_stranger_amnesia(memory_context):
-		return "……你是谁？我不记得了。我怎么会在这里。"
-
 	if include_absence_comeback and str(memory_context.get("story_mode", "")) != "stranger":
 		var hint := str(absence_facts.get("comeback_hint", "")).strip_edges()
 		if hint == "":
@@ -538,8 +578,14 @@ static func greet(
 
 	if _is_stranger_amnesia(memory_context):
 		if str(memory_context.get("story_mode", "")) == "stranger":
+			if bool(RelationshipDirector.get_player_quiet_context().get("should_nudge", false)):
+				return "……你是谁？站那儿也不说话。"
 			return pick_random(FALLBACK_GREET_STRANGER_W2)
 		return "你来了。今天是%s。这田……好像不是头一回见。" % sky
+
+	var quiet := quiet_nudge_line([], {"story_mode": str(memory_context.get("story_mode", ""))})
+	if quiet != "":
+		return quiet
 
 	match stage:
 		GameState.STAGE_BOND:
@@ -623,10 +669,12 @@ static func player_chat(
 		var today := GameState.get_weather_label()
 		var tomorrow := GameState.get_weather_label(GameState.weather_tomorrow_hint)
 		return "今天%s，明天大概是%s。田里的情况我会帮你看。" % [today, tomorrow]
-	if "喜欢" in text or "慢慢来" in text or "记住" in text:
-		return pick_random(FALLBACK_CHAT_PREFERENCE)
 	if _is_stranger_amnesia(memory_context):
 		return stranger_chat(text, memory_context)
+	if _looks_like_preference_question(text):
+		return _preference_question_reply(text)
+	if "喜欢" in text or "慢慢来" in text or "记住" in text:
+		return pick_random(FALLBACK_CHAT_PREFERENCE)
 	if str(memory_context.get("story_mode", "")) == "awaken":
 		return pick_random(FALLBACK_AWAKEN_CHAT)
 	if _is_leak_phase(memory_context) and not bool(memory_context.get("revealed", false)):
@@ -648,6 +696,8 @@ static func stranger_chat(text: String, memory_context: Dictionary) -> String:
 	if _looks_like_save_bug_worry(text):
 		return pick_random(FALLBACK_STRANGER_SAVE_WORRY)
 	if _is_stranger_amnesia(memory_context):
+		if "零食" in text or "喜欢吃" in text or ("喜欢" in text and "商店" in text):
+			return "……商店里甜的、咸的我都见过。我这会儿想不起自己爱吃哪个。"
 		if "我是谁" in text or "你是谁" in text or "不认识" in text or "记得我" in text:
 			return "……你说我们见过？对不起。我想不起来。"
 		if "小狸" in text and ("认识" in text or "记得" in text or "一起" in text):
@@ -661,6 +711,21 @@ static func stranger_chat(text: String, memory_context: Dictionary) -> String:
 	if "留下" in text or "帮工" in text or "农场" in text:
 		return "……你愿意说的话，我听。但我还不确定我们是什么关系。"
 	return pick_random(FALLBACK_STRANGER_CHAT)
+
+
+static func _looks_like_preference_question(text: String) -> bool:
+	if "喜欢" not in text and "零食" not in text:
+		return false
+	for mark in ["哪个", "哪些", "什么", "哪样", "吗", "么", "？", "?"]:
+		if mark in text:
+			return true
+	return "喜欢吃" in text or "零食" in text
+
+
+static func _preference_question_reply(text: String) -> String:
+	if "零食" in text or "商店" in text:
+		return "商店里甜的咸的都有。带糖的我会多看一眼。"
+	return "这个啊……你问我，我还真要再想想。"
 
 
 static func companion_react(

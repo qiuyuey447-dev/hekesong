@@ -225,6 +225,26 @@ P0 一轮就能让「像 GALGAME」的观感明显改变，建议先做。P1 是
 
 ---
 
+## 四点五、指令闭环（农务 Say-Do · 已落地）
+
+玩家反馈的三类高频问题——「说好的不做」「多步指令听不懂」「纠错反问接不住」——根因不在 LLM 单点，而在**客户端没有把「听懂 → 承诺 → 执行 → 验收」串成一条链**。2026-08 已用独立 P0–P4 落地：
+
+| 层 | Autoload | 职责 |
+|----|----------|------|
+| **P0** | `PendingOfferStore` | 小狸邀约（浇/收/种/买）pending；玩家「好/行/去吧」本地确认，不再依赖 fragile 布尔旗 |
+| **P1** | `ChoreOrchestrator` + `SayDoValidator` | 多步队列（收→卖→买）；LLM 回复里的口头承诺须对应已启动 task，否则改口并补执行 |
+| **P2** | `ChorePreprocessor` | 「你为啥没卖」类纠错/种子在哪/忙时农务 chat 挡 LLM；本地 `parse_plan` 拆「然后/再/顺便」 |
+| **P3** | `IntentParser` / `IntentBridge` / `NpcBridge` + 双端 `local_llm_server.py` | API 返回 `plan[]`；classify v2 带 steps；payload 带 `chore_facts` |
+| **P4** | `story_test_runner` `_test_chore_instruction_closure` | 多步解析、邀约确认、纠错、Say-Do、busy 挡 LLM、种子问询、plan 归一化 |
+
+**入口**：`main_ui._send_chat_async` 最先走 `ChoreOrchestrator.handle_player_message`；LLM 回包后 `execute_reply_followthrough` → `finalize_reply`。
+
+**铁律**：改提示词或 plan 字段须双端同步 `tools/local_llm_server.py` 与 `cloudrun/xiaoli-api/tools/local_llm_server.py`。
+
+**验收场景**（F5 手测）：「收然后卖再买」；「要不要收」+「好的」；「你为啥没卖萝卜」；「我这就去浇」须动身。
+
+---
+
 ## 五、明确不要做
 
 - **不要加全知旁白**——会说破留白，违反世界观定稿的「不解释」原则。

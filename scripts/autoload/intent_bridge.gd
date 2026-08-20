@@ -151,15 +151,20 @@ func _build_classify_payload(text: String) -> Dictionary:
 func _intent_instruction() -> String:
 	return (
 		"你是意图分类器。根据玩家消息，只输出 JSON，不要 markdown。"
-		+ "字段：intent(枚举)、plot_id(整数，无则-1)、confidence(0~1)、refuse_kind(仅 intent=refuse 时：sell)。"
+		+ "字段：intent(枚举)、plot_id(整数，无则-1)、confidence(0~1)、refuse_kind(仅 intent=refuse 时：sell)、"
+		+ "steps(字符串数组或对象数组，可选；多步委托时按顺序填 harvest_all/sell_turnips/shop_buy_seeds/plant_all/water_all；"
+		+ "shop_buy_seeds 可带 max_gold:true 表示用剩余金币尽量买种子)。"
+		+ "字段也可含 max_gold(布尔，单步 open_shop 且要「剩下的钱全买」时用)。"
 		+ "intent 只能从 allowed_intents 中选。"
-		+ "玩家在委托做事时用 action intent；纯聊天用 chat。"
+		+ "玩家在委托做事时用 action intent；多步委托（然后/再/顺便）必须填 steps 且 intent=chat。"
 		+ "小狸可代做：浇水 water/water_all、种萝卜 plant/plant_all、收萝卜 harvest/harvest_all、去商店 open_shop、出售萝卜 open_market 等；"
+		+ "卖萝卜用 open_market/sell_turnips，不是 harvest。"
 		+ "仅帮卖 sell 用 refuse；种萝卜用 plant，不要 refuse plant。"
-		+ "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat。"
-		+ "明确让小狸去浇/种/收/买/睡觉才用对应 action。"
+		+ "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat 且 steps=[]。"
+		+ "明确让小狸去浇/种/收/买/睡觉才用对应 action 或 steps。"
 		+ "参考 world_snapshot.companion 的位置、状态与 capabilities。"
-		+ "示例：{\"intent\":\"harvest\",\"plot_id\":-1,\"confidence\":0.92,\"refuse_kind\":\"\"}"
+		+ "示例单步：{\"intent\":\"harvest_all\",\"plot_id\":-1,\"confidence\":0.92,\"refuse_kind\":\"\",\"steps\":[]}"
+		+ "示例多步：{\"intent\":\"chat\",\"plot_id\":-1,\"confidence\":0.9,\"steps\":[\"harvest_all\",\"sell_turnips\",\"shop_buy_seeds\"]}"
 	)
 
 

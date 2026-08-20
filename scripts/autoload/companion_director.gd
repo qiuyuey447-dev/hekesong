@@ -56,9 +56,11 @@ func pick_speech() -> Dictionary:
 		return {}
 	if TaskSystem.is_busy():
 		return {}
-	## 当日信纸还没触发：别让渗漏/闲聊抢在定时邀请前开口。
+	## 当日信纸邀请还没开口：别让渗漏/闲聊抢在前面。邀请说过之后可以回响。
 	if StoryBeatDirector.has_unfired_schedule_today():
-		return {}
+		var today_id := StoryBeatDirector.get_today_beat_id()
+		if today_id == "" or not GameState.was_invite_spoken_for(today_id):
+			return {}
 
 	if GameState.can_proactive_speech("leak"):
 		var leak_ctx := LeakageEngine.peek_leak_context()
@@ -162,6 +164,7 @@ func collect_llm_extra(speech: Dictionary) -> Dictionary:
 		"recent_chat_turns": GameState.get_recent_chat_turns(12),
 		"companion_location": str(CompanionAgent.get_snapshot().get("location_name", "")),
 		"companion_activity": str(CompanionAgent.get_snapshot().get("activity", "")),
+		"player_quiet": RelationshipDirector.get_player_quiet_context(),
 	}
 
 
@@ -207,22 +210,38 @@ func _goal_for(speech: Dictionary, beat_id: String) -> String:
 	if written != "":
 		return written
 	var channel := str(speech.get("channel", ""))
+	var base := ""
 	match channel:
 		"invite":
-			return StoryBeatDirector.get_invite_goal(beat_id, bool(speech.get("remind", false)))
+			base = StoryBeatDirector.get_invite_goal(beat_id, bool(speech.get("remind", false)))
 		"leak":
-			return "用这个玩家真实发生过的记忆，写一句身体先记得、脑子还对不上的话。禁止编造锚点里没有的事，禁止念信纸。"
+			base = "用这个玩家真实发生过的记忆，写一句身体先记得、脑子还对不上的话。禁止编造锚点里没有的事，禁止念信纸。"
 		_:
 			if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
-				return (
+				base = (
 					"闲聊或轻轻点到今日节点氛围。可以接位置、天气、心情。"
 					+ "不要念信纸，不要报田块数字。禁止主动问要不要种/浇/收。"
 				)
-			return (
-				"闲聊。只说你此刻所在的位置和正在做的事。"
-				+ "可以接天气或心情。不要报售价、行情、背包、种子包数、叶片或田块数字。"
-				+ "禁止主动问要不要种/浇/收。"
-			)
+			else:
+				base = (
+					"闲聊。只说你此刻所在的位置和正在做的事。"
+					+ "可以接天气或心情。不要报售价、行情、背包、种子包数、叶片或田块数字。"
+					+ "禁止主动问要不要种/浇/收。"
+				)
+	if channel == "invite":
+		return base
+	return base + _quiet_goal_suffix()
+
+
+func _quiet_goal_suffix() -> String:
+	var quiet: Dictionary = RelationshipDirector.get_player_quiet_context()
+	if not bool(quiet.get("should_nudge", false)):
+		return ""
+	if StoryDirector.is_stranger_mode():
+		return "玩家此刻不说话。轻轻点一句他不吭声，只说眼前，不要提这几天的交往，不要责备。"
+	if str(quiet.get("nudge_kind", "")) == "today":
+		return "玩家今天还没跟你说过话。可以轻轻点一句，不要催任务，不要责备。"
+	return "玩家这几天没主动跟你聊天。可以轻轻说他不怎么开口，像在意不是责怪。"
 
 
 func _sprout_tier() -> int:

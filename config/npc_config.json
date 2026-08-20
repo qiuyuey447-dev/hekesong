@@ -3,7 +3,7 @@
 	"api_url": "https://xiaoli-api-288258-10-1457975289.sh.run.tcloudbase.com/v1/chat",
 	"api_key": "",
 	"npc_id": "xiaoli",
-	"timeout_sec": 15.0,
+	"timeout_sec": 22.0,
 	"mock_delay_sec": 0.4,
 	"intent_fallback_enabled": true,
 	"intent_classify_url": "",

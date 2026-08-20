@@ -4,17 +4,29 @@ extends Node2D
 const RainSplashScript := preload("res://scripts/world/rain_splash.gd")
 
 const DROP_COUNT := 360
+const DROP_COUNT_WEB := 88
 const MAX_SPLASH_NODES := 100
+const MAX_SPLASH_WEB := 16
 const WIND := Vector2(88.0, 480.0)
+const GROUND_CACHE_STEP := 32.0
+const CACHE_REFRESH_SEC := 0.2
 
 var _active := false
 var _drops: Array[Dictionary] = []
 var _splash_root: Node2D
 var _splash_count := 0
 var _night_factor := 1.0
+var _farm: Node
+var _shelter := Rect2()
+var _rain_targets: Array = []
+var _ground_y_cache: Dictionary = {}
+var _cache_age := 0.0
+var _splash_skip := 0
+var _is_web := false
 
 
 func _ready() -> void:
+	_is_web = OS.has_feature("web")
 	set_process(false)
 	top_level = true
 	z_index = 4096
@@ -30,6 +42,7 @@ func set_raining(on: bool) -> void:
 	visible = on
 	set_process(on)
 	if on:
+		_refresh_world_cache()
 		_reset_drops()
 	else:
 		_clear_splashes()
@@ -40,9 +53,20 @@ func set_night_factor(f: float) -> void:
 	_night_factor = clampf(f, 0.55, 1.0)
 
 
+func _drop_count() -> int:
+	return DROP_COUNT_WEB if _is_web else DROP_COUNT
+
+
+func _splash_cap() -> int:
+	return MAX_SPLASH_WEB if _is_web else MAX_SPLASH_NODES
+
+
 func _process(delta: float) -> void:
 	if not _active:
 		return
+	_cache_age += delta
+	if _cache_age >= CACHE_REFRESH_SEC or _farm == null:
+		_refresh_world_cache()
 	var view := _camera_world_rect()
 	var keep_rect := view.grow(280.0)
 
@@ -63,6 +87,21 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 
+func _refresh_world_cache() -> void:
+	_cache_age = 0.0
+	_ground_y_cache.clear()
+	var tree := get_tree()
+	if tree == null:
+		return
+	_farm = tree.get_first_node_in_group("farm_world")
+	if _farm != null and _farm.has_method("get_farm_map"):
+		var farm_map: Node2D = _farm.call("get_farm_map")
+		_shelter = FarmSetdress.porch_shelter_rect(farm_map)
+	else:
+		_shelter = Rect2()
+	_rain_targets = tree.get_nodes_in_group("rain_target")
+
+
 func _draw() -> void:
 	if not _active:
 		return
@@ -71,7 +110,7 @@ func _draw() -> void:
 		var g_pos: Vector2 = drop["pos"]
 		var seg: float = drop["seg"]
 		var end := g_pos + Vector2(seg * 0.36, seg)
-		draw_line(g_pos, end, streak_color, 2.0)
+		draw_line(g_pos, end, streak_color, 1.0 if _is_web else 2.0)
 
 
 func _camera_world_rect() -> Rect2:
@@ -87,7 +126,7 @@ func _camera_world_rect() -> Rect2:
 func _reset_drops() -> void:
 	_drops.clear()
 	var view := _camera_world_rect()
-	for i in DROP_COUNT:
+	for i in _drop_count():
 		var drop := {}
 		_respawn_drop(drop, view)
 		_drops.append(drop)
@@ -121,26 +160,25 @@ func _resolve_hit(pos: Vector2, prev_y: float) -> Vector2:
 
 
 func _is_sheltered(world_pos: Vector2) -> bool:
-	var world := get_tree().get_first_node_in_group("farm_world")
-	if world != null and world.has_method("is_rain_sheltered"):
-		return bool(world.call("is_rain_sheltered", world_pos))
+	if _shelter.size != Vector2.ZERO:
+		return _shelter.has_point(world_pos)
 	return false
 
 
 func _character_feet_at(pos: Vector2, prev_y: float) -> Vector2:
-	for node in get_tree().get_nodes_in_group("rain_target"):
+	for node in _rain_targets:
 		if not node is Node2D:
 			continue
 		var n := node as Node2D
-		if not n.is_inside_tree():
+		if not is_instance_valid(n) or not n.is_inside_tree():
 			continue
 		var feet := n.global_position
-		if node.has_method("get_rain_feet_position"):
-			feet = node.call("get_rain_feet_position")
+		if n.has_method("get_rain_feet_position"):
+			feet = n.call("get_rain_feet_position")
 		if _is_sheltered(feet):
 			continue
 		var half_w := 16.0 * n.scale.x
-		if node.is_in_group("player"):
+		if n.is_in_group("player"):
 			half_w = 20.0 * n.scale.x
 		var top_y := feet.y - 40.0 * n.scale.y
 		if pos.x < feet.x - half_w or pos.x > feet.x + half_w:
@@ -151,23 +189,25 @@ func _character_feet_at(pos: Vector2, prev_y: float) -> Vector2:
 
 
 func _ground_surface_y(world_x: float, from_y: float) -> float:
-	var world := get_tree().get_first_node_in_group("farm_world")
-	if world != null and world.has_method("get_ground_surface_y_at"):
-		return world.call("get_ground_surface_y_at", world_x, from_y)
-	if world != null and world.has_method("has_ground_at"):
-		var y := from_y
-		for _i in 100:
-			if world.call("has_ground_at", Vector2(world_x, y)):
-				return y
-			y += 5.0
-	return from_y + 400.0
+	var key := int(floor(world_x / GROUND_CACHE_STEP))
+	if _ground_y_cache.has(key):
+		return float(_ground_y_cache[key])
+	var y := from_y + 400.0
+	if _farm != null and _farm.has_method("get_ground_surface_y_at"):
+		y = float(_farm.call("get_ground_surface_y_at", world_x, from_y))
+	_ground_y_cache[key] = y
+	return y
 
 
 func _spawn_splash(world_pos: Vector2) -> void:
 	if _splash_root == null or not is_instance_valid(_splash_root):
 		return
-	if _splash_count >= MAX_SPLASH_NODES:
+	if _splash_count >= _splash_cap():
 		return
+	if _is_web:
+		_splash_skip += 1
+		if _splash_skip % 3 != 0:
+			return
 	var splash: Node2D = RainSplashScript.new()
 	_splash_root.add_child(splash)
 	splash.setup(world_pos, randf_range(0.14, 0.28))

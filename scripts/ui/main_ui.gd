@@ -58,6 +58,7 @@ var _queued_busy_chat: String = ""
 var _pending_chat_intent: Dictionary = {}
 var _pending_chat_text: String = ""
 var _chat_action_handled: bool = false
+var _body_action_handled: bool = false
 var _pending_nudge_type: String = ""
 var _pending_session_absence: bool = false
 var _story_choice_blocked: bool = false
@@ -156,6 +157,7 @@ func _ready() -> void:
 	NpcBridge.reply_ready.connect(_on_npc_reply_ready)
 	NpcBridge.request_failed.connect(_on_npc_request_failed)
 	MemoryService.anchor_eviction_pending.connect(_on_anchor_eviction_pending)
+	GameState.memory_changed.connect(_on_memory_changed_for_pin_hint)
 	if _story_choice_panel.has_signal("chosen"):
 		_story_choice_panel.chosen.connect(_on_story_choice_chosen)
 
@@ -1023,9 +1025,28 @@ func _sprout_growth_line(tier: int) -> String:
 			return ""
 
 
+func _on_memory_changed_for_pin_hint() -> void:
+	call_deferred("_maybe_speak_notebook_pin_hint")
+
+
+func _maybe_speak_notebook_pin_hint() -> void:
+	if not bool(GameState.get_ending_flags().get("notebook_pin_hint_due", false)):
+		return
+	if bool(GameState.get_ending_flags().get("notebook_pin_hint_spoken", false)):
+		return
+	if _is_gameplay_locked() or StoryDirector.is_stranger_mode():
+		return
+	if _story_beat_panel.visible or _awakening_panel.visible or _ending_panel.visible:
+		return
+	GameState.set_ending_flag("notebook_pin_hint_spoken", true)
+	GameState.set_ending_flag("notebook_pin_hint_due", false)
+	_append_companion_message("……有什么不想忘掉的，跟我说一声。我写进去。")
+
+
 ## 每天清晨她自己先开一句口（走 LLM，带昨日日志与缺席回归），
 ## 与信纸里的「清晨」正文互不替代：信纸是叙事，这一句是她本人。
 func _maybe_request_session_start() -> void:
+	call_deferred("_maybe_speak_notebook_pin_hint")
 	if not _pending_morning_sidewrite:
 		return
 	if GameState.is_story_complete() or GameState.should_show_awakening():
@@ -1051,8 +1072,10 @@ func _maybe_request_session_start() -> void:
 	_session_start_retries = 0
 	_ambient_sidewrite_retries = 0
 	_request_companion_line("session_start", {
-		"include_yesterday_echo": GameState.has_yesterday_journal(),
-		"include_absence_comeback": GameState.has_pending_absence(),
+		"include_yesterday_echo": GameState.has_yesterday_journal() and not StoryDirector.is_stranger_mode(),
+		"include_absence_comeback": GameState.has_pending_absence() and not StoryDirector.is_stranger_mode(),
+		"yesterday_notebook_line": MemoryService.latest_notebook_line_for_day(GameState.game_day - 1),
+		"player_quiet": RelationshipDirector.get_player_quiet_context(),
 	})
 
 
@@ -1274,16 +1297,22 @@ func _maybe_show_awakening() -> void:
 		return
 	if _awakening_panel.visible:
 		return
-	if _story_choice_blocked or _ending_panel.visible:
+	if _ending_panel.visible:
 		return
+	if _story_choice_blocked:
+		_yield_eviction_for_story()
 	# 开场文案在信纸里演，不再 toast 一整段。
+	if _memory_panel != null:
+		_memory_panel.close()
 	_awakening_panel.open()
 	call_deferred("_sync_player_movement_lock")
 
 
 func _maybe_force_story_finale() -> void:
-	if GameState.is_story_complete() or _story_choice_blocked:
+	if GameState.is_story_complete():
 		return
+	if _story_choice_blocked:
+		_yield_eviction_for_story()
 	if GameState.should_show_awakening():
 		return
 	if not GameState.should_force_story_finale():
@@ -1293,7 +1322,7 @@ func _maybe_force_story_finale() -> void:
 		GameState.mark_awakening_complete(true)
 	else:
 		skipped = bool(GameState.get_ending_flags().get("f10_skipped", false))
-	var ending_id := EndingDirector.resolve_ending(skipped)
+	var ending_id := EndingDirector.lock_ending_id(EndingDirector.resolve_ending(skipped))
 	_debug_note("—— 故事收束（兜底）——")
 	call_deferred("_play_ending", ending_id)
 
@@ -1302,7 +1331,7 @@ func _on_awakening_finished(skipped: bool) -> void:
 	GameState.mark_awakening_complete(skipped)
 	call_deferred("_sync_player_movement_lock")
 	GameState.mark_story_node_seen("N20")
-	var ending_id := EndingDirector.resolve_ending(skipped)
+	var ending_id := EndingDirector.lock_ending_id(EndingDirector.resolve_ending(skipped))
 	if not EndingDirector.is_bad_ending(ending_id):
 		GameState.unlock_fragment("F10", "N20")
 	call_deferred("_play_ending", ending_id)
@@ -1311,7 +1340,11 @@ func _on_awakening_finished(skipped: bool) -> void:
 func _on_scheduled_story_beat(beat_id: String) -> void:
 	if GameState.should_show_awakening():
 		return
-	if _story_beat_blocked or _is_gameplay_locked():
+	if _story_beat_blocked:
+		return
+	if _story_choice_blocked:
+		_yield_eviction_for_story()
+	if _is_gameplay_locked():
 		return
 	if StoryBeatDirector.should_auto_open_beat(beat_id):
 		_maybe_show_story_beat(true)
@@ -1350,10 +1383,18 @@ func _has_unfinished_story_beat_today() -> bool:
 
 
 func _maybe_show_story_beat(force_open: bool = false) -> void:
-	if _story_choice_blocked or _story_beat_blocked or GameState.is_story_complete():
+	if _story_beat_blocked or GameState.is_story_complete():
 		return
 	if GameState.should_show_awakening():
 		return
+	if _story_choice_blocked:
+		if not (
+			force_open
+			or StoryBeatDirector.has_blocking_today_beat()
+			or StoryBeatDirector.has_pending_night_beat()
+		):
+			return
+		_yield_eviction_for_story()
 	var beat := StoryBeatDirector.get_pending_session_beat(_pending_beat_yesterday_echo)
 	if beat.is_empty() and StoryBeatDirector.has_pending_night_beat():
 		if StoryBeatDirector.can_trigger_night_beat_at_hollow() or force_open:
@@ -1361,16 +1402,19 @@ func _maybe_show_story_beat(force_open: bool = false) -> void:
 	if beat.is_empty():
 		if not force_open:
 			StoryBeatDirector.refresh_daily_schedule()
+		call_deferred("_maybe_resume_pending_eviction")
 		return
 	var beat_id := str(beat.get("id", ""))
 	if not force_open and not StoryBeatDirector.should_auto_open_beat(beat_id):
 		StoryBeatDirector.refresh_daily_schedule()
+		call_deferred("_maybe_resume_pending_eviction")
 		return
 	_pending_beat_yesterday_echo = false
 	if beat_id in ["P_N05", "BE_N05"] and not GameState.has_revealed_memory():
 		GameState.mark_w2_stranger_seen()
 	beat = StoryBeatDirector.take_displayable_beat(beat)
 	if beat.is_empty():
+		call_deferred("_maybe_resume_pending_eviction")
 		return
 	beat = await StoryBeatDirector.prepare_beat_for_display(beat)
 	if beat_id == "P_N06p":
@@ -1390,8 +1434,10 @@ func _open_story_beat_panel(beat: Dictionary) -> void:
 
 
 func _maybe_resume_beat_tail() -> void:
-	if _story_choice_blocked or _story_beat_blocked or GameState.is_story_complete():
+	if _story_beat_blocked or GameState.is_story_complete():
 		return
+	if _story_choice_blocked:
+		_yield_eviction_for_story()
 	if _story_beat_panel.visible or _awakening_panel.visible or _ending_panel.visible:
 		return
 	if GameState.time_of_day not in [GameState.TIME_EVENING, GameState.TIME_NIGHT]:
@@ -1448,6 +1494,7 @@ func _on_story_beat_finished(beat_id: String) -> void:
 				_debug_note("主线完成：%s" % beat_id)
 		_story_beat_blocked = false
 		_begin_companion_snuggle(snuggle_beat)
+		call_deferred("_maybe_resume_pending_eviction")
 		return
 
 	if beat_id.strip_edges() != "":
@@ -1469,6 +1516,7 @@ func _on_story_beat_finished(beat_id: String) -> void:
 		call_deferred("_maybe_show_notebook_tutorial")
 	CompanionDirector.schedule_consider(0.9)
 	call_deferred("_maybe_trigger_persona_shift")
+	call_deferred("_maybe_resume_pending_eviction")
 
 
 func _maybe_show_d5_notebook_trust_hint() -> void:
@@ -1681,6 +1729,30 @@ func _enter_game_over_state() -> void:
 	_ending_panel.open_game_over(ending_id)
 
 
+func is_story_overlay_open() -> bool:
+	return (
+		(_awakening_panel != null and _awakening_panel.visible)
+		or (_story_beat_panel != null and _story_beat_panel.visible)
+		or (_ending_panel != null and _ending_panel.visible)
+		or (_story_choice_panel != null and _story_choice_panel.visible)
+		or (_name_prompt_panel != null and _name_prompt_panel.visible)
+	)
+
+
+func blocks_body_actions() -> bool:
+	if _is_gameplay_locked():
+		return true
+	if _memory_panel != null and _memory_panel.visible:
+		return true
+	if _shop_panel != null and _shop_panel.visible:
+		return true
+	if _feed_panel != null and _feed_panel.visible:
+		return true
+	if _market_panel != null and _market_panel.visible:
+		return true
+	return false
+
+
 func _is_gameplay_locked() -> bool:
 	return (
 		GameState.is_story_complete()
@@ -1688,6 +1760,7 @@ func _is_gameplay_locked() -> bool:
 		or _name_prompt_panel.visible
 		or _snuggle_blocked
 		or _sleep_flow_active
+		or is_story_overlay_open()
 		or (_day_cycle_overlay != null and _day_cycle_overlay.is_busy())
 		or (_day_cycle_overlay != null and _day_cycle_overlay.is_prompt_visible())
 	)
@@ -1750,7 +1823,6 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 	if stage == 0:
 		if GameState.plant_turnip(plot_id):
 			_companion_farm_reaction("plant_ok")
-			_clear_companion_aside()
 			_refresh_hud()
 		else:
 			_companion_farm_reaction("no_seeds")
@@ -1759,7 +1831,6 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 	if GameState.can_harvest(plot_id):
 		if GameState.harvest_turnip(plot_id):
 			_companion_farm_reaction("harvest_ok")
-			_clear_companion_aside()
 			_refresh_hud()
 		else:
 			_companion_farm_reaction("harvest_failed")
@@ -1780,7 +1851,6 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 	GameState.mark_plot_watered(plot_id)
 	AmbientAudio.play_prop_sfx("water")
 	_companion_farm_reaction("water_ok")
-	_clear_companion_aside()
 	_refresh_hud()
 
 
@@ -1868,7 +1938,7 @@ func _on_memory_pressed() -> void:
 
 
 func on_companion_notebook_clicked() -> void:
-	if _is_gameplay_locked() or _story_beat_blocked:
+	if _is_gameplay_locked() or _story_beat_blocked or is_story_overlay_open():
 		return
 	CompanionDirector.notify_player_active()
 	_dismiss_overlays_for_memory()
@@ -1876,7 +1946,7 @@ func on_companion_notebook_clicked() -> void:
 
 
 func on_player_notebook_clicked() -> void:
-	if _is_gameplay_locked() or _story_beat_blocked:
+	if _is_gameplay_locked() or _story_beat_blocked or is_story_overlay_open():
 		return
 	CompanionDirector.notify_player_active()
 	_dismiss_overlays_for_memory()
@@ -1886,7 +1956,9 @@ func on_player_notebook_clicked() -> void:
 func _maybe_resume_pending_eviction() -> void:
 	if not MemoryService.has_pending_eviction():
 		return
-	if _is_gameplay_locked() or _story_beat_panel.visible or _npc_busy:
+	if _story_should_block_eviction():
+		return
+	if _is_gameplay_locked() or _npc_busy:
 		_notebook_eviction_retries += 1
 		if _notebook_eviction_retries > 20:
 			_notebook_eviction_retries = 0
@@ -1901,10 +1973,32 @@ func _on_anchor_eviction_pending(candidates: Array) -> void:
 	call_deferred("_show_notebook_eviction", candidates)
 
 
+func _story_should_block_eviction() -> bool:
+	return (
+		_story_beat_blocked
+		or _story_beat_panel.visible
+		or _awakening_panel.visible
+		or _ending_panel.visible
+		or StoryBeatDirector.has_blocking_today_beat()
+	)
+
+
+func _yield_eviction_for_story() -> void:
+	_notebook_eviction_active = false
+	_story_choice_blocked = false
+	if _story_choice_panel.visible:
+		if _story_choice_panel.has_method("close_panel"):
+			_story_choice_panel.close_panel()
+		else:
+			_story_choice_panel.visible = false
+
+
 func _show_notebook_eviction(candidates: Array) -> void:
 	if candidates.size() < 2:
 		return
-	if _is_gameplay_locked() or _story_beat_panel.visible:
+	if _story_should_block_eviction():
+		return
+	if _is_gameplay_locked():
 		_notebook_eviction_retries += 1
 		if _notebook_eviction_retries > 20:
 			_notebook_eviction_retries = 0
@@ -1912,30 +2006,32 @@ func _show_notebook_eviction(candidates: Array) -> void:
 		call_deferred("_show_notebook_eviction", candidates)
 		return
 	_notebook_eviction_retries = 0
-	_notebook_eviction_active = true
-	_story_choice_blocked = true
 	var choices: Array = []
 	for raw in candidates:
 		if not raw is Dictionary:
 			continue
 		var entry: Dictionary = raw
-		var summary := str(entry.get("summary", "")).strip_edges()
+		var summary := MemoryService.notebook_line_of(entry)
+		if summary == "" or MemoryService.looks_like_system_label(summary):
+			summary = "这一页"
 		if summary.length() > 36:
 			summary = summary.substr(0, 36) + "…"
 		choices.append({
 			"id": str(entry.get("id", "")),
-			"label": summary if summary != "" else "这一页",
+			"label": summary,
 		})
 	if choices.size() < 2:
-		_notebook_eviction_active = false
-		_story_choice_blocked = false
 		return
 	if _story_choice_panel.has_method("open"):
+		_notebook_eviction_active = true
 		_story_choice_panel.open({
 			"title": "她的本子",
 			"body": "本子写满了。\n\n%s 翻来翻去，停在两页之间。\n\n「……我得划掉一条。」" % GameState.companion_name,
 			"choices": choices,
 		})
+		_story_choice_panel.move_to_front()
+		if _story_choice_panel.visible:
+			_story_choice_blocked = true
 
 
 func _on_story_choice_chosen(choice_id: String) -> void:
@@ -1949,14 +2045,12 @@ func _on_story_choice_chosen(choice_id: String) -> void:
 		var erased_summary := ""
 		for entry in MemoryService.get_pending_eviction_candidates():
 			if str(entry.get("id", "")) == choice_id:
-				erased_summary = str(entry.get("summary", "")).strip_edges()
+				erased_summary = MemoryService.eviction_spoken_excerpt(entry)
 				break
 		MemoryService.resolve_eviction(choice_id)
 		if _story_choice_panel.has_method("close_panel"):
 			_story_choice_panel.close_panel()
 		if erased_summary != "":
-			if erased_summary.length() > 28:
-				erased_summary = erased_summary.substr(0, 28) + "…"
 			_append_companion_message("……划掉了。「%s」——以后想不起来，别怪我。" % erased_summary)
 		else:
 			_append_companion_message("……划掉了。以后想不起来，别怪我。")
@@ -1980,6 +2074,7 @@ func _maybe_trigger_persona_shift() -> void:
 	if shift.is_empty():
 		return
 	_request_companion_react("persona_shift", shift)
+	PlayerNotebookService.on_persona_shift()
 
 
 func _on_feed_requested(item_id: String) -> void:
@@ -2132,6 +2227,16 @@ func open_market_from_companion() -> void:
 	_sell_turnips_from_basket()
 
 
+func begin_companion_seed_purchase_from_orchestrator(source_text: String = "") -> void:
+	_begin_auto_seed_shop_flow(source_text, true)
+
+
+func append_companion_line_from_orchestrator(text: String) -> void:
+	var line := text.strip_edges()
+	if line != "":
+		_append_companion_message(line)
+
+
 func begin_companion_seed_purchase() -> void:
 	if _seed_purchase_resolved:
 		return
@@ -2270,8 +2375,13 @@ func _send_chat_async(text: String) -> void:
 
 	_ensure_pending_invite_delivered()
 
-	if _try_answer_chore_progress_inquiry(trimmed):
-		return
+	var chore_pre := ChoreOrchestrator.handle_player_message(trimmed)
+	if bool(chore_pre.get("handled", false)):
+		var pre_reply := str(chore_pre.get("reply", "")).strip_edges()
+		if pre_reply != "":
+			_append_companion_message(pre_reply)
+		if bool(chore_pre.get("skip_llm", false)):
+			return
 
 	if _try_answer_chore_completion_statement(trimmed):
 		return
@@ -2301,6 +2411,16 @@ func _send_chat_async(text: String) -> void:
 	if ShopDelegate.is_affirmative_reply(trimmed):
 		_maybe_arm_pending_from_last_companion_line()
 
+	var local_plan := ChorePreprocessor.parse_plan(trimmed)
+	if local_plan.size() >= 2 or ChorePreprocessor.should_auto_start_single_plan(trimmed, local_plan):
+		var batch := ChoreOrchestrator.enqueue_and_start(local_plan, trimmed)
+		if bool(batch.get("executed", false)):
+			var batch_reply := str(batch.get("reply", "")).strip_edges()
+			if batch_reply != "":
+				_append_companion_message(batch_reply)
+			_chat_action_handled = true
+			return
+
 	if _try_handle_water_offer_reply(trimmed):
 		return
 
@@ -2319,6 +2439,7 @@ func _send_chat_async(text: String) -> void:
 
 	_pending_chat_text = trimmed
 	_chat_action_handled = false
+	_body_action_handled = false
 	_skip_player_chat_reply = false
 
 	var local_intent := IntentParser.parse(trimmed)
@@ -2424,19 +2545,67 @@ func _on_npc_reply_ready(
 	if event == "player_chat" and _should_discard_player_chat_reply():
 		_set_npc_busy(false)
 		NpcBridge.take_chat_intent(request_id)
+		NpcBridge.take_reply_contract(request_id)
 		_pending_chat_text = ""
 		return
 
 	_set_npc_busy(false)
 	var display_text := text
 	var farm_reply_grounded := false
+	var chat_api_intent: Dictionary = {}
+	var llm_executed_steps: Array = []
 	if event == "player_chat":
 		display_text = _sanitize_sleep_hijack(_pending_chat_text, display_text)
 		display_text = _sanitize_unrequested_sleep_push(_pending_chat_text, display_text)
+		chat_api_intent = NpcBridge.take_chat_intent(request_id)
+		var reply_contract := NpcBridge.take_reply_contract(request_id)
+		if not chat_api_intent.is_empty():
+			_pending_chat_intent = IntentParser.resolve_misclassified_refuse(
+				IntentParser.merge_intents(
+					_pending_chat_intent,
+					chat_api_intent,
+					_pending_chat_text
+				)
+			)
+		if not _chat_action_handled:
+			_try_execute_chat_intent(false)
+		if not _chat_action_handled:
+			var follow := ChoreOrchestrator.execute_reply_followthrough(display_text, chat_api_intent)
+			llm_executed_steps = follow.get("executed_steps", [])
+			if bool(follow.get("handled", false)):
+				_chat_action_handled = true
+		if not _chat_action_handled:
+			_try_execute_companion_followthrough(display_text, chat_api_intent)
 		var sanitized := _sanitize_farm_hallucination(display_text)
-		farm_reply_grounded = sanitized.strip_edges() != text.strip_edges()
-		display_text = sanitized
-	_append_companion_message(display_text)
+		display_text = ChoreOrchestrator.finalize_reply(
+			sanitized,
+			llm_executed_steps if not llm_executed_steps.is_empty() else ChoreOrchestrator.get_last_executed_steps(),
+			_pending_chat_text
+		)
+		farm_reply_grounded = sanitized.strip_edges() != display_text.strip_edges()
+		var intent_key := str(chat_api_intent.get("intent", _pending_chat_intent.get("intent", "chat")))
+		var resolved_actions := CompanionBodyAction.resolve_actions(
+			reply_contract.get("actions", []),
+			_pending_chat_text,
+			display_text,
+			intent_key,
+			_chat_action_handled
+		)
+		if reply_contract.is_empty():
+			reply_contract = GameState.make_reply_contract(display_text, {
+				"intent": intent_key,
+				"plot_id": int(chat_api_intent.get("plot_id", _pending_chat_intent.get("plot_id", -1))),
+				"actions": resolved_actions,
+			})
+		else:
+			reply_contract["reply"] = display_text
+			reply_contract["actions"] = resolved_actions
+		if not resolved_actions.is_empty():
+			var body := CompanionBodyAction.execute(resolved_actions[0])
+			_body_action_handled = bool(body.get("executed", false)) or str(body.get("reason", "")) == "already_approaching"
+		_append_companion_message(display_text, false, reply_contract)
+	else:
+		_append_companion_message(display_text)
 	_show_api_source_hint(request_id, used_fallback)
 
 	if event == "session_start" and bool(_pending_session_absence):
@@ -2447,24 +2616,9 @@ func _on_npc_reply_ready(
 
 	if event == "player_chat":
 		_apply_relationship_delta(request_id, event, _pending_chat_text, used_fallback)
-		_show_citation_feedback(request_id, used_fallback)
-		if farm_reply_grounded:
+		_show_citation_feedback(request_id, used_fallback, display_text)
+		if farm_reply_grounded and not _chat_action_handled:
 			_chat_action_handled = true
-		if not _chat_action_handled:
-			var chat_api_intent := NpcBridge.take_chat_intent(request_id)
-			if not chat_api_intent.is_empty():
-				_pending_chat_intent = IntentParser.resolve_misclassified_refuse(
-					IntentParser.merge_intents(
-						_pending_chat_intent,
-						chat_api_intent,
-						_pending_chat_text
-					)
-				)
-			_try_execute_chat_intent(false)
-			if not _chat_action_handled:
-				_try_execute_companion_followthrough(display_text, chat_api_intent)
-		else:
-			NpcBridge.take_chat_intent(request_id)
 		var player_line := _pending_chat_text
 		if (
 			not _chat_action_handled
@@ -2478,21 +2632,9 @@ func _on_npc_reply_ready(
 		return
 
 
-func _on_npc_request_failed(request_id: int, event: String, _error: String) -> void:
+func _on_npc_request_failed(_request_id: int, event: String, _error: String) -> void:
 	if event in ["player_chat", "session_start", "task_complete", "day_end"]:
-		_set_npc_busy(false)
-		if event == "player_chat" and _pending_chat_text.strip_edges() != "":
-			var fallback := NpcFallback.player_chat(
-				_pending_chat_text,
-				GameState.get_stage(),
-				MemoryService.get_context_for_event("player_chat", {"player_message": _pending_chat_text}),
-				{"player_message": _pending_chat_text, "story_mode": StoryDirector.get_story_mode()}
-			)
-			if fallback.strip_edges() != "":
-				_append_companion_message(fallback)
-			else:
-				_append_companion_message("……你刚才说的，我再想想。")
-			_pending_chat_text = ""
+		## 台词由 NpcBridge._emit_llm_failure 经 reply_ready 发一次，这里只放行忙锁。
 		return
 	if event == "morning_sidewrite":
 		_set_npc_busy(false)
@@ -2548,7 +2690,7 @@ func _on_npc_request_failed(request_id: int, event: String, _error: String) -> v
 		_pending_feed_refuse,
 		GameState.feed_pester_count
 	)
-	_handle_companion_feed_reply(request_id, fallback, true)
+	_handle_companion_feed_reply(_request_id, fallback, true)
 
 
 func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: bool) -> void:
@@ -2676,12 +2818,16 @@ func _apply_relationship_delta(
 		_debug_note("（本地判定 · 未接大模型）")
 
 
-func _show_citation_feedback(request_id: int, used_fallback: bool) -> void:
+func _show_citation_feedback(request_id: int, used_fallback: bool, reply_text: String = "") -> void:
 	if used_fallback or not NpcBridge.is_api_enabled():
 		NpcBridge.take_cited_memory_ids(request_id)
 		return
 	var cited_ids := NpcBridge.take_cited_memory_ids(request_id)
 	if cited_ids.is_empty():
+		cited_ids = MemoryService.infer_cited_ids_from_reply(reply_text)
+	if cited_ids.is_empty():
+		return
+	if MemoryService.reply_already_voices_citation(reply_text, cited_ids):
 		return
 	var line := MemoryService.build_citation_feedback(cited_ids)
 	if line == "":
@@ -2718,6 +2864,48 @@ func _try_answer_chore_progress_inquiry(text: String) -> bool:
 		return false
 	_append_companion_message(line)
 	return true
+
+
+func _try_answer_chore_nudge_complaint(text: String) -> bool:
+	## 「你刚刚不是要浇水吗」等追讨：优先按任务状态实话答，必要时补开浇水。
+	if not _looks_like_water_nudge_complaint(text):
+		return false
+	TaskSystem.reconcile_stale_task()
+	if TaskSystem.is_busy() and TaskSystem.current_task == TaskSystem.TaskType.WATER:
+		_append_companion_message("还在浇水呢，马上好。")
+		return true
+	if GameState.get_unwatered_growing_plot_ids().is_empty():
+		_append_companion_message(
+			PersonaGuard.reply_when_cannot_water() if _field_has_no_crops() else PersonaGuard.reply_when_already_watered()
+		)
+		return true
+	if not _ensure_companion_task_ready():
+		_append_companion_message("我还在忙上一件事，浇完这阵就去。")
+		return true
+	if TaskSystem.start_water_all_task():
+		_append_companion_message("对不起，刚才嘴上说了没动身。我这就去浇。")
+		return true
+	_append_companion_message("这会儿还走不开，稍等我一下。")
+	return true
+
+
+func _looks_like_water_nudge_complaint(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "" or not compact.contains("浇"):
+		return false
+	return (
+		"不是要" in compact
+		or "不是说要" in compact
+		or "不是说" in compact
+		or "刚刚" in compact
+		or "刚才" in compact
+		or "怎么还" in compact
+		or "怎么没" in compact
+		or "还没去" in compact
+		or "一直没" in compact
+		or "说好了" in compact
+		or "说去" in compact
+	)
 
 
 func _try_answer_chore_completion_statement(text: String) -> bool:
@@ -2757,24 +2945,12 @@ func _maybe_sync_companion_move_from_line(text: String) -> void:
 		return
 	if TaskSystem.is_busy() or CompanionAgent.is_proactive_active():
 		return
-	if _line_commits_to_porch(text):
-		CompanionAgent.go_to_poi("porch", "在廊下")
-
-
-func _line_commits_to_porch(text: String) -> bool:
-	var compact := text.strip_edges().replace(" ", "").replace("　", "")
-	if compact == "" or "廊下" not in compact:
-		return false
-	if compact.contains("要不要") and compact.contains("廊下"):
-		return false
-	for phrase in [
-		"走到廊下", "去廊下", "到廊下", "往廊下", "回廊下",
-		"占了廊下", "占廊下", "廊下坐", "廊下躲", "廊下歇",
-		"在廊下坐", "在廊下等", "咱们廊下", "我们廊下",
-	]:
-		if phrase in compact:
-			return true
-	return false
+	var actions := CompanionBodyAction.infer_from_companion_line(text)
+	if actions.is_empty():
+		return
+	var body := CompanionBodyAction.execute(actions[0])
+	if bool(body.get("executed", false)):
+		_body_action_handled = true
 
 
 func _blocks_farm_chores(show_hint: bool = false) -> bool:
@@ -2816,6 +2992,20 @@ func _try_execute_chat_intent(from_local_first: bool = false) -> void:
 		return
 
 	if not IntentParser.is_action_intent(intent):
+		var plan: Variant = intent.get("plan", [])
+		if plan is Array and not plan.is_empty():
+			var batch := ChoreOrchestrator.enqueue_and_start(
+				ChorePreprocessor.normalize_plan_steps(plan, str(intent.get("raw_text", _pending_chat_text))),
+				str(intent.get("raw_text", _pending_chat_text))
+			)
+			if bool(batch.get("executed", false)) or bool(batch.get("queued", false)):
+				_chat_action_handled = true
+				_skip_player_chat_reply = true
+				_pending_chat_intent = {}
+				var batch_reply := str(batch.get("reply", "")).strip_edges()
+				if batch_reply != "":
+					_append_companion_message(batch_reply)
+				return
 		return
 
 	var result := ActionExecutor.execute(intent)
@@ -3442,20 +3632,11 @@ func _start_companion_seed_buy_from_commitment(source_text: String) -> void:
 
 
 func _arm_pending_offers_from_companion_line(text: String) -> void:
-	## 新邀约覆盖旧邀约，避免玩家回「好」时点到上一句的活。
-	var has_shop := ShopDelegate.looks_like_shop_offer(text)
-	var has_plant := (not has_shop) and ShopDelegate.looks_like_plant_offer(text)
-	var has_water := ShopDelegate.looks_like_water_offer(text)
-	var has_harvest := (
-		not has_shop and not has_plant and not has_water
-		and ShopDelegate.looks_like_harvest_offer(text)
-	)
-	if not (has_shop or has_plant or has_water or has_harvest):
-		return
-	_pending_shop_offer = has_shop
-	_pending_plant_offer = has_plant
-	_pending_water_offer = has_water
-	_pending_harvest_offer = has_harvest
+	ChoreOrchestrator.arm_companion_line(text)
+	_pending_shop_offer = PendingOfferStore.get_type() == PendingOfferStore.OfferType.SHOP
+	_pending_plant_offer = PendingOfferStore.get_type() == PendingOfferStore.OfferType.PLANT
+	_pending_water_offer = PendingOfferStore.get_type() == PendingOfferStore.OfferType.WATER
+	_pending_harvest_offer = PendingOfferStore.get_type() == PendingOfferStore.OfferType.HARVEST
 
 
 func _maybe_arm_pending_from_last_companion_line() -> void:
@@ -3536,9 +3717,30 @@ func _set_companion_thinking(active: bool) -> void:
 	for node in get_tree().get_nodes_in_group("companion_interact"):
 		if node.has_method("show_status_bubble") and node.has_method("hide_status_bubble"):
 			if active:
+				if TaskSystem.is_busy():
+					continue
 				node.show_status_bubble("…")
 			else:
+				if TaskSystem.is_busy():
+					var task_label := _companion_task_bubble_label()
+					if task_label != "":
+						node.show_status_bubble(task_label)
+					continue
 				node.hide_status_bubble()
+
+
+func _companion_task_bubble_label() -> String:
+	match TaskSystem.current_task:
+		TaskSystem.TaskType.WATER:
+			return "小狸正在浇水…"
+		TaskSystem.TaskType.HARVEST:
+			return "小狸正在收萝卜…"
+		TaskSystem.TaskType.PLANT:
+			return "小狸正在种萝卜…"
+		TaskSystem.TaskType.SHOP:
+			return "小狸正在去商店…"
+		_:
+			return ""
 
 
 func _escape_bbcode(text: String) -> String:
@@ -3566,25 +3768,31 @@ func _append_player_message(text: String) -> void:
 	_render_chat_log()
 
 
-func _append_companion_message(text: String, ephemeral: bool = false) -> void:
+func _append_companion_message(text: String, ephemeral: bool = false, reply_contract: Dictionary = {}) -> void:
 	var raw := text.strip_edges()
-	_maybe_sync_companion_move_from_line(raw)
+	if not _body_action_handled:
+		_maybe_sync_companion_move_from_line(raw)
 	var cleaned := ResponseValidator.strip_stage_directions(raw)
 	if cleaned != "" and ResponseValidator.looks_repetitive_companion_line(cleaned):
-		var previous := _recent_companion_line_texts(8)
-		cleaned = NpcFallback.pick_non_duplicate([
-			"嗯，我在。",
-			"……听着呢。",
-			"有事你说。",
-			"好，我在这儿。",
-		], previous)
+		if not SayDoValidator.should_skip_repetitive_fallback(_pending_chat_text):
+			var previous := _recent_companion_line_texts(8)
+			cleaned = NpcFallback.pick_non_duplicate([
+				"嗯，我在。",
+				"……听着呢。",
+				"有事你说。",
+				"好，我在这儿。",
+			], previous)
 		if cleaned.strip_edges() == "":
 			return
 	_transient_companion_aside = ""
 	if cleaned != "":
-		GameState.record_chat_turn("companion", cleaned, ephemeral)
+		var contract := reply_contract.duplicate(true) if not reply_contract.is_empty() else {}
+		if not contract.is_empty():
+			contract["reply"] = cleaned
+		GameState.record_chat_turn("companion", cleaned, ephemeral, contract)
 		_arm_pending_offers_from_companion_line(cleaned)
 	_render_chat_log()
+	_body_action_handled = false
 
 
 func _finish_typewriter_if_needed(_reveal_all: bool = false) -> void:

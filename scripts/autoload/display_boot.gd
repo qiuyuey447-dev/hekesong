@@ -11,7 +11,22 @@ func _ready() -> void:
 		if not tree.root.size_changed.is_connected(_apply_display_profile):
 			tree.root.size_changed.connect(_apply_display_profile)
 	if OS.has_feature("web"):
+		_apply_web_gpu_budget()
 		set_process_input(true)
+
+
+func _apply_web_gpu_budget() -> void:
+	var win := get_tree().root as Window
+	if win == null:
+		return
+	win.msaa_2d = Viewport.MSAA_DISABLED
+	win.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+	win.use_taa = false
+	win.use_debanding = false
+	win.use_hdr_2d = false
+	win.oversampling = false
+	win.oversampling_override = 1.0
+	win.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
 
 
 func _notification(what: int) -> void:

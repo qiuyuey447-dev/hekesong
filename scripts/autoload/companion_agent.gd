@@ -342,6 +342,7 @@ func _deferred_begin_seed_purchase() -> void:
 func _prepare_for_job() -> bool:
 	if not _ready:
 		return false
+	end_proactive_approach()
 	if not _current_job.is_empty() or TaskSystem.is_busy():
 		return false
 	if _activity == Activity.WORKING:

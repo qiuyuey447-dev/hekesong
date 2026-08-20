@@ -19,6 +19,7 @@ var _pending: Dictionary = {}
 var _chat_intents: Dictionary = {}
 var _relationship_deltas: Dictionary = {}
 var _cited_memory_ids: Dictionary = {}
+var _reply_contracts: Dictionary = {}
 var _response_meta: Dictionary = {}
 var _api_queue: Array[Dictionary] = []
 var _in_flight_request_id: int = -1
@@ -71,6 +72,14 @@ func take_cited_memory_ids(request_id: int) -> Array[String]:
 		if mem_id != "":
 			result.append(mem_id)
 	return result
+
+
+func take_reply_contract(request_id: int) -> Dictionary:
+	if not _reply_contracts.has(request_id):
+		return {}
+	var contract: Dictionary = _reply_contracts[request_id]
+	_reply_contracts.erase(request_id)
+	return contract.duplicate(true)
 
 
 func take_response_meta(request_id: int) -> Dictionary:
@@ -140,11 +149,12 @@ func _pump_api_queue() -> void:
 	if err != OK:
 		_api_queue.remove_at(0)
 		var event_name := str(pending_entry.get("event", ""))
+		var start_extra: Dictionary = pending_entry.get("extra", {})
 		if is_api_enabled():
-			_emit_llm_failure(request_id, event_name, "HTTP 请求启动失败: %d" % err)
+			_emit_llm_failure(request_id, event_name, "HTTP 请求启动失败: %d" % err, start_extra)
 		else:
 			_pending.erase(request_id)
-			var fallback_text := _fallback_for_event(event_name, pending_entry.get("extra", {}))
+			var fallback_text := _fallback_for_event(event_name, start_extra)
 			reply_ready.emit(request_id, event_name, fallback_text, true)
 		call_deferred("_pump_api_queue")
 		return
@@ -193,6 +203,7 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"include_yesterday_echo": bool(extra.get("include_yesterday_echo", false)),
 		"absence_facts": extra.get("absence_facts", GameState.get_pending_absence_facts()),
 		"include_absence_comeback": bool(extra.get("include_absence_comeback", false)),
+		"player_quiet": extra.get("player_quiet", RelationshipDirector.get_player_quiet_context()),
 		"market": GameState.get_market_snapshot(),
 		"weather_today": GameState.weather_today,
 		"weather_label": GameState.get_weather_label(),
@@ -207,6 +218,7 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"recent_chat_turns": extra.get("recent_chat_turns", GameState.get_recent_chat_turns(8)),
 		"chat_timing": GameState.get_chat_timing_context_for_llm(),
 		"world_snapshot": extra.get("world_snapshot", WorldSnapshot.capture(extra)),
+		"chore_facts": ChoreOrchestrator.get_chore_facts(),
 		"companion_profile": WorldSnapshot.get_companion_profile(),
 		"story_hint": _resolve_story_hint(event, extra),
 		"story_context": StoryDirector.get_story_context_for_llm(),
@@ -274,6 +286,7 @@ func _player_chat_intent_instruction() -> String:
 		+ "JSON：reply(字符串)、intent(枚举)、plot_id(整数，默认-1)、confidence(0~1)、"
 		+ "affection_delta(整数 -2~3)、bond_delta(整数 0~2)、memory_recovery_delta(0~0.03)、"
 		+ "cited_memory_ids(字符串数组，可选；仅可引用系统提供的 #id，无引用则 [])、"
+		+ "actions(数组，每轮最多1条：follow_player / walk_poi / open_notebook；农事仍用 intent)、"
 		+ "relationship_reason(字符串)。"
 		+ "玩家委托做事时返回对应 action intent：浇水 water/water_all，种萝卜 plant/plant_all，收萝卜 harvest/harvest_all，"
 		+ "去商店 open_shop，出售萝卜 open_market 等。"
@@ -281,12 +294,20 @@ func _player_chat_intent_instruction() -> String:
 		+ "world_snapshot 含 shop/inventory/plot_details 与 time_context（局内第几天、白天/傍晚/夜晚），请据此回答；不要编造购买、种植、浇水、收获等未在 game_facts 中发生的事。"
 		+ "回复须符合 time_context.day_period_label 所示局内时段，勿把夜晚说成清晨，勿把傍晚说成深夜。"
 		+ "代买种子时游戏会另问数量并自动执行，reply 不要声称已购买、已花费金币、已种好或已浇完。"
-		+ "若口头答应去浇/种/收/买种子/出售/睡觉，请同时返回对应 action intent，便于游戏执行。"
+		+ "若口头答应去浇/种/收/买种子/出售/睡觉，请同时返回对应 action intent 或 plan 数组，便于游戏执行。"
+		+ "多步委托（收然后卖再买）必须 plan:[\"harvest_all\",\"sell_turnips\",\"shop_buy_seeds\"] 且 intent=chat。"
+		+ "「剩下的钱全买/尽量多买种子」时 open_shop 或 plan 中 shop_buy_seeds 须 max_gold:true。"
+		+ "「所有萝卜全卖/都卖掉」须 open_market 或 plan 含 sell_turnips。"
+		+ "卖萝卜必须 open_market/plan 含 sell_turnips，禁止误判为 harvest。"
+		+ "禁止在 reply 中陈述 chore_facts 里没有的：卖了多少、金币数、种子位置。"
 		+ "玩家说睡觉/晚安/休息/下一天：必须 intent=sleep，先答应休息，禁止转去报田况或推销浇水。"
 		+ "玩家问田况/熟了没/能不能收：必须 intent=check_status，禁止误判为 sleep。"
 		+ "讨论浇田或商店、尚未明确委托时用 chat；明确让你去浇/种/收/买才用 action。"
 		+ "禁止在 reply 中提及「点击」「点农田」「派活」等 UI 操作；用「要不要我帮你浇/种/收」自然询问。"
 		+ "主动说话必须符合你现在的位置和正在做的事，禁止报行情。"
+		+ "玩家说来/过来/跟我走：intent=chat 且 actions=[{\"id\":\"follow_player\"}]。"
+		+ "玩家说去廊下/树洞/田边/门口：intent=chat 且 actions=[{\"id\":\"walk_poi\",\"poi\":\"porch|hollow|field|home\"}]。"
+		+ "浇种收买睡不要再叠走路 actions。"
 	)
 
 
@@ -358,14 +379,16 @@ func _emit_local_fallback(request_id: int, event: String, text: String) -> void:
 	reply_ready.emit(request_id, event, text, true)
 
 
-func _emit_llm_failure(request_id: int, event: String, error: String) -> void:
+func _emit_llm_failure(request_id: int, event: String, error: String, extra: Dictionary = {}) -> void:
 	_pending.erase(request_id)
 	request_failed.emit(request_id, event, error)
 	if event in SILENT_FAILURE_EVENTS:
 		return
-	var reply := LLM_FAILURE_REPLY if event in ["player_chat", "session_start", "task_complete", "day_end"] else ""
+	var reply := _fallback_for_event(event, extra).strip_edges()
+	if reply == "" and event in ["player_chat", "session_start", "task_complete", "day_end"]:
+		reply = LLM_FAILURE_REPLY
 	if reply != "":
-		reply_ready.emit(request_id, event, reply, false)
+		reply_ready.emit(request_id, event, reply, true)
 
 
 func _emit_fallback(request_id: int, event: String, text: String) -> void:
@@ -505,7 +528,7 @@ func _on_http_completed(
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
 		var err_msg := "API 响应异常 (code=%d, result=%d)" % [response_code, result]
-		_emit_llm_failure(request_id, event, err_msg)
+		_emit_llm_failure(request_id, event, err_msg, extra)
 		call_deferred("_pump_api_queue")
 		return
 
@@ -526,7 +549,7 @@ func _on_http_completed(
 	if event == "day_journal_summarize":
 		var journal_payload := _extract_journal_summary_payload(parsed)
 		if journal_payload == "":
-			_emit_llm_failure(request_id, event, "日末摘要 JSON 无效")
+			_emit_llm_failure(request_id, event, "日末摘要 JSON 无效", extra)
 			call_deferred("_pump_api_queue")
 			return
 		reply_ready.emit(request_id, event, journal_payload, false)
@@ -557,7 +580,7 @@ func _on_http_completed(
 	var used_metadata_fallback := _is_internal_metadata_text(pre_sanitize)
 
 	if reply_text == "":
-		_emit_llm_failure(request_id, event, "API 返回空回复")
+		_emit_llm_failure(request_id, event, "API 返回空回复", extra)
 		call_deferred("_pump_api_queue")
 		return
 
@@ -586,7 +609,7 @@ func _on_http_completed(
 				reply_ready.emit(request_id, event, stranger_fallback, true)
 				call_deferred("_pump_api_queue")
 				return
-		_emit_llm_failure(request_id, event, "响应被校验层拦截: %s" % reason)
+		_emit_llm_failure(request_id, event, "响应被校验层拦截: %s" % reason, extra)
 		call_deferred("_pump_api_queue")
 		return
 
@@ -595,6 +618,9 @@ func _on_http_completed(
 		var allowed: Array = citation.get("allowed_ids", [])
 		if not allowed.is_empty():
 			_cited_memory_ids[request_id] = allowed.duplicate()
+
+	if event == "player_chat":
+		_store_reply_contract(request_id, parsed, str(validation.get("text", reply_text)), cited_ids)
 
 	reply_ready.emit(request_id, event, str(validation.get("text", reply_text)), used_metadata_fallback)
 	call_deferred("_pump_api_queue")
@@ -762,6 +788,30 @@ func _extract_cited_memory_ids(parsed: Variant) -> Array:
 			if mem_id != "":
 				ids.append(mem_id)
 	return ids
+
+
+func _unwrap_response_dict(parsed: Variant) -> Dictionary:
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return {}
+	var source: Dictionary = parsed
+	if source.has("data") and source["data"] is Dictionary:
+		source = source["data"]
+	return source
+
+
+func _store_reply_contract(request_id: int, parsed: Variant, reply_text: String, cited_ids: Array) -> void:
+	var source := _unwrap_response_dict(parsed)
+	var intent_key := str(source.get("intent", "chat"))
+	var actions := CompanionBodyAction.sanitize_actions(
+		source.get("actions", source.get("action", [])),
+		intent_key
+	)
+	_reply_contracts[request_id] = GameState.make_reply_contract(reply_text, {
+		"intent": intent_key,
+		"plot_id": int(source.get("plot_id", -1)),
+		"actions": actions,
+		"cited_memory_ids": cited_ids,
+	})
 
 
 func _load_persona() -> void:

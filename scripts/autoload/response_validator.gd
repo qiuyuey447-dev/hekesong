@@ -6,6 +6,10 @@ const STORY_MODE_EVENTS := [
 	"session_start",
 	"task_complete",
 	"story_beat",
+	"companion_proactive",
+	"companion_casual",
+	"companion_react",
+	"morning_sidewrite",
 ]
 
 const CHAT_LIKE_EVENTS := [
@@ -65,8 +69,14 @@ const SUNNY_RAIN_PHRASES := [
 
 const LITERARY_PHRASES := [
 	"雨帘",
-	"隔着雾",
 	"心里发紧",
+	"行情",
+	"大盘",
+	"售价",
+]
+
+const STRANGER_ALLOWED_FOG_PHRASES := [
+	"隔着雾",
 	"模模糊糊",
 	"毛玻璃",
 	"像隔着",
@@ -76,9 +86,6 @@ const LITERARY_PHRASES := [
 	"薄雾",
 	"脑子里的雾",
 	"雾里的灯",
-	"行情",
-	"大盘",
-	"售价",
 ]
 
 var debug_disable_fact_lock := false
@@ -110,7 +117,7 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 	if event != "companion_feed" and _mentions_forbidden_crop(cleaned):
 		return {"ok": false, "reason": "wrong_crop"}
 
-	if event in CHAT_LIKE_EVENTS and _is_literary_reply(cleaned):
+	if event in CHAT_LIKE_EVENTS and _is_literary_reply(cleaned, payload):
 		return {"ok": false, "reason": "literary"}
 
 	if event in CHAT_LIKE_EVENTS and _is_awkward_waiting_reply(cleaned):
@@ -300,7 +307,8 @@ func _validate_story_mode_reply(text: String, payload: Dictionary) -> Dictionary
 	var player_name := str(payload.get("player_name", "")).strip_edges()
 
 	if story_mode == "stranger":
-		if player_name != "" and player_name in text:
+		var stored_name := _stored_player_name(payload)
+		if stored_name != "" and stored_name in text:
 			return {"ok": false, "reason": "stranger_name"}
 		for phrase in RelationshipDirector.get_stranger_ooc_phrases():
 			if phrase in text:
@@ -313,6 +321,17 @@ func _validate_story_mode_reply(text: String, payload: Dictionary) -> Dictionary
 		return {"ok": false, "reason": "name_locked"}
 
 	return {"ok": true, "text": ""}
+
+
+func _stored_player_name(payload: Dictionary) -> String:
+	var name := str(payload.get("player_name", "")).strip_edges()
+	if name != "" and name != "你":
+		return name
+	var ctx: Dictionary = payload.get("player_name_context", {})
+	var stored := str(ctx.get("stored_name", "")).strip_edges()
+	if stored != "":
+		return stored
+	return GameState.player_name.strip_edges()
 
 
 func _mentions_forbidden_crop(text: String) -> bool:
@@ -384,8 +403,17 @@ func _violates_chat_timing(text: String, payload: Dictionary) -> bool:
 	return false
 
 
-func _is_literary_reply(text: String) -> bool:
+func _is_literary_reply(text: String, payload: Dictionary = {}) -> bool:
 	for phrase in LITERARY_PHRASES:
+		if phrase in text:
+			return true
+	var story_mode := str(payload.get("story_mode", ""))
+	if story_mode == "":
+		var memory_context: Dictionary = payload.get("memory_context", {})
+		story_mode = str(memory_context.get("story_mode", ""))
+	if story_mode == "stranger":
+		return false
+	for phrase in STRANGER_ALLOWED_FOG_PHRASES:
 		if phrase in text:
 			return true
 	return false
@@ -449,9 +477,12 @@ func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:
 	var companion: Dictionary = snap.get("companion", {}) if snap is Dictionary else {}
 	var loc := str(companion.get("location_name", "")).strip_edges()
 	var activity := str(companion.get("activity", "")).strip_edges()
+	var player_msg := str(payload.get("player_message", "")).strip_edges()
 	var places := ["商店", "萝卜田", "廊下", "旧屋门口", "树洞", "田埂", "空土垄", "河边", "小径"]
 	for place in places:
 		if loc != "" and place == loc:
+			continue
+		if player_msg != "" and place in player_msg:
 			continue
 		if loc == "旧屋门口" and place == "小径":
 			continue

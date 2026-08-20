@@ -12,6 +12,9 @@ var _highlight: InteractHighlight
 var _was_near := false
 var _manual_focus := false
 var _shape := InteractHighlight.Shape.RECT
+var _player: Node2D
+var _near_check_age := 0.0
+const NEAR_CHECK_SEC := 0.08
 
 
 static func attach(
@@ -58,9 +61,13 @@ func _bind(area: Area2D) -> void:
 	set_process(not _manual_focus)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _manual_focus:
 		return
+	_near_check_age += delta
+	if _near_check_age < NEAR_CHECK_SEC:
+		return
+	_near_check_age = 0.0
 	var near := _is_player_near()
 	if near:
 		_highlight.show_highlight(InteractHighlight.Style.READY)
@@ -70,10 +77,11 @@ func _process(_delta: float) -> void:
 
 
 func _is_player_near() -> bool:
-	var player := get_tree().get_first_node_in_group("player") as Node2D
-	if player == null:
+	if _player == null or not is_instance_valid(_player):
+		_player = get_tree().get_first_node_in_group("player") as Node2D
+	if _player == null:
 		return false
 	var center := _area.global_position
 	if _area.has_method("get_interact_center"):
 		center = _area.call("get_interact_center")
-	return player.global_position.distance_to(center) <= player_near_distance
+	return _player.global_position.distance_to(center) <= player_near_distance

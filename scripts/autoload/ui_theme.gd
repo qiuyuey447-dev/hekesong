@@ -167,7 +167,7 @@ func _looks_like_real_font_file(path: String) -> bool:
 func _tune_dynamic_font(f: FontFile) -> void:
 	f.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	f.hinting = TextServer.HINTING_LIGHT
-	f.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+	f.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED if OS.has_feature("web") else TextServer.SUBPIXEL_POSITIONING_AUTO
 	f.oversampling = 0.0
 	f.generate_mipmaps = not OS.has_feature("web")
 	# Web 无系统字体；桌面 CJK 靠打包字体，不依赖系统回退。

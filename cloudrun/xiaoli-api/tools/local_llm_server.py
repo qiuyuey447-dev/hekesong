@@ -72,6 +72,29 @@ ALLOWED_INTENTS = {
     "refuse",
 }
 
+ALLOWED_BODY_ACTIONS = frozenset({"follow_player", "walk_poi", "open_notebook", "stay"})
+ALLOWED_POIS = frozenset({"porch", "field", "hollow", "shop", "home", "river"})
+POI_ALIASES = {"plots": "field", "door": "home", "yard": "home", "house": "home"}
+FARM_BODY_BLOCK_INTENTS = frozenset({
+    "water",
+    "water_all",
+    "plant",
+    "plant_all",
+    "harvest",
+    "harvest_all",
+    "open_shop",
+    "open_market",
+    "sleep",
+    "open_memory",
+})
+FOLLOW_PHRASES = (
+    "过来", "到这边", "到我这", "到我这儿", "到这儿来", "到这里来",
+    "来我这", "来我这儿", "跟我来", "跟着我", "你过来", "来这边",
+)
+NOTEBOOK_PHRASES = (
+    "翻本子", "打开本子", "看看本子", "看一下本子", "把本子给我", "给我看本子", "看本子",
+)
+
 # 必须返回 affection_delta 的事件（见 docs/api/npc_chat_api.md v2.0）
 RELATIONSHIP_EVENTS = frozenset({"player_chat", "story_beat"})
 
@@ -575,6 +598,116 @@ def guess_intent(message: str) -> tuple[str, float]:
     return "chat", 0.7
 
 
+def looks_like_max_gold_seed_buy(message: str) -> bool:
+    compact = str(message or "").replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    markers = (
+        "剩下的钱", "全部用来买", "全买", "钱都用来", "尽量多买",
+        "有多少买多少", "能买多少买多少", "钱全用来", "金币全买", "钱都买",
+    )
+    if any(marker in compact for marker in markers):
+        return True
+    if "买" in compact and any(token in compact for token in ("全", "都", "所有", "统统", "全部", "尽量")):
+        return "种子" in compact or "全买" in compact
+    return False
+
+
+def looks_like_sell_completion_statement(message: str) -> bool:
+    compact = str(message or "").replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    for phrase in ("卖完了", "都卖完", "已经卖了", "刚卖完", "卖光了", "都卖光了"):
+        if phrase in compact:
+            return True
+    if compact.endswith("全卖了") or compact.endswith("都卖了"):
+        delegate_cues = ("帮", "请", "麻烦", "你去", "帮我", "替", "给我")
+        return not any(cue in compact for cue in delegate_cues)
+    return False
+
+
+def looks_like_sell_all_command(message: str) -> bool:
+    compact = str(message or "").replace(" ", "").replace("　", "")
+    if not compact or "卖" not in compact:
+        return False
+    if looks_like_sell_completion_statement(message):
+        return False
+    if any(token in compact for token in ("全卖", "都卖", "全部卖", "统统卖", "卖光")):
+        return True
+    if any(token in compact for token in ("全", "都", "所有", "统统", "全部")) and "卖" in compact:
+        return True
+    return "萝卜" in compact or "筐" in compact
+
+
+def _segment_to_plan_step(segment: str) -> dict[str, Any]:
+    seg = str(segment or "").strip()
+    compact = seg.replace(" ", "").replace("　", "")
+    if not seg:
+        return {}
+    max_gold = looks_like_max_gold_seed_buy(seg)
+    intent, _ = guess_intent(seg)
+    mapping = {
+        "water": "water_all",
+        "water_all": "water_all",
+        "harvest": "harvest_all",
+        "harvest_all": "harvest_all",
+        "plant": "plant_all",
+        "plant_all": "plant_all",
+        "open_market": "sell_turnips",
+        "open_shop": "shop_buy_seeds",
+    }
+    step = mapping.get(intent, "")
+    if not step and looks_like_sell_all_command(seg):
+        step = "sell_turnips"
+    if not step and "买" in compact and "种子" in compact:
+        step = "shop_buy_seeds"
+    if not step and ("收" in compact or "摘" in compact):
+        step = "harvest_all"
+    if not step and "浇" in compact:
+        step = "water_all"
+    if not step and "种" in compact and "种子" not in compact:
+        step = "plant_all"
+    if not step:
+        return {}
+    payload: dict[str, Any] = {"step": step, "raw_text": seg}
+    if step == "shop_buy_seeds" and max_gold:
+        payload["max_gold"] = True
+    return payload
+
+
+def guess_plan_step_objects(message: str) -> list[dict[str, Any]]:
+    if not str(message or "").strip():
+        return []
+    markers = ["然后", "再", "顺便", "接着", "之后", "并且"]
+    parts = [message.strip()]
+    for marker in markers:
+        next_parts: list[str] = []
+        for part in parts:
+            if marker in part:
+                next_parts.extend([p.strip() for p in part.split(marker) if p.strip()])
+            else:
+                next_parts.append(part)
+        if len(next_parts) > 1:
+            parts = next_parts
+    steps: list[dict[str, Any]] = []
+    for seg in parts:
+        payload = _segment_to_plan_step(seg)
+        if not payload:
+            continue
+        if steps and steps[-1].get("step") == payload.get("step"):
+            continue
+        steps.append(payload)
+    if len(parts) <= 1 and not steps:
+        payload = _segment_to_plan_step(parts[0])
+        if payload:
+            return [payload]
+    return steps
+
+
+def guess_plan_steps(message: str) -> list[str]:
+    return [str(item.get("step", "")) for item in guess_plan_step_objects(message) if str(item.get("step", ""))]
+
+
 def is_off_topic_feed_reply(text: str, item_name: str, refused: bool) -> bool:
     cleaned = (text or "").strip()
     if len(cleaned) < 4:
@@ -637,7 +770,16 @@ def is_off_topic_feed_reply(text: str, item_name: str, refused: bool) -> bool:
     return True
 
 
-STORY_MODE_EVENTS = frozenset({"player_chat", "session_start", "task_complete", "story_beat"})
+STORY_MODE_EVENTS = frozenset({
+    "player_chat",
+    "session_start",
+    "task_complete",
+    "story_beat",
+    "companion_proactive",
+    "companion_casual",
+    "companion_react",
+    "morning_sidewrite",
+})
 
 ## 须携带 beat_context 的剧情搭话 event（与 StoryBeatDirector.STORY_LLM_SPEECH_EVENTS 一致 · 策划 §4.5.5）
 STORY_LLM_SPEECH_EVENTS = frozenset({
@@ -819,13 +961,28 @@ def mock_companion_react_reply(payload: dict[str, Any]) -> str:
     return "田我看过了。风挺轻的。"
 
 
+def _stored_player_name(payload: dict[str, Any]) -> str:
+    name = str(payload.get("player_name", "") or "").strip()
+    if name and name not in ("你", "玩家"):
+        return name
+    ctx = payload.get("player_name_context") or {}
+    if isinstance(ctx, dict):
+        stored = str(ctx.get("stored_name", "") or "").strip()
+        if stored:
+            return stored
+        stored = str(ctx.get("display_fallback", "") or "").strip()
+        if stored and stored not in ("你", "玩家"):
+            return stored
+    return ""
+
+
 def is_stranger_ooc_reply(text: str, payload: dict[str, Any]) -> bool:
     if _story_mode(payload) != "stranger":
         return False
     cleaned = (text or "").strip()
     if len(cleaned) < 2:
         return True
-    player_name = str(payload.get("player_name", "")).strip()
+    player_name = _stored_player_name(payload)
     if player_name and player_name in cleaned:
         return True
     rules = load_relationship_rules()
@@ -834,6 +991,21 @@ def is_stranger_ooc_reply(text: str, payload: dict[str, Any]) -> bool:
             p = str(phrase).strip()
             if p and p in cleaned:
                 return True
+    return False
+
+
+def _looks_like_journal_digest(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    if cleaned.startswith("你们聊了"):
+        return True
+    if "句，最后提到" in cleaned or "句，小狸" in cleaned:
+        return True
+    if cleaned.startswith("刚才那一下，像真做过"):
+        return True
+    if cleaned.startswith("第") and "天，" in cleaned:
+        return True
     return False
 
 
@@ -870,7 +1042,11 @@ def _mock_stranger_reply(payload: dict[str, Any]) -> dict[str, Any]:
     elif "你好" in player_message or player_message.lower() in ("hi", "hello"):
         reply = "……你好。抱歉，我一时想不起是否见过你。"
     elif "我是谁" in player_message or "你是谁" in player_message or "认识我" in player_message or "记得我" in player_message:
-        reply = "……你问我认不认识你？老实说，我脑子里只有一些很模糊的画面。"
+        reply = "……你问我认不认识你？老实说，我想不起来。你说我们见过？"
+    elif "零食" in player_message or "喜欢吃" in player_message or (
+        "喜欢" in player_message and "商店" in player_message
+    ):
+        reply = "……商店里甜的、咸的我都见过。我这会儿想不起自己爱吃哪个。"
     else:
         reply = random.choice(STRANGER_CHAT_FALLBACKS)
     base = {
@@ -912,11 +1088,13 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
     player_name = str(payload.get("player_name", "")).strip()
     you = player_name if player_name and story_mode != "stranger" else "你"
 
+    if _looks_like_journal_digest(leak_summary):
+        leak_summary = ""
     if intent == "leak" and leak_summary and story_mode != "stranger":
         return random.choice([
             f"不知道为什么，{leak_summary} 这个画面突然冒了出来。",
             f"手比脑子先动了一下。……{leak_summary}。",
-            f"刚才那一瞬，像是真的发生过：{leak_summary}。",
+            f"……{leak_summary}。想不起来是哪一回。",
         ])
     if intent == "invite":
         if story_mode == "stranger":
@@ -999,7 +1177,7 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
     return random.choice(lines)
 
 
-def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
+def _mock_reply_raw(payload: dict[str, Any]) -> dict[str, Any]:
     import random
 
     event = str(payload.get("event", "player_chat"))
@@ -1087,8 +1265,43 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if event == "intent_classify":
+        plan_objs = guess_plan_step_objects(player_message)
+        if len(plan_objs) >= 2:
+            return {
+                "reply": "",
+                "intent": "chat",
+                "plot_id": -1,
+                "confidence": 0.9,
+                "steps": [str(item.get("step", "")) for item in plan_objs],
+                "plan": plan_objs,
+            }
+        if len(plan_objs) == 1:
+            only = plan_objs[0]
+            step = str(only.get("step", ""))
+            intent_map = {
+                "harvest_all": "harvest_all",
+                "sell_turnips": "open_market",
+                "shop_buy_seeds": "open_shop",
+                "plant_all": "plant_all",
+                "water_all": "water_all",
+            }
+            mapped = intent_map.get(step, "chat")
+            payload: dict[str, Any] = {
+                "reply": "",
+                "intent": mapped,
+                "plot_id": -1,
+                "confidence": 0.9,
+                "steps": [],
+                "plan": plan_objs,
+            }
+            if bool(only.get("max_gold", False)):
+                payload["max_gold"] = True
+            return payload
         intent, conf = guess_intent(player_message)
-        return {"reply": "", "intent": intent, "plot_id": -1, "confidence": conf}
+        payload = {"reply": "", "intent": intent, "plot_id": -1, "confidence": conf, "steps": []}
+        if intent == "open_shop" and looks_like_max_gold_seed_buy(player_message):
+            payload["max_gold"] = True
+        return payload
 
     if event == "story_beat":
         beat = payload.get("story_beat") or {}
@@ -1173,6 +1386,13 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
     return ensure_relationship_fields(base, payload)
 
 
+def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
+    result = _mock_reply_raw(payload)
+    if str(payload.get("event", "player_chat")) == "player_chat" and isinstance(result, dict):
+        return attach_body_actions(result, payload)
+    return result
+
+
 FARM_TOPIC_KEYWORDS = (
     "田", "浇", "萝卜", "种子", "收", "卖", "买", "集市", "行情", "价格", "金币", "商店", "种",
 )
@@ -1241,6 +1461,10 @@ def _companion_action_rules(payload: dict[str, Any]) -> str:
         "禁止在 reply 中声称已帮玩家购买/花费金币/种下种子/浇完/收完，除非 game_facts 明确记录该交易。",
         "口头答应去浇/种/收/买种子/出售/睡觉时，必须同时返回对应 action intent，不要只嘴上答应。",
         "玩家说「帮我收萝卜/帮我去商店/帮我把田浇了」等应返回对应 action intent，并配合自然 reply。",
+        "玩家说来/过来/跟我走：intent 仍为 chat，并返回 actions=[{\"id\":\"follow_player\"}]。",
+        "玩家说去廊下/树洞/田边/门口：intent 仍为 chat，并返回 actions=[{\"id\":\"walk_poi\",\"poi\":\"porch|hollow|field|home\"}]。",
+        "玩家要看本子：intent=open_memory，或 actions=[{\"id\":\"open_notebook\"}]。",
+        "每轮最多 1 条 actions；浇种收买睡不要再叠走路 actions。不要输出 stay。",
         "主动说话必须符合 companion 的 location_name 与 activity。人在廊下就不要说站在小径听雨。禁止主动报售价、行情、手头几包种子。",
     ]
     if isinstance(profile, dict):
@@ -1377,6 +1601,30 @@ def _prompt_player_name_rules(payload: dict[str, Any]) -> str:
             "- 叫名时语气克制，符合当前关系阶段。"
         )
     return "[称呼规则]\n可用「你」称呼玩家。"
+
+
+def _prompt_player_quiet(payload: dict[str, Any]) -> str:
+    quiet = payload.get("player_quiet") or {}
+    if not isinstance(quiet, dict) or not quiet.get("should_nudge"):
+        return ""
+    days = int(quiet.get("quiet_days") or 0)
+    mem = payload.get("memory_context") or {}
+    story_mode = str(
+        (mem.get("story_mode") if isinstance(mem, dict) else "")
+        or payload.get("story_mode")
+        or ""
+    )
+    if story_mode == "stranger":
+        return (
+            "玩家此刻不主动跟你说话。可以轻轻点一句他不吭声；"
+            "只说眼前，禁止提「这几天我们」、禁止叫名字、禁止提本子上的私货。不要责备。"
+        )
+    if days >= 2:
+        return (
+            f"玩家已有 {days} 天没主动跟你聊天。可以轻轻说他不怎么开口，"
+            "像在意不是责怪。禁止逼问、禁止说他不在乎你。"
+        )
+    return "玩家今天还没跟你说过话。可以轻轻点一句，不要催任务，不要责备。"
 
 
 def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode: bool = False, can_say_name: bool = False) -> str:
@@ -1791,18 +2039,195 @@ def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str
     return "\n".join(lines)
 
 
+def _compact_player_text(text: str) -> str:
+    return str(text or "").strip().replace(" ", "").replace("　", "")
+
+
+def _normalize_poi(raw: Any) -> str:
+    poi = str(raw or "").strip().lower()
+    poi = POI_ALIASES.get(poi, poi)
+    return poi if poi in ALLOWED_POIS else ""
+
+
+def infer_poi_from_text(compact: str) -> str:
+    if "廊下" in compact:
+        return "porch"
+    if "树洞" in compact:
+        return "hollow"
+    if "河边" in compact or "河沿" in compact:
+        return "river"
+    if "商店" in compact or "铺子" in compact:
+        return "shop"
+    if "萝卜田" in compact or "田里" in compact or "田边" in compact or "田埂" in compact:
+        return "field"
+    if "屋门口" in compact or "门口" in compact or "回家" in compact:
+        return "home"
+    return ""
+
+
+def sanitize_body_actions(raw: Any, intent: str = "chat") -> list[dict[str, str]]:
+    if str(intent) in FARM_BODY_BLOCK_INTENTS:
+        return []
+    items: list[Any]
+    if isinstance(raw, dict):
+        items = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        action_id = str(item.get("id") or item.get("action") or "").strip()
+        if action_id in ("", "stay"):
+            continue
+        if action_id == "follow_player":
+            return [{"id": "follow_player"}]
+        if action_id == "open_notebook":
+            if intent == "open_memory":
+                continue
+            return [{"id": "open_notebook"}]
+        if action_id == "walk_poi":
+            poi = _normalize_poi(item.get("poi") or item.get("target") or "")
+            if poi:
+                return [{"id": "walk_poi", "poi": poi}]
+    return []
+
+
+def infer_body_actions(player_message: str, intent: str = "chat") -> list[dict[str, str]]:
+    if str(intent) in FARM_BODY_BLOCK_INTENTS:
+        return []
+    compact = _compact_player_text(player_message)
+    if not compact:
+        return []
+    if any(phrase in compact for phrase in NOTEBOOK_PHRASES):
+        return [] if intent == "open_memory" else [{"id": "open_notebook"}]
+    poi = infer_poi_from_text(compact)
+    if poi:
+        if poi == "shop" and any(k in compact for k in ("买", "种子", "卖")):
+            return []
+        return [{"id": "walk_poi", "poi": poi}]
+    if any(phrase in compact for phrase in FOLLOW_PHRASES) or "一起走" in compact:
+        return [{"id": "follow_player"}]
+    return []
+
+
+COMPANION_FOLLOW_PHRASES = (
+    "我过来", "我这就来", "我马上过来", "我来找你", "我到你这", "我到你这儿",
+    "我去你那边", "我去你这儿", "我过去找你",
+)
+COMPANION_NOTEBOOK_PHRASES = (
+    "我翻本子", "我打开本子", "给你看本子", "我把本子", "本子翻给你",
+)
+PORCH_COMMIT_PHRASES = (
+    "走到廊下", "去廊下", "到廊下", "往廊下", "回廊下",
+    "占了廊下", "占廊下", "廊下坐", "廊下躲", "廊下歇",
+    "在廊下坐", "在廊下等", "咱们廊下", "我们廊下",
+)
+QUESTION_MARKERS = ("要不要", "要我", "去不去", "好不好", "行不行")
+
+
+def _looks_like_question(compact: str) -> bool:
+    if "？" in compact or "?" in compact:
+        return True
+    if compact.endswith("吗") or compact.endswith("么"):
+        return True
+    return any(marker in compact for marker in QUESTION_MARKERS)
+
+
+def _has_move_verb(compact: str) -> bool:
+    return any(verb in compact for verb in ("去", "到", "往", "回", "走过去", "过去"))
+
+
+def infer_from_companion_line(text: str, intent: str = "chat") -> list[dict[str, str]]:
+    if str(intent) in FARM_BODY_BLOCK_INTENTS:
+        return []
+    compact = _compact_player_text(text)
+    if not compact:
+        return []
+    if _looks_like_question(compact):
+        return []
+    if "你去" in compact and "我去" not in compact and "咱们去" not in compact and "我们去" not in compact:
+        return []
+    if any(marker in compact for marker in ("不去", "去不了", "去过", "到过", "没去", "别去")):
+        return []
+    if any(phrase in compact for phrase in COMPANION_NOTEBOOK_PHRASES):
+        return [{"id": "open_notebook"}]
+    if any(phrase in compact for phrase in COMPANION_FOLLOW_PHRASES):
+        return [{"id": "follow_player"}]
+    if _has_move_verb(compact):
+        poi = infer_poi_from_text(compact)
+        if poi:
+            if poi == "shop" and any(k in compact for k in ("买", "种子", "卖")):
+                return []
+            if poi == "field" and any(k in compact for k in ("浇", "种", "收")):
+                return []
+            return [{"id": "walk_poi", "poi": poi}]
+    if any(phrase in compact for phrase in PORCH_COMMIT_PHRASES):
+        return [{"id": "walk_poi", "poi": "porch"}]
+    return []
+
+
+def attach_body_actions(data: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    event = str(payload.get("event", "player_chat"))
+    if event != "player_chat":
+        data["actions"] = []
+        return data
+    intent = str(data.get("intent", "chat"))
+    existing = sanitize_body_actions(data.get("actions", data.get("action")), intent)
+    if existing:
+        data["actions"] = existing
+        return data
+    inferred = infer_body_actions(str(payload.get("player_message", "")), intent)
+    if inferred:
+        data["actions"] = inferred
+        return data
+    data["actions"] = infer_from_companion_line(str(data.get("reply", "")), intent)
+    return data
+
+
+def reply_contract_for_history(turn: dict[str, Any]) -> dict[str, Any]:
+    text = str(turn.get("text", "")).strip()
+    raw = turn.get("reply_contract")
+    if not isinstance(raw, dict):
+        raw = {}
+    intent = str(raw.get("intent", "chat")).strip()
+    if intent not in ALLOWED_INTENTS:
+        intent = "chat"
+    cited = raw.get("cited_memory_ids") or []
+    cited_ids = [str(item).strip() for item in cited if str(item).strip()] if isinstance(cited, list) else []
+    try:
+        plot_id = int(raw.get("plot_id", -1))
+    except (TypeError, ValueError):
+        plot_id = -1
+    return {
+        "reply": str(raw.get("reply", text)).strip() or text,
+        "intent": intent,
+        "plot_id": plot_id,
+        "actions": sanitize_body_actions(raw.get("actions", []), intent),
+        "cited_memory_ids": cited_ids,
+    }
+
+
 def _history_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
     turns = payload.get("recent_chat_turns") or []
     messages: list[dict[str, str]] = []
+    stored_name = _stored_player_name(payload) if _story_mode(payload) == "stranger" else ""
     for turn in turns:
         if not isinstance(turn, dict):
             continue
         text = str(turn.get("text", "")).strip()
         if not text:
             continue
+        if stored_name and stored_name in text:
+            continue
         role_key = str(turn.get("role", "player"))
         api_role = "assistant" if role_key in ("companion", "assistant", "xiaoli") else "user"
-        messages.append({"role": api_role, "content": text})
+        if api_role == "user":
+            content = text
+        else:
+            content = json.dumps(reply_contract_for_history(turn), ensure_ascii=False, separators=(",", ":"))
+        messages.append({"role": api_role, "content": content})
     return messages
 
 
@@ -1927,9 +2352,11 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
     player_name = str(payload.get("player_name", "玩家"))
 
     output_rule = (
-        "输出必须是 JSON 对象，字段：reply(字符串)、intent(枚举)、plot_id(整数，默认-1)、confidence(0~1)。"
+        "输出必须是 JSON 对象，字段：reply(字符串)、intent(枚举)、plot_id(整数，默认-1)、confidence(0~1)、"
+        "actions(数组，每轮最多1条：follow_player / walk_poi / open_notebook)。"
         f"intent 只能是：{', '.join(sorted(ALLOWED_INTENTS))}。"
         "纯聊天 intent=chat；玩家在委托且允许时用对应 action intent。"
+        "走动与农事分轨：过来/去地点用 actions，浇种收买睡用 intent。"
         "小狸可代：浇水/浇全部/种萝卜/种全部空田/收萝卜/收全部/去商店/出售萝卜等。"
         "若 event 为 player_chat 或 story_beat，还必须包含 affection_delta(-2~3)、bond_delta(0~2)、"
         "memory_recovery_delta(0~0.05)、relationship_reason(字符串)。"
@@ -1980,7 +2407,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _scene_brief(payload, chat_mode=True, topic=topic),
             _prompt_weather_facts(payload),
             _prompt_chat_timing(payload),
-            "[可引用记忆（引用时必须把 id 写入 cited_memory_ids；无则 []）]",
+            "[可引用记忆（本子上的第一人称句子；引用时把 id 写入 cited_memory_ids，无则 []。禁止念「白天 ·」这类标签）]",
             _prompt_citable_memories(payload),
             "[禁止]",
             _prompt_forbidden(payload),
@@ -1998,7 +2425,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "坏回复示例：今日晴天 →「等雨停了再去镇上」「这雨下得人心潮」——错误，今日无雨。",
             "若 recent_chat_turns 里已有「雨下得/雨下得挺密/廊下倒是干爽」等句，本轮禁止再用相同开头或相同雨势描写；换话题或接玩家上一句。",
             "输出 JSON：reply、intent、plot_id、confidence、affection_delta、bond_delta、"
-            "memory_recovery_delta、relationship_reason、cited_memory_ids(字符串数组)。",
+            "memory_recovery_delta、relationship_reason、cited_memory_ids(字符串数组)、"
+            "actions(数组，每轮最多1条；过来用 follow_player，去地点用 walk_poi)。",
         ])
         messages: list[dict[str, str]] = [{"role": "system", "content": system}]
         history = _history_messages(payload)
@@ -2055,6 +2483,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "陌生化模式：像不认识玩家，礼貌但疏远。" if story_mode == "stranger" else "",
             "陌生化是剧情设定（她真的失忆），不是存档坏了或系统出错；不要安慰玩家「数据没问题」，像活在一个失忆的人身边那样开口。" if story_mode == "stranger" else "",
             _prompt_player_name_rules(payload),
+            _prompt_player_quiet(payload),
             _dialogue_rules_from_payload(payload),
             _prompt_farm_chore_tone(payload),
             "这是玩家新的一天开场。用 1～2 句口语自然打招呼；"
@@ -2066,11 +2495,11 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_chat_timing(payload),
         ])
         user_lines = ["（玩家刚上线，请打招呼）"]
-        if payload.get("include_yesterday_echo"):
+        if payload.get("include_yesterday_echo") and story_mode != "stranger":
             yesterday = payload.get("yesterday_journal") or {}
             if isinstance(yesterday, dict) and yesterday.get("summary"):
                 user_lines.append(f"（可随口提昨日：{yesterday.get('summary', '')[:80]}）")
-        if payload.get("include_absence_comeback"):
+        if payload.get("include_absence_comeback") and story_mode != "stranger":
             absence = payload.get("absence_facts") or {}
             if isinstance(absence, dict):
                 gap_h = int(absence.get("gap_hours", int(absence.get("gap_days", 0)) * 24))
@@ -2183,6 +2612,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "陌生化模式：像不认识玩家，礼貌但疏远，不叫名字，不提共同记忆。" if story_mode == "stranger" else "",
             "渗漏期：可以有一点点「身体先记得」的违和，但不要剧透未展开的节点，不要像在读信。" if story_mode == "leak" else "",
             _prompt_player_name_rules(payload),
+            _prompt_player_quiet(payload),
             _dialogue_rules_from_payload(payload),
             "这是小狸主动找玩家说话，不是回复玩家，也不是系统通知。",
             "措辞必须现写。禁止套用万能句，禁止与「禁止重复」里的句子雷同。",
@@ -2194,7 +2624,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             f"已看节点：{json.dumps(payload.get('seen_nodes') or [], ensure_ascii=False)}",
             f"渗漏锚点（仅可用这里的事实）：{json.dumps(leak, ensure_ascii=False)}" if leak else "渗漏锚点：无",
             f"这个玩家的近期记忆：{json.dumps(memories, ensure_ascii=False)}" if memories else "",
-            "[可引用记忆（引用时必须把 id 写入 cited_memory_ids；无则 []）]",
+            "[可引用记忆（本子上的第一人称句子；引用时把 id 写入 cited_memory_ids，无则 []。禁止念「白天 ·」这类标签）]",
             _prompt_citable_memories(payload),
             "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿、留一步；S2 贴=敢靠近、敢提约定。profile=mid 时取 S1 近、勿写满 S2。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
@@ -2260,13 +2690,14 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "根据玩家与小狸的今日聊天记录，生成极短中文摘要，供次日个性化对话使用。",
             "禁止编造聊天中未出现的内容；禁止输出聊天原文长段；禁止客服腔。",
             "禁止编造「约明天田边看萝卜」「等萝卜长好一起看」等聊天里没出现过的约定或邀请。",
+            "禁止写关系阶段、亲密度或系统判断（如「对话简短」「关系仍陌生」「还不熟」）。",
+            "chat_summary 只写今天做过、说过的事，不要评价这段关系处在哪一档。",
             "输出必须是 JSON 对象，字段：",
             "- chat_summary: 字符串，≤80 字，第三人称或「你们」口吻，概括今日聊天要点；",
             "- companion_feel: 字符串，≤40 字，小狸内心一句（可空）；",
             "- salience: 0~1 浮点，聊天对关系/记忆的重要度（日常闲聊 0.45~0.6，"
             "涉及约定/情感/身份/喜恶 0.72~0.9）。",
-            f"游戏日：{payload.get('journal_game_day', rel.get('game_day', '?'))}，"
-            f"关系阶段：{rel.get('stage', '?')}。",
+            f"游戏日：{payload.get('journal_game_day', rel.get('game_day', '?'))}。",
             f"规则底座摘要（可参考）：{journal_entry.get('summary', '')[:100]}",
         ])
         user_payload = {
@@ -2377,8 +2808,9 @@ def coerce_llm_payload(content: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "plot_id": -1,
                 "confidence": 0.82,
                 "cited_memory_ids": [],
+                "actions": [],
             }
-        return {"reply": text, "intent": "chat", "plot_id": -1, "confidence": 0.75, "cited_memory_ids": []}
+        return {"reply": text, "intent": "chat", "plot_id": -1, "confidence": 0.75, "cited_memory_ids": [], "actions": []}
 
 
 def _sanitize_dialogue_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -2560,13 +2992,16 @@ def normalize_response(
         "plot_id": plot_id,
         "confidence": confidence,
     }
-    for key in ("affection_delta", "bond_delta", "memory_recovery_delta", "relationship_reason", "cited_memory_ids"):
+    for key in ("affection_delta", "bond_delta", "memory_recovery_delta", "relationship_reason", "cited_memory_ids", "plan", "steps", "max_gold"):
         if key in data:
             result[key] = data[key]
     if payload and event in RELATIONSHIP_EVENTS:
         result = ensure_relationship_fields(result, payload, use_llm_score=False)
     if payload and event == "player_chat":
         result = sanitize_cited_memory_ids(result, payload)
+        result = attach_body_actions(result, payload)
+    elif payload:
+        result["actions"] = []
     return result
 
 
@@ -2643,6 +3078,7 @@ class Handler(BaseHTTPRequestHandler):
         if str(payload.get("event", "")) == "player_chat" and isinstance(result, dict):
             result = ensure_relationship_fields(result, payload)
             result = sanitize_cited_memory_ids(result, payload)
+            result = attach_body_actions(result, payload)
         elif str(payload.get("event", "")) == "day_journal_summarize" and isinstance(result, dict):
             result = normalize_response(result, "day_journal_summarize", payload)
 

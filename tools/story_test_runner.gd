@@ -44,6 +44,7 @@ func _run_finale_tests() -> void:
 	print("-- Finale --")
 	_test_awakening_json_keys()
 	_test_awakening_steps_structure()
+	_test_ending_denouement_split()
 	_test_fragment_wall_lists_unlocked()
 	_test_act2_has_intro()
 	_test_debug_jump_to_finale()
@@ -72,6 +73,9 @@ func _run_ten_day_tests() -> void:
 	_test_ten_day_dual_save_diff()
 	_test_ten_day_leak_no_fabrication()
 	_test_ten_day_leak_uses_journal()
+	_test_notebook_infiltration_loop()
+	_test_ten_day_residual_playtest_fixes()
+	_test_infiltrate_playtest_followups()
 	_test_ten_day_promise_slot_empty()
 	_test_ten_day_pure_narrative_lock()
 	_test_ten_day_chat_promise()
@@ -100,11 +104,16 @@ func _run_ten_day_tests() -> void:
 	_test_n15_mid_tier_render()
 	_test_p_n11_cold_contract_phrases()
 	_test_ten_day_letter_skips_system_followup()
+	_test_d6_fragment_letter_skips_journal_digest()
 	_test_ten_day_route_refresh_follows_ending()
 	_test_time_pause_depth()
 	_test_advance_day_blocked_without_name()
 	_test_companion_offer_affirmative()
 	_test_task_stale_reconcile()
+	_test_chore_instruction_closure()
+	_test_trade_coin_math()
+	_test_xlh_history_contract()
+	_test_xlh_body_actions()
 
 
 func _test_advance_day_writes_journal() -> void:
@@ -271,15 +280,34 @@ func _test_awakening_json_keys() -> void:
 func _test_awakening_steps_structure() -> void:
 	GameState.reset_for_new_game()
 	_seed_true_ending_stats()
+	GameState.day_journal.append({
+		"day": 9,
+		"summary": "第 9 天，晴天，打理了农场。",
+		"highlights": [
+			"聊天 · 你们聊了 5 句，你喂小狸红苹果，说「我爱你」。",
+			"归档 · 第 1 天，雨天，聊天 · 你提到：「记住这个」。",
+		],
+	})
 	var steps := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_TRUE)
 	_assert(steps.size() >= 4, "true ending has 4+ awakening steps")
 	_assert(str(steps[0].get("title", "")).contains("记起") or str(steps[0].get("title", "")).contains("片段"), "step1 is fragment wall")
 	_assert(str(steps[1].get("title", "")).contains("记下"), "step2 is journal")
+	var wall := str(steps[0].get("body", ""))
+	_assert("失忆物证" not in wall, "fragment wall has no forensic label")
+	_assert("登门 —" not in wall and "约定 —" not in wall, "fragment wall has no catalog titles")
+	_assert("不能弄丢这里" in wall or "田埂" in wall, "fragment wall keeps story lines")
+	var act2 := str(steps[1].get("body", ""))
+	_assert("你们聊了" not in act2, "journal montage drops chat-count digest")
+	_assert("归档" not in act2, "journal montage drops archive labels")
+	_assert("红苹果" in act2, "journal montage keeps the lived line")
 	var act3 := str(steps[2].get("body", ""))
 	_assert(
 		("不只是我" in act3 or "你也会忘" in act3) and "好不了" in act3 and "找回来" in act3,
 		"true act3 core line (双向遗忘·互相打捞·永不痊愈)"
 	)
+	var f10 := str(steps[3].get("body", ""))
+	_assert("【归来】" not in f10 and "【约定】" not in f10 and "【本子】" not in f10, "F10 montage has no bracket tags")
+	_assert("不能弄丢这里" in f10, "F10 montage keeps the notebook line")
 	var bad_steps := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_BAD)
 	_assert(bad_steps.size() == 3, "bad ending has 3 steps (no F10 montage)")
 	_test_awakening_two_way_gated()
@@ -308,14 +336,85 @@ func _test_awakening_two_way_gated() -> void:
 	_assert("你也早该写进本子" in bad_act3, "bad act3 B-fallback")
 
 
+func _test_ending_denouement_split() -> void:
+	print("  .. ending denouement split")
+	GameState.reset_for_new_game()
+	_seed_true_ending_stats()
+	var awaken_true := _steps_blob(EndingDirector.get_awakening_steps(EndingDirector.ENDING_TRUE))
+	_assert("不只是我" in awaken_true or "你也会忘" in awaken_true, "awakening keeps two-way reveal")
+	_assert("好不了" in awaken_true, "awakening keeps never-heal core")
+	for ending_id in [
+		EndingDirector.ENDING_TRUE,
+		EndingDirector.ENDING_HAPPY,
+		EndingDirector.ENDING_NORMAL,
+		EndingDirector.ENDING_BAD,
+		EndingDirector.ENDING_BAD_EARLY,
+	]:
+		var steps := EndingDirector.get_full_ending_steps(ending_id)
+		_assert(steps.size() == EndingDirector.get_epilogue_steps(ending_id).size(), "%s full ending is denouement only" % ending_id)
+		for step in steps:
+			_assert(str(step.get("kind", "")) != "climax", "%s ending has no climax steps" % ending_id)
+		var blob := _steps_blob(steps)
+		_assert(blob.strip_edges() != "", "%s denouement has copy" % ending_id)
+		var epi_blob := _steps_blob_of_kind(steps, "epilogue")
+		_assert("被爱不是被记住" not in epi_blob, "%s denouement skips true VO replay" % ending_id)
+		_assert("忘的，从来不只是我" not in epi_blob, "%s denouement skips act3 two-way" % ending_id)
+		_assert("没有嫌我麻烦" not in epi_blob, "%s denouement skips normal act3" % ending_id)
+		_assert("每天要重新认一次的家" not in epi_blob, "%s denouement skips happy act3" % ending_id)
+		_assert("谢谢你收留过我" not in epi_blob, "%s denouement skips bad-early beat replay" % ending_id)
+		_assert("最要紧" not in epi_blob, "%s denouement skips glove apology" % ending_id)
+	var true_end := _steps_blob(EndingDirector.get_epilogue_steps(EndingDirector.ENDING_TRUE))
+	_assert("两个本子" in true_end or "并排" in true_end, "true denouement is notebooks")
+	_assert("牙印" in true_end or "浅痕" in true_end, "true denouement is kettle mark")
+	var happy_end := _steps_blob(EndingDirector.get_epilogue_steps(EndingDirector.ENDING_HAPPY))
+	_assert("种" in happy_end and "碗" in happy_end, "happy denouement is seed and bowl")
+	var normal_end := _steps_blob(EndingDirector.get_epilogue_steps(EndingDirector.ENDING_NORMAL))
+	_assert("壶" in normal_end, "normal denouement is kettle")
+	_assert("本子" in normal_end, "normal denouement is notebooks")
+	var bad_end := _steps_blob(EndingDirector.get_epilogue_steps(EndingDirector.ENDING_BAD))
+	_assert("空土垄" in bad_end, "bad denouement is empty ridge")
+	var early_end := _steps_blob(EndingDirector.get_epilogue_steps(EndingDirector.ENDING_BAD_EARLY))
+	_assert("碗" in early_end, "bad-early denouement is cabinet bowl")
+	_assert("泥" in early_end, "bad-early denouement is the mud")
+	for key in [
+		"epilogue_true_1_body",
+		"epilogue_happy_2_body",
+		"epilogue_normal_2_body",
+		"epilogue_bad_1_body",
+		"epilogue_bad_early_2_body",
+	]:
+		_assert(StoryNodeCopy.get_ending(key).strip_edges() != "", "ending.%s present" % key)
+
+
+func _steps_blob_of_kind(steps: Array, kind: String) -> String:
+	var blob := ""
+	for step in steps:
+		if not step is Dictionary:
+			continue
+		if str(step.get("kind", "")) != kind:
+			continue
+		blob += str(step.get("title", "")) + "\n" + str(step.get("body", "")) + "\n"
+	return blob
+
+
+func _steps_blob(steps: Array) -> String:
+	var blob := ""
+	for step in steps:
+		if not step is Dictionary:
+			continue
+		blob += str(step.get("title", "")) + "\n" + str(step.get("body", "")) + "\n"
+	return blob
+
+
 func _test_fragment_wall_lists_unlocked() -> void:
 	GameState.reset_for_new_game()
 	GameState.unlock_fragment("F01", "test")
 	GameState.unlock_fragment("F02", "test")
 	var steps := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_NORMAL)
 	var body := str(steps[0].get("body", ""))
-	_assert("登门" in body, "fragment wall lists F01 title")
-	_assert("约定" in body or "第一粒种" in body or "一起种" in body, "fragment wall lists F02")
+	_assert("田埂" in body, "fragment wall lists F01 story")
+	_assert("萝卜" in body or "一起看" in body, "fragment wall lists F02 story")
+	_assert("登门 —" not in body and "失忆物证" not in body, "fragment wall has no catalog labels")
 	_assert("明早醒来" not in body, "fragment wall has no week preview text")
 
 
@@ -324,12 +423,13 @@ func _test_act2_has_intro() -> void:
 	GameState.record_memory_event("task_water", "浇田", 0.6, {"game_day": 1})
 	GameState.append_day_journal({
 		"day": 1, "week_index": 1, "loop_day": 1,
-		"highlights": ["主线 · N01"], "summary": "第 1 天",
+		"highlights": ["你喂小狸红苹果。"], "summary": "第 1 天，晴天，打理了农场。",
 	})
 	var steps := EndingDirector.get_d35_awakening_steps(EndingDirector.ENDING_HAPPY)
 	var body := str(steps[1].get("body", ""))
 	_assert("你帮她记下" in body or "这些日子" in body, "act2 companion intro present")
-	_assert("N01" in body or "主线" in body, "act2 includes journal highlight")
+	_assert("红苹果" in body, "act2 includes journal highlight")
+	_assert("N01" not in body and "主线" not in body, "act2 drops beat-id labels")
 
 
 func _test_debug_jump_to_finale() -> void:
@@ -543,7 +643,7 @@ func _test_wave5_trust_ui_policy() -> void:
 	_assert(GameState.ambient_volume_linear >= 0.0, "ambient volume pref default")
 	var water_hint := NpcFallback.pick_random([
 		"田还干着。要浇你说一声。",
-		"垄还没润。我耳朵好使，不用喊两遍。",
+		"垄还干。你点头我就去。",
 	])
 	_assert("要不要" not in water_hint, "chat water fallback avoids customer-service tone")
 
@@ -815,6 +915,197 @@ func _test_ten_day_leak_uses_journal() -> void:
 	_assert("廊下听雨" in str(ctx.get("anchor_summary", "")), "D6 leak journal text preserved")
 
 
+func _test_notebook_infiltration_loop() -> void:
+	print("  .. notebook infiltration loop")
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	var name_pages := MemoryService.get_anchor_pages()
+	_assert(name_pages.size() >= 1, "name writes a notebook page")
+	_assert("阿松" in str(name_pages[0].get("summary", "")), "name page is first-person")
+	_assert("我怕念错" not in str(name_pages[0].get("summary", "")), "name page drops write-meta")
+	_assert("白天 ·" not in str(name_pages[0].get("summary", "")), "name page is not a system label")
+	var chat_line := MemoryService.compose_notebook_line("chat", "", {"text": "记住这个"})
+	_assert(chat_line == "你说「记住这个」。", "chat page is the spoken line only")
+	_assert("我怕忘" not in chat_line, "chat page drops 我怕忘")
+
+	StoryBeatDirector.complete_beat("P_N01")
+	for page in MemoryService.get_anchor_pages():
+		_assert("白天 ·" not in str(page.get("summary", "")), "story beat does not write label pages")
+
+	GameState.record_memory_event("task_water", "小狸浇好了 2 块田。", 0.55, {"task": "water", "game_day": GameState.game_day})
+	var watered := false
+	for page in MemoryService.get_anchor_pages():
+		if "浇" in str(page.get("summary", "")):
+			watered = true
+	_assert(watered, "life page can enter the notebook")
+	_assert(MemoryService.anchor_cap() == 6, "ten-day notebook cap is 6")
+
+	var bounds := MemoryService.get_story_boundaries()
+	_assert(bool(bounds.get("can_cite_episodic", false)), "D1 can_cite_episodic is true")
+	var session_ctx := MemoryService.get_context_for_event("session_start", {})
+	_assert(not (session_ctx.get("citable_memories", []) as Array).is_empty(), "session_start carries citable pages")
+
+	GameState.game_day = 4
+	_assert(not bool(MemoryService.get_story_boundaries().get("can_cite_episodic", true)), "D4 stranger closes episodic cite")
+
+	GameState.reset_for_new_game()
+	GameState.game_day = 3
+	GameState.set_promise("turnip_field", "等萝卜长好了，我们一起看看吧。")
+	var promise_blob := ""
+	for page in MemoryService.get_anchor_pages():
+		promise_blob += str(page.get("summary", ""))
+	_assert("一起看" in promise_blob, "promise page is first-person")
+	_assert("我写下来了" not in promise_blob, "promise page drops write-meta")
+	_assert("小狸写进本子" not in promise_blob, "promise page drops system prefix")
+	_assert(bool(GameState.get_ending_flags().get("notebook_pin_hint_due", false)), "promise queues pin hint")
+
+	GameState.game_day = 6
+	var leak_ctx := LeakageEngine.peek_leak_context()
+	_assert(not leak_ctx.is_empty(), "D6 leak finds the promise page")
+	_assert("白天 ·" not in str(leak_ctx.get("anchor_summary", "")), "D6 leak is not a system label")
+	LeakageEngine.commit_leak_from_context(leak_ctx)
+	_assert(PlayerNotebookService.has_unrevealed_questions(), "live leak leaves a player-notebook question")
+
+
+func _test_ten_day_residual_playtest_fixes() -> void:
+	print("  .. residual playtest fixes")
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.append_day_journal({
+		"day": 1,
+		"summary": "第 1 天，晴天，打理了农场。",
+		"highlights": [],
+	})
+	for page in MemoryService.get_anchor_pages():
+		_assert(not MemoryService.is_generic_farm_log(str(page.get("summary", ""))), "generic farm log stays out of notebook")
+	_assert(
+		MemoryService.compose_notebook_line("day_end", "第 8 天，晴天，打理了农场。", {}) == "",
+		"generic day_end composes empty"
+	)
+	_assert(
+		MemoryService.looks_like_system_label("第 2 天，雨天，聊天 · 你提到：「我会把你写进本子」"),
+		"day-journal chat summary is system voice"
+	)
+	var spoken := MemoryService.eviction_spoken_excerpt({
+		"notebook_line": "你说「我会把你写进本子」。我怕忘，先写在这里。",
+		"summary": "第 2 天，雨天，聊天 · 你提到：「我会把你写进本子」",
+	})
+	_assert("写进本子" in spoken, "eviction speech uses notebook_line")
+	_assert("我怕忘" not in spoken, "eviction speech drops write-meta")
+	_assert("第 2 天" not in spoken, "eviction speech drops system summary")
+	_assert(
+		MemoryService.eviction_spoken_excerpt({
+			"notebook_line": "",
+			"summary": "第 2 天，雨天，聊天 · 你提到：「我会把你写进本子」",
+		}) == "",
+		"empty notebook_line is not spoken"
+	)
+
+	GameState.reset_for_new_game()
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_HAPPY)
+	var n20c := StoryRouteData.get_beat_def("HP_N20c")
+	_assert(str(n20c.get("fragment", "")) == "F05", "D9 N20c grants F05")
+	StoryBeatDirector.complete_beat("HP_N20c")
+	_assert(GameState.has_fragment("F05"), "completing D9 unlocks F05")
+	_assert(str(StoryRouteData.get_beat_def("BL_N20c").get("fragment", "")) == "", "bad route D9 does not grant F05")
+
+	GameState.reset_for_new_game()
+	_seed_true_ending_stats()
+	GameState.long_term_memory["memory_fragments"] = [
+		{"id": "F01"},
+		{"id": "F02"},
+		{"id": "F07"},
+		{"id": "F10"},
+	]
+	_assert(EndingDirector.count_ten_day_gate_fragments() == 2, "gate count ignores F07/F10")
+	_assert(EndingDirector.resolve_ending(false) != EndingDirector.ENDING_TRUE, "F10 does not buy True")
+	GameState.reset_for_new_game()
+	_seed_true_ending_stats()
+	var true_id := EndingDirector.resolve_ending(false)
+	_assert(true_id == EndingDirector.ENDING_TRUE, "F01-F05 seed still True")
+	EndingDirector.lock_ending_id(true_id)
+	GameState.unlock_fragment("F10", "N20")
+	GameState.long_term_memory["memory_fragments"] = [{"id": "F10"}]
+	_assert(EndingDirector.resolve_ending(false) == EndingDirector.ENDING_TRUE, "locked ending ignores later fragment loss")
+	var locked_titles := ""
+	for step in EndingDirector.get_epilogue_steps(EndingDirector.resolve_ending(false)):
+		locked_titles += str(step.get("title", ""))
+	_assert("两个本子" in locked_titles, "locked True denouement stays notebooks")
+
+
+func _test_infiltrate_playtest_followups() -> void:
+	print("  .. infiltrate followups")
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("槐秋")
+	GameState.game_day = 5
+	var payload := {
+		"event": "session_start",
+		"story_mode": "stranger",
+		"player_name": "",
+		"player_name_context": GameState.get_player_name_context(),
+		"memory_context": {"story_boundaries": MemoryService.get_story_boundaries()},
+	}
+	var blocked := ResponseValidator.validate("session_start", "早。槐秋，对吧？", payload, [])
+	_assert(not bool(blocked.get("ok", true)), "stranger blocks stored name even if payload name empty")
+	_assert(str(blocked.get("reason", "")) == "stranger_name", "reason is stranger_name")
+	var allowed := ResponseValidator.validate(
+		"session_start",
+		"……你是谁？我不记得了。我怎么会在这里。",
+		payload,
+		[]
+	)
+	_assert(bool(allowed.get("ok", false)), "stranger amnesia line is allowed")
+
+	GameState.reset_for_new_game()
+	GameState.game_day = 6
+	GameState.long_term_memory["anchors"] = []
+	GameState.short_term_memory.clear()
+	GameState.day_journal.clear()
+	GameState.append_day_journal({
+		"day": 2,
+		"summary": "你们聊了2句，小狸记住了你的名字「满页」和左手腕的疤。",
+		"highlights": [],
+	})
+	_assert(MemoryService.looks_like_journal_digest("你们聊了2句，小狸记住了你的名字"), "digest helper")
+	_assert(LeakageEngine.peek_leak_context().is_empty(), "journal digest is not leak speech")
+	var leak_line := NpcFallback.proactive_line({
+		"proactive_intent": "leak",
+		"leak_context": {"anchor_summary": "你们聊了2句，小狸记住了你的名字「满页」"},
+		"story_mode": "leak",
+	})
+	_assert("你们聊了" not in leak_line, "fallback leak does not recite digest")
+
+	GameState.reset_for_new_game()
+	GameState.game_day = 1
+	GameState.record_player_chat("我有一条红围巾，别弄丢。")
+	GameState.game_day = 6
+	var quiet := RelationshipDirector.get_player_quiet_context()
+	_assert(int(quiet.get("quiet_days", 0)) >= 2, "idle days since last chat")
+	_assert(bool(quiet.get("should_nudge", false)), "quiet player should be nudged")
+	var quiet_leak := NpcFallback.proactive_line({
+		"proactive_intent": "leak",
+		"story_mode": "leak",
+		"player_quiet": quiet,
+		"leak_context": {"anchor_summary": "聊天 · 廊下听雨"},
+	})
+	_assert(
+		"不说" in quiet_leak or "开口" in quiet_leak,
+		"idle leak mentions player silence"
+	)
+	GameState.record_player_chat("早")
+	var talked := RelationshipDirector.get_player_quiet_context()
+	_assert(not bool(talked.get("should_nudge", true)), "chat today clears quiet nudge")
+	GameState.game_day = 5
+	GameState.long_term_memory["relationship_signals"]["last_chat_day"] = 1
+	var stranger_quiet := NpcFallback.quiet_nudge_line([], {
+		"story_mode": "stranger",
+		"player_quiet": RelationshipDirector.get_player_quiet_context(),
+	})
+	_assert(stranger_quiet != "", "stranger idle still notes silence")
+	_assert("这几天" not in stranger_quiet, "stranger silence is present-tense")
+
+
 func _test_ten_day_promise_slot_empty() -> void:
 	GameState.reset_for_new_game()
 	var ctx := StorySlotService.build_context()
@@ -886,6 +1177,43 @@ func _test_p_n11_cold_contract_phrases() -> void:
 	_assert("这一句我不想拿它赖掉" in mid, "P_N11_mid keeps D3 knife line")
 	_assert("拿这个砸我" in mid, "P_N11_mid keeps notebook smash line")
 	_assert(mid != cold, "P_N11 mid differs from cold")
+
+
+func _test_d6_fragment_letter_skips_journal_digest() -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_NORMAL)
+	GameState.game_day = 6
+	GameState.append_day_journal({
+		"day": 5,
+		"tags": ["rain", "chat", "daily"],
+		"summary": "第 5 天，雨天，聊天。",
+		"highlights": [
+			"聊天 · 你们在雨天聊了几句，你提到「烦死了」，小狸回应雨下不停，建议廊下躲雨。对话简短，关系仍陌生。",
+		],
+	})
+	var cleaned := MemoryService.player_facing_journal_line(
+		"聊天 · 你们在雨天聊了几句，你提到「烦死了」。对话简短，关系仍陌生。"
+	)
+	_assert(cleaned == "", "audit digest is not player-facing")
+	_assert(
+		"关系仍陌生" not in MemoryService.strip_relationship_audit_sentences(
+			"你提到「烦死了」。对话简短，关系仍陌生。"
+		),
+		"audit sentence stripped from chat summary"
+	)
+	var beat := StoryBeatDirector.build_beat("NM_N02p")
+	var blob := ""
+	for raw in beat.get("steps", []):
+		if not raw is Dictionary:
+			continue
+		blob += str(raw.get("title", "")) + "\n" + str(raw.get("body", "")) + "\n"
+	_assert("登门" in blob, "D6 still has 登门 fragment")
+	_assert("关系仍陌生" not in blob, "D6 letter has no relationship audit")
+	_assert("对话简短" not in blob, "D6 letter has no brevity audit")
+	_assert("聊天 ·" not in blob, "D6 letter has no chat-digest label")
+	_assert("田埂" in blob or "走了很远" in blob, "D6 登门 keeps arrival story")
 
 
 func _test_ten_day_letter_skips_system_followup() -> void:
@@ -1215,7 +1543,17 @@ func _test_fallback_speech_matrix() -> void:
 		"想不起来" in chat4 or "不记得" in chat4 or "对不起" in chat4,
 		"D4 fallback stays amnesiac"
 	)
-	_assert_stranger_fallback_safe(chat4, "D4 chat")
+	var snack4 := NpcFallback.player_chat("你喜欢吃商店的哪个零食", GameState.get_stage(), mem4, {})
+	_assert("零食" in snack4 or "吃" in snack4 or "商店" in snack4, "D4 snack question gets an answer")
+	_assert("按你的来" not in snack4, "D4 snack question is not preference-ack")
+	_assert_stranger_fallback_safe(snack4, "D4 snack")
+	var fog_ok := ResponseValidator.validate(
+		"player_chat",
+		"……我脑子里只有一些很模糊的画面。",
+		{"story_mode": "stranger", "player_message": "你是谁"},
+		[]
+	)
+	_assert(bool(fog_ok.get("ok", false)), "D4 amnesia fog line is allowed")
 
 	var greet4 := NpcFallback.greet(
 		GameState.get_stage(),
@@ -1440,8 +1778,11 @@ func _test_player_notebook_awakening_reveal() -> void:
 	GameState.reset_for_new_game()
 	PlayerNotebookService.on_beat_completed("P_N01")
 	var steps := EndingDirector.get_awakening_steps(EndingDirector.ENDING_TRUE)
-	var act2_body := str(steps[1].get("body", "")) if steps.size() > 1 else ""
-	_assert("眼熟" in act2_body, "awakening act2 includes player notebook reveal")
+	var act2_base := str(steps[1].get("body", "")) if steps.size() > 1 else ""
+	_assert("眼熟" not in act2_base, "act2 defers notebook reveal until act2 opens")
+	_assert(str(PlayerNotebookService.get_pages_for_ui()[0].get("text", "")) == "？", "pre-act2 question stays hidden")
+	var act2_full := EndingDirector.append_act2_notebook_reveal(act2_base)
+	_assert("眼熟" in act2_full, "act2 reveal includes player notebook line")
 	var again := PlayerNotebookService.reveal_for_awakening()
 	_assert(again.is_empty(), "awakening reveal only once via ending director")
 
@@ -1650,6 +1991,114 @@ func _seed_true_ending_stats() -> void:
 	}
 
 
+func _test_xlh_history_contract() -> void:
+	print("  .. XL-H P1 history contract")
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.record_chat_turn("player", "过来")
+	GameState.record_chat_turn("companion", "来了。")
+	var wrapped: Array[Dictionary] = GameState.get_recent_chat_turns(8)
+	_assert(wrapped.size() >= 2, "player+companion turns stored")
+	var companion_turn: Dictionary = wrapped[wrapped.size() - 1]
+	_assert(companion_turn.has("reply_contract"), "plain companion line wraps reply_contract")
+	var auto_contract: Dictionary = companion_turn.get("reply_contract", {})
+	_assert(str(auto_contract.get("reply", "")) == "来了。", "wrapped reply matches visible text")
+	_assert(str(auto_contract.get("intent", "")) == "chat", "wrapped intent defaults to chat")
+	_assert(str(companion_turn.get("text", "")) == "来了。", "UI still stores plain text")
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	for i in range(12):
+		GameState.record_chat_turn("player", "第%d句" % i)
+		GameState.record_chat_turn(
+			"companion",
+			"回%d" % i,
+			false,
+			{
+				"reply": "回%d" % i,
+				"intent": "chat",
+				"plot_id": -1,
+				"actions": [],
+				"cited_memory_ids": [],
+			}
+		)
+	var recent := GameState.get_recent_chat_turns(24)
+	var companion_count := 0
+	for turn in recent:
+		if str(turn.get("role", "")) != "companion":
+			continue
+		companion_count += 1
+		var contract: Variant = turn.get("reply_contract", {})
+		_assert(contract is Dictionary, "companion history has contract dict")
+		if not contract is Dictionary:
+			continue
+		var encoded := JSON.stringify(contract)
+		var parsed: Variant = JSON.parse_string(encoded)
+		_assert(parsed is Dictionary, "companion contract JSON is parseable")
+		if parsed is Dictionary:
+			_assert(
+				str(parsed.get("reply", "")) == str(turn.get("text", "")),
+				"contract reply matches stored text"
+			)
+	_assert(companion_count >= 12, "12 companion turns remain parseable")
+
+
+func _test_xlh_body_actions() -> void:
+	print("  .. XL-H P2 body actions")
+	var follow := CompanionBodyAction.infer_from_player("过来一下")
+	_assert(not follow.is_empty() and str(follow[0].get("id", "")) == "follow_player", "过来 → follow_player")
+	var porch := CompanionBodyAction.infer_from_player("一起去廊下")
+	_assert(
+		not porch.is_empty()
+		and str(porch[0].get("id", "")) == "walk_poi"
+		and str(porch[0].get("poi", "")) == "porch",
+		"一起去廊下 → walk_poi porch"
+	)
+	var hollow := CompanionBodyAction.infer_from_player("去树洞")
+	_assert(
+		not hollow.is_empty() and str(hollow[0].get("poi", "")) == "hollow",
+		"去树洞 → hollow"
+	)
+	var water := CompanionBodyAction.infer_from_player("帮我把田浇了", "water_all")
+	_assert(water.is_empty(), "farm intent drops body walk")
+	var notebook := CompanionBodyAction.infer_from_player("翻本子看看")
+	_assert(
+		not notebook.is_empty() and str(notebook[0].get("id", "")) == "open_notebook",
+		"翻本子 → open_notebook"
+	)
+	var exploded := CompanionBodyAction.sanitize_actions([{"id": "explode"}], "chat")
+	_assert(exploded.is_empty(), "unknown action dropped")
+	var aliased := CompanionBodyAction.sanitize_actions([{"id": "walk_poi", "poi": "plots"}], "chat")
+	_assert(
+		not aliased.is_empty() and str(aliased[0].get("poi", "")) == "field",
+		"plots alias → field"
+	)
+	var stay := CompanionBodyAction.sanitize_actions([{"id": "stay"}], "chat")
+	_assert(stay.is_empty(), "stay is a no-op")
+	var porch_line := CompanionBodyAction.infer_from_companion_line("那我去廊下坐一会儿。")
+	_assert(
+		not porch_line.is_empty() and str(porch_line[0].get("poi", "")) == "porch",
+		"companion 去廊下 still maps to porch"
+	)
+	var hollow_line := CompanionBodyAction.infer_from_companion_line("那我去树洞看看。")
+	_assert(
+		not hollow_line.is_empty() and str(hollow_line[0].get("poi", "")) == "hollow",
+		"companion 我去树洞 → hollow"
+	)
+	var come_line := CompanionBodyAction.infer_from_companion_line("我过来找你。")
+	_assert(
+		not come_line.is_empty() and str(come_line[0].get("id", "")) == "follow_player",
+		"companion 我过来 → follow_player"
+	)
+	var offer_line := CompanionBodyAction.infer_from_companion_line("要不要去廊下躲一会儿？")
+	_assert(offer_line.is_empty(), "question 要不要去廊下 does not walk")
+	var you_go := CompanionBodyAction.infer_from_companion_line("你去树洞吧，我在这儿。")
+	_assert(you_go.is_empty(), "你去树洞 does not make her walk")
+	var farm_line := CompanionBodyAction.infer_from_companion_line("好，我去田里浇一遍。")
+	_assert(farm_line.is_empty(), "我去浇 does not also walk as body action")
+	var farm_follow := CompanionBodyAction.sanitize_actions([{"id": "follow_player"}], "water_all")
+	_assert(farm_follow.is_empty(), "farm intent drops follow_player")
+
+
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		print("  PASS: %s" % message)
@@ -1676,6 +2125,23 @@ func _test_companion_offer_affirmative() -> void:
 		ShopDelegate.looks_like_water_offer("垄还干着。要浇你说一声。"),
 		"water offer detects 你说一声 phrasing"
 	)
+	var spoken_offer := "那个……我是不是该去把第七块地的水浇了？它看着有点干。你要是不忙，我就去了。"
+	_assert(ShopDelegate.looks_like_water_offer(spoken_offer), "water offer detects 是不是/中间问号")
+	PendingOfferStore.clear()
+	PendingOfferStore.arm_from_companion_line(spoken_offer)
+	_assert(PendingOfferStore.get_type() == PendingOfferStore.OfferType.WATER, "spoken water offer arms pending")
+	var go := ChoreOrchestrator.handle_player_message("去吧")
+	_assert(bool(go.get("handled", false)), "去吧 confirms spoken water offer")
+	_assert("收、浇、种" not in str(go.get("reply", "")), "去吧 does not open chore menu")
+	_assert("不用喊两遍" not in str(go.get("reply", "")), "confirm is not a hearing-error line")
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	PendingOfferStore.clear()
+	_assert(ChorePreprocessor.looks_like_bare_farm_command("浇"), "浇 is a bare farm command")
+	var pour := ChoreOrchestrator.handle_player_message("浇")
+	_assert(bool(pour.get("handled", false)), "浇 auto-starts watering")
+	_assert("不用喊两遍" not in str(pour.get("reply", "")), "浇 is not a water-hint fallback")
+	_assert("收、浇、种" not in str(pour.get("reply", "")), "浇 does not open chore menu")
 	_assert(
 		ShopDelegate.looks_like_plant_offer("要不要帮你种点萝卜？"),
 		"plant offer accepts 种点 phrasing"
@@ -1697,6 +2163,137 @@ func _test_task_stale_reconcile() -> void:
 	TaskSystem.reconcile_stale_task()
 	_assert(not TaskSystem.is_busy(), "stale task cleared when companion has no job")
 	TaskSystem.cancel_task()
+
+
+func _test_chore_instruction_closure() -> void:
+	print("  .. chore instruction closure (P0-P4)")
+	# C1 multi-step parse
+	var plan := ChorePreprocessor.parse_plan("帮我把熟的收了然后卖掉再买种子")
+	_assert(plan.size() >= 3, "multi-step plan parses harvest+sell+buy")
+	if plan.size() >= 3:
+		_assert(str(plan[0].get("step", "")) == "harvest_all", "plan step1 harvest")
+		_assert(str(plan[1].get("step", "")) == "sell_turnips", "plan step2 sell")
+		_assert(str(plan[2].get("step", "")) == "shop_buy_seeds", "plan step3 buy seeds")
+	var single := ChorePreprocessor.parse_plan("帮我浇水")
+	_assert(single.size() == 1 and str(single[0].get("step", "")) == "water_all", "single water step")
+
+	# C2 pending offer + confirm
+	PendingOfferStore.clear()
+	PendingOfferStore.arm_from_companion_line("要不要我先把熟的收了？")
+	_assert(PendingOfferStore.get_type() == PendingOfferStore.OfferType.HARVEST, "harvest offer armed")
+	_assert(PendingOfferStore.is_confirmable_player("好的"), "好的 confirms offer")
+	var confirm := ChoreOrchestrator.try_confirm_offer("好的")
+	_assert(bool(confirm.get("handled", false)), "confirm offer handled locally")
+
+	# C3 correction inquiry
+	_assert(ChorePreprocessor.looks_like_player_correction("你为啥没卖萝卜"), "correction why-not-sell")
+	var corr := ChoreOrchestrator.handle_player_message("你为啥没卖萝卜")
+	_assert(bool(corr.get("handled", false)) and bool(corr.get("skip_llm", false)), "correction skips LLM")
+
+	# C4 Say-Do validator
+	var implied := SayDoValidator.implied_steps_from_reply("好，我这就去浇。")
+	_assert("water_all" in implied, "water commitment detected")
+	var fixed := SayDoValidator.enforce("田都浇好了。", [], "")
+	_assert(fixed.contains("浇"), "Say-Do fixes false completion claim")
+	_assert(SayDoValidator.should_skip_repetitive_fallback("好的"), "skip 嗯我在 on confirmation")
+
+	# C5 busy block
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	CompanionAgent._current_job = {"kind": "water", "plot_ids": [0]}
+	CompanionAgent._activity = CompanionAgent.Activity.WORKING
+	CompanionAgent._work_left = 1.0
+	TaskSystem.current_task = TaskSystem.TaskType.WATER
+	_assert(ChorePreprocessor.should_block_llm_for_busy_farm_chat("再去浇一下"), "busy blocks farm chat to LLM")
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+
+	# C6 seed location
+	_assert(ChorePreprocessor.looks_like_seed_location_inquiry("种子在哪"), "seed location inquiry")
+	var seed_reply := ChoreOrchestrator.reply_seed_location()
+	_assert(not seed_reply.is_empty(), "seed location reply non-empty")
+
+	# C7 normalize API plan
+	var normalized := ChorePreprocessor.normalize_plan_steps(
+		[{"step": "harvest"}, {"step": "sell_turnips"}],
+		"收然后卖"
+	)
+	_assert(normalized.size() == 2, "API plan normalized")
+	_assert(str(normalized[0].get("step", "")) == "harvest_all", "harvest alias normalized")
+
+	PendingOfferStore.clear()
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+
+	# C8 max-gold / sell-all phrasing
+	_assert(ChorePreprocessor.looks_like_max_gold_seed_buy("剩下的钱全买种子"), "max gold buy detected")
+	_assert(ChorePreprocessor.should_auto_start_single_plan(
+		"剩下的钱全买种子",
+		ChorePreprocessor.parse_plan("剩下的钱全买种子"),
+	), "max gold buy auto-starts without delegate")
+	_assert(ChorePreprocessor.looks_like_sell_all_command("所有萝卜都卖掉"), "sell-all command detected")
+	_assert(not ChorePreprocessor.looks_like_sell_all_command("所有萝卜全卖了"), "sell completion not command")
+	var max_plan := ChorePreprocessor.normalize_plan_steps(
+		[{"step": "shop_buy_seeds", "max_gold": true}],
+		"剩下的钱全买种子",
+	)
+	_assert(bool(max_plan[0].get("max_gold", false)), "API plan preserves max_gold")
+
+
+func _test_trade_coin_math() -> void:
+	print("  .. trade coin math")
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	var seed_price := GameState.get_seed_buy_price()
+	var sell_price := GameState.get_turnip_sell_price()
+	_assert(seed_price > 0 and sell_price > 0, "seed/sell prices positive")
+
+	# 买种子扣币
+	var coins_before := GameState.coins
+	var buy3 := GameState.buy_shop_item_count("turnip_seed", 3)
+	_assert(bool(buy3.get("ok", false)), "buy 3 seeds ok")
+	_assert(GameState.coins == coins_before - seed_price * 3, "buy deducts coins correctly")
+	_assert(GameState.get_item_count("turnip_seed") >= 3, "seeds added to inventory")
+
+	# 卖萝卜加币
+	GameState.add_item("turnip", 5)
+	coins_before = GameState.coins
+	var sold := GameState.sell_all_turnips()
+	_assert(bool(sold.get("ok", false)), "sell all turnips ok")
+	_assert(int(sold.get("count", 0)) == 5, "sell all count")
+	_assert(int(sold.get("total", 0)) == 5 * sell_price, "sell total price")
+	_assert(GameState.coins == coins_before + 5 * sell_price, "sell adds coins correctly")
+	_assert(GameState.get_item_count("turnip") == 0, "turnips cleared after sell all")
+
+	# max_gold 买尽：应花光能买整数包的金币
+	GameState.coins = 79
+	var affordable := int(79 / seed_price)
+	var max_buy := GameState.buy_shop_item_count("turnip_seed", affordable)
+	_assert(bool(max_buy.get("ok", false)), "max affordable buy ok")
+	_assert(
+		GameState.coins == 79 - affordable * seed_price,
+		"max affordable leaves correct remainder",
+	)
+
+	# 收→卖→全买 多步后金币与库存自洽
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.coins = 0
+	GameState.add_item("turnip", 4)
+	seed_price = GameState.get_seed_buy_price()
+	sell_price = GameState.get_turnip_sell_price()
+	var sell_only := GameState.sell_all_turnips()
+	_assert(bool(sell_only.get("ok", false)), "pipeline sell ok")
+	var expected_coins := 4 * sell_price
+	_assert(GameState.coins == expected_coins, "pipeline sell coins")
+	var max_packs := int(expected_coins / seed_price)
+	if max_packs > 0:
+		var spend_all := GameState.buy_shop_item_count("turnip_seed", max_packs)
+		_assert(bool(spend_all.get("ok", false)), "pipeline max buy ok")
+		_assert(
+			GameState.coins == expected_coins - max_packs * seed_price,
+			"pipeline max buy coins remainder",
+		)
 
 
 func _print_report() -> void:

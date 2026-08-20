@@ -1765,7 +1765,7 @@ func buy_shop_item_count(item_id: String, count: int) -> Dictionary:
 
 	var total_price := unit_price * count
 	if coins < total_price:
-		var affordable := coins / unit_price if unit_price > 0 else 0
+		var affordable := int(coins / unit_price) if unit_price > 0 else 0
 		if affordable <= 0:
 			return {
 				"ok": false,
@@ -1790,7 +1790,7 @@ func buy_shop_item_count(item_id: String, count: int) -> Dictionary:
 			"ok": false,
 			"reason": "insufficient_coins",
 			"message": "金币不够。买 %d 包要 %d 金，你现在只有 %d 金。" % [count, total_price, coins_before],
-			"affordable_count": coins_before / unit_price if unit_price > 0 else 0,
+			"affordable_count": int(coins_before / unit_price) if unit_price > 0 else 0,
 		}
 	add_item(str(item.get("inventory_key", item_id)), count)
 	var item_name := str(item.get("name", item_id))
@@ -1803,6 +1803,7 @@ func buy_shop_item_count(item_id: String, count: int) -> Dictionary:
 	for _i in range(count):
 		BehaviorCollector.observe_trade_buy(item_id, unit_price)
 	_check_trade_buy_milestone(item_id, unit_price, coins_before)
+	stats_changed.emit()
 	save_game()
 	return {
 		"ok": true,
@@ -2232,13 +2233,41 @@ func mark_plot_watered(plot_id: int, by_companion: bool = false) -> void:
 	save_game()
 
 
-func record_chat_turn(role: String, text: String, ephemeral: bool = false) -> void:
+func make_reply_contract(reply: String, extras: Dictionary = {}) -> Dictionary:
+	var cleaned := reply.strip_edges()
+	var cited_raw: Variant = extras.get("cited_memory_ids", [])
+	var cited: Array[String] = []
+	if cited_raw is Array:
+		for item in cited_raw:
+			var mem_id := str(item).strip_edges()
+			if mem_id != "":
+				cited.append(mem_id)
+	var actions: Array = extras.get("actions", [])
+	if not actions is Array:
+		actions = []
+	return {
+		"reply": cleaned,
+		"intent": str(extras.get("intent", "chat")),
+		"plot_id": int(extras.get("plot_id", -1)),
+		"actions": actions.duplicate(true) if actions is Array else [],
+		"cited_memory_ids": cited,
+	}
+
+
+func record_chat_turn(role: String, text: String, ephemeral: bool = false, reply_contract: Dictionary = {}) -> void:
 	var cleaned := text.strip_edges()
 	if cleaned.is_empty():
 		return
 	var turn := {"role": role, "text": cleaned, "game_day": game_day}
 	if ephemeral:
 		turn["ephemeral"] = true
+	if role in ["companion", "assistant", "xiaoli"]:
+		var contract := reply_contract.duplicate(true) if not reply_contract.is_empty() else {}
+		if contract.is_empty():
+			contract = make_reply_contract(cleaned)
+		elif str(contract.get("reply", "")).strip_edges() == "":
+			contract["reply"] = cleaned
+		turn["reply_contract"] = contract
 	recent_chat_turns.append(turn)
 	while recent_chat_turns.size() > MAX_CHAT_TURNS:
 		recent_chat_turns.remove_at(0)
@@ -2397,7 +2426,7 @@ func set_promise(promise_id: String, summary: String) -> void:
 	}
 	if IS_TEN_DAY_EDITION and promise_id != "chat_promise":
 		roll_true_feed_days()
-	record_memory_event("promise", "小狸写进本子：%s" % summary, 0.95, {"promise_id": promise_id})
+	record_memory_event("promise", summary, 0.95, {"promise_id": promise_id, "promise_summary": summary})
 
 
 func has_story_promise() -> bool:
@@ -2627,19 +2656,35 @@ func record_memory_event(kind: String, summary: String, importance: float = 0.5,
 		"loop_day": int(enriched_facts.get("loop_day", get_loop_day())),
 		"kind": kind,
 		"summary": summary,
+		"notebook_line": MemoryService.compose_notebook_line(kind, summary, enriched_facts),
 		"importance": snappedf(clampf(importance, 0.0, 1.0), 0.01),
 		"facts": enriched_facts,
 	}
+	if kind == "story_beat" and IS_TEN_DAY_EDITION:
+		return
 	short_term_memory.append(entry)
 	while short_term_memory.size() > 12:
 		short_term_memory.remove_at(0)
-	if importance >= 0.75:
+	var notebook_line := str(entry.get("notebook_line", "")).strip_edges()
+	if MemoryService.should_promote_to_anchor(kind, importance, notebook_line):
 		var anchors: Array = long_term_memory.get("anchors", [])
 		anchors.append(entry.duplicate(true))
 		long_term_memory["anchors"] = anchors
 		MemoryService.enforce_anchor_cap()
+		_maybe_queue_notebook_pin_hint(kind)
 	memory_changed.emit()
 	save_game()
+
+
+func _maybe_queue_notebook_pin_hint(kind: String) -> void:
+	if bool(get_ending_flags().get("notebook_pin_hint_spoken", false)):
+		return
+	if bool(get_ending_flags().get("notebook_pin_hint_due", false)):
+		return
+	if StoryDirector.is_stranger_mode():
+		return
+	if kind == "promise" or kind in MemoryService.LIFE_PAGE_KINDS:
+		set_ending_flag("notebook_pin_hint_due", true)
 
 
 func _ensure_long_term_defaults() -> void:

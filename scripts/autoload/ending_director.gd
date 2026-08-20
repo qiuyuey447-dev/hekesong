@@ -21,13 +21,32 @@ func resolve_ending(flashback_skipped: bool = false) -> String:
 	var flags := GameState.get_ending_flags()
 	if bool(flags.get("w2_chose_expel", false)):
 		return ENDING_BAD_EARLY
+	var locked := str(flags.get("locked_ending_id", "")).strip_edges()
+	if locked != "":
+		return locked
 	return _resolve_d35_ending(flashback_skipped)
+
+
+func lock_ending_id(ending_id: String) -> String:
+	var locked := ending_id.strip_edges()
+	if locked == "":
+		locked = _resolve_d35_ending(bool(GameState.get_ending_flags().get("f10_skipped", false)))
+	GameState.set_ending_flag("locked_ending_id", locked)
+	return locked
+
+
+func count_ten_day_gate_fragments() -> int:
+	var n := 0
+	for fid in ["F01", "F02", "F03", "F04", "F05"]:
+		if GameState.has_fragment(fid):
+			n += 1
+	return n
 
 
 func _resolve_d35_ending(flashback_skipped: bool) -> String:
 	var factors := RelationshipDirector.get_ending_factors()
 	var recovery := float(factors.get("memory_recovery", 0.0))
-	var fragments := int(factors.get("fragments", 0))
+	var fragments := count_ten_day_gate_fragments() if GameState.IS_TEN_DAY_EDITION else int(factors.get("fragments", 0))
 	var nights := int(factors.get("companionship_nights", 0))
 	var interaction := float(factors.get("interaction_score", 0.0))
 	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
@@ -168,22 +187,12 @@ const ENDING_ARCS := {
 
 
 func get_full_ending_steps(ending_id: String) -> Array[Dictionary]:
-	var steps := get_fixed_climax_steps(ending_id)
-	var epilogue := get_epilogue_steps(ending_id)
-	# epilogue 已含 title_card + credits；climax 插在最前
-	var narrative_end := epilogue.size() - 2
-	if narrative_end < 0:
-		narrative_end = 0
-	var merged: Array[Dictionary] = []
-	merged.append_array(steps)
-	for i in range(narrative_end):
-		merged.append(epilogue[i])
-	for i in range(narrative_end, epilogue.size()):
-		merged.append(epilogue[i])
-	return merged
+	## 结局面板只播尾声。高潮（碎片墙 / journal / 幕三 / F10）在觉醒面板。
+	return get_epilogue_steps(ending_id)
 
 
 func get_fixed_climax_steps(ending_id: String) -> Array[Dictionary]:
+	## 旧 35 日「结局卡内高潮」。十日版高潮改走 get_awakening_steps，此处不再并进面板。
 	match ending_id:
 		ENDING_NORMAL:
 			return [
@@ -266,6 +275,7 @@ func get_d35_awakening_steps(ending_id: String) -> Array[Dictionary]:
 		{
 			"title": StoryNodeCopy.get_awakening("act_title_2"),
 			"body": act2_body,
+			"needs_notebook_reveal": true,
 		},
 	]
 	match ending_id:
@@ -321,6 +331,14 @@ func _awakening_act2_body(journal_lines: Array[String]) -> String:
 		body_lines.append(StoryNodeCopy.get_awakening("act2_journal_fallback"))
 	else:
 		body_lines.append("\n".join(journal_lines))
+	return "\n\n".join(body_lines)
+
+
+func append_act2_notebook_reveal(body: String) -> String:
+	var body_lines: Array[String] = []
+	var trimmed := body.strip_edges()
+	if trimmed != "":
+		body_lines.append(trimmed)
 	var question_lines := PlayerNotebookService.reveal_for_awakening()
 	if not question_lines.is_empty():
 		body_lines.append("\n".join(question_lines))
@@ -366,19 +384,32 @@ func _max_fragments_for_ending(ending_id: String) -> int:
 
 func _unlocked_fragment_lines(limit: int) -> Array[String]:
 	var lines: Array[String] = []
-	for fid in ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09", "F10"]:
+	var seen: Dictionary = {}
+	var ids: Array[String] = ["F01", "F02", "F03", "F04", "F05"]
+	if not GameState.IS_TEN_DAY_EDITION:
+		ids = ["F01", "F02", "F03", "F04", "F05", "F06", "F07", "F08", "F09", "F10"]
+	for fid in ids:
 		if lines.size() >= limit:
 			break
 		if not GameState.has_fragment(fid):
 			continue
-		var meta: Dictionary = StoryBeatDirector.get_fragment_meta(fid)
-		var title := str(meta.get("title", fid)).strip_edges()
-		var subtitle := str(meta.get("subtitle", "")).strip_edges()
-		if subtitle != "":
-			lines.append("· %s — %s" % [title, subtitle])
-		else:
-			lines.append("· %s" % title)
+		var line := _fragment_awakening_line(fid)
+		if line == "" or seen.has(line):
+			continue
+		seen[line] = true
+		lines.append("· %s" % line)
 	return lines
+
+
+func _fragment_awakening_line(fragment_id: String) -> String:
+	var entry := StoryNodeCopy.get_fragment(fragment_id)
+	var fallback := str(entry.get("fallback", "")).strip_edges()
+	var subtitle := str(entry.get("subtitle", "")).strip_edges()
+	var raw := fallback if fallback != "" else subtitle
+	raw = raw.replace("——失忆物证", "").replace("失忆物证", "").strip_edges()
+	if raw == "" or raw == fragment_id:
+		return ""
+	return StorySlotService.apply(raw, StorySlotService.build_context()).strip_edges()
 
 
 func _f10_montage(length: String) -> String:
@@ -388,154 +419,40 @@ func _f10_montage(length: String) -> String:
 			key = "f10_full"
 		"medium":
 			key = "f10_medium"
-	var montage := StoryNodeCopy.get_awakening(key)
-	var personal := _pick_journal_lines(2)
-	if not personal.is_empty():
-		return "%s\n\n——\n%s" % [montage, "\n".join(personal)]
-	return montage
+	return StoryNodeCopy.get_awakening(key)
 
 
 func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
-	var player := GameState.player_name
-	var companion := GameState.companion_name
+	## 余韵：物件落点。禁止复述觉醒幕三 / journal / F10。
 	var steps: Array[Dictionary] = []
-
 	match ending_id:
 		ENDING_NORMAL:
 			steps = [
-				{
-					"title": "尾声 · 一",
-					"body": (
-						"十日过去了。\n\n"
-						+ "%s 把还温着的壶搁回廊下，又回头看你一眼。"
-						+ "她记不清所有的日子。可这把壶，她认得；你，她今天也认得。"
-					) % companion,
-				},
-				{
-					"title": "尾声 · 二",
-					"body": (
-						"「明天，我说不定又会糊涂。」她低声说，"
-						+ "「可今天——我记得 %s。谢谢你，没有嫌我麻烦。」" % player
-					),
-				},
-				{
-					"title": "尾声 · 三",
-					"body": (
-						"夜里，树洞口那盏灯依旧亮着。\n\n"
-						+ "你把两个本子并排搁在枕边——她的，和你的。她不知道你那一本。"
-						+ "这样，无论谁先醒来，至少还有一行字，能把路指回来。"
-					),
-				},
+				_epilogue_step("epilogue_normal_1_title", "epilogue_normal_1_body"),
+				_epilogue_step("epilogue_normal_2_title", "epilogue_normal_2_body"),
 			]
 		ENDING_HAPPY:
 			steps = [
-				{
-					"title": "尾声 · 一",
-					"body": (
-						"今天，%s 能稳稳地叫出你的名字。\n\n"
-						+ "廊下那只碗还在。她指着碗沿上的一圈水渍笑：「是你把我留下的。这里……也成了我每天要重新认一次的家。」"
-					) % companion,
-				},
-				{
-					"title": "尾声 · 二",
-					"body": (
-						"你们一起收下最后一茬萝卜。田边那粒她自己种的，还没冒芽。"
-						+ "她蹲在那儿看了很久，再不像初来那天那样，缩着肩、攥着衣角。"
-					),
-				},
-				{
-					"title": "尾声 · 三",
-					"body": (
-						"「就算哪天我又忘了，」%s 望着你说，"
-						+ "「你也知道该怎么把我找回来——碗在廊下，我就在。」"
-					) % companion,
-				},
-				{
-					"title": "尾声 · 四",
-					"body": (
-						"你的田里，从此多了一个要你每天重新认识一次的人。不是过客。\n\n"
-						+ "明天她若又忘了，你会重新告诉她；哪天你若也空成一片，她会重新告诉你。碗还在。种还在。这样，就够了。"
-					),
-				},
+				_epilogue_step("epilogue_happy_1_title", "epilogue_happy_1_body"),
+				_epilogue_step("epilogue_happy_2_title", "epilogue_happy_2_body"),
 			]
 		ENDING_TRUE:
-			var journal_lines := _pick_journal_lines(3)
 			steps = [
-				{
-					"title": StoryNodeCopy.get_ending("epilogue_true_1_title"),
-					"body": _ending_text("epilogue_true_1_body"),
-				},
-				{
-					"title": "你替她记下的",
-					"body": "……\n\n%s" % "\n\n".join(journal_lines),
-				},
-				{
-					"title": "%s想对你说" % companion,
-					"body": (
-						"「我走了很久，来了又走。这么多轮，我才敢信——\n\n"
-						+ "被爱不是被记住，是两个都会忘的人，还愿意一次次，从空白里重新把对方认回来。」\n\n"
-						+ "「%s，这一轮，我们都把对方认回来了。哪天又空成一片——别怕。牙印还在壶上。墨还在掌心。我们总能，再找回来。」" % player
-					),
-				},
-				{
-					"title": "尾声",
-					"body": (
-						"临睡前，你把两个本子并排搁好——她那句「不能弄丢这里」，和你写满了她的那一本。"
-						+ "水壶柄上的浅痕还在。无论下一次醒来是否还有，路是留好了的。\n\n"
-						+ "你知道你们都好不了。这或许真是最后一轮。可这一程，你们好好地，把对方认了个够。"
-					),
-				},
-			]
-		ENDING_BAD_EARLY:
-			steps = [
-				{
-					"title": "尾声 · 一",
-					"body": (
-						"你送她走了。\n\n"
-						+ "%s 把活干完，手套叠好，柜角那只碗推了回去。"
-						+ "水壶搁在廊下，还冒着热气。她向你点了点头：「谢谢你收留过我。」"
-					) % companion,
-				},
-				{
-					"title": "尾声 · 二",
-					"body": (
-						"她沿着田埂往外走。泥还是来时那层泥。这一回，她没有回头。"
-						+ "往后的日子，你独自浇田。田还在，只是安静。"
-					),
-				},
-				{
-					"title": "尾声 · 三",
-					"body": (
-						"有时风起，你仿佛听见身后有脚步声。回头，却空无一人。\n\n"
-						+ "那只碗还在柜角。往后就算你也空成一片，也不会再有人，回来把你认出来了。"
-					),
-				},
+				_epilogue_step("epilogue_true_1_title", "epilogue_true_1_body"),
+				_epilogue_step("epilogue_true_2_title", "epilogue_true_2_body"),
 			]
 		ENDING_BAD:
 			steps = [
-				{
-					"title": "尾声 · 一",
-					"body": (
-						"第十天，%s 站在田边，眼神空了一截。"
-						% companion
-						+ "那只手套还在行李边。她张了张嘴，最后只挤出一句：「对不起……我又把最要紧的事，弄丢了。」"
-					),
-				},
-				{
-					"title": "尾声 · 二",
-					"body": _ending_text("epilogue_bad_2_body"),
-				},
-				{
-					"title": "尾声 · 三",
-					"body": (
-						"树洞口那盏灯忽明忽暗。田埂外那条空土垄已经干了。"
-						+ "你守着这片田，可那个想在这里安顿的人，终究没能留住。\n\n"
-						+ "树洞口那盏灯，再也没有人为你留着。"
-					),
-				},
+				_epilogue_step("epilogue_bad_1_title", "epilogue_bad_1_body"),
+				_epilogue_step("epilogue_bad_2_title", "epilogue_bad_2_body"),
+			]
+		ENDING_BAD_EARLY:
+			steps = [
+				_epilogue_step("epilogue_bad_early_1_title", "epilogue_bad_early_1_body"),
+				_epilogue_step("epilogue_bad_early_2_title", "epilogue_bad_early_2_body"),
 			]
 		_:
-			steps = [{"title": "尾声", "body": "故事结束了。"}]
+			steps = [{"title": "尾声", "body": "故事结束了。", "kind": "epilogue"}]
 
 	var meta: Dictionary = ENDING_LABELS.get(ending_id, ENDING_LABELS[ENDING_NORMAL])
 	steps.append({
@@ -549,6 +466,14 @@ func get_epilogue_steps(ending_id: String) -> Array[Dictionary]:
 		"kind": "credits",
 	})
 	return steps
+
+
+func _epilogue_step(title_key: String, body_key: String) -> Dictionary:
+	return {
+		"title": StoryNodeCopy.get_ending(title_key),
+		"body": _ending_text(body_key),
+		"kind": "epilogue",
+	}
 
 
 func get_credits_animation_lines() -> Array[String]:
@@ -568,25 +493,14 @@ func _pick_journal_lines(max_lines: int) -> Array[String]:
 		var highlights: Variant = entry.get("highlights", [])
 		if highlights is Array and highlights.size() > 0:
 			for highlight in highlights:
-				var line := str(highlight).strip_edges()
-				if line == "" or _is_duplicate_journal_line(line, seen):
-					continue
-				lines.append("· %s" % line)
+				_try_append_awakening_journal_line(str(highlight), lines, seen)
 			continue
-		var summary := str(entry.get("summary", "")).strip_edges()
-		if summary != "" and not _is_duplicate_journal_line(summary, seen):
-			lines.append("· %s" % summary)
+		_try_append_awakening_journal_line(str(entry.get("summary", "")), lines, seen)
 	for summary_entry in GameState.get_week_summaries():
 		for highlight in summary_entry.get("highlights", []):
-			var line := str(highlight).strip_edges()
-			if line == "" or _is_duplicate_journal_line(line, seen):
-				continue
-			lines.append("· %s" % line)
+			_try_append_awakening_journal_line(str(highlight), lines, seen)
 		for highlight in summary_entry.get("merged_highlights", []):
-			var line := str(highlight).strip_edges()
-			if line == "" or _is_duplicate_journal_line(line, seen):
-				continue
-			lines.append("· %s" % line)
+			_try_append_awakening_journal_line(str(highlight), lines, seen)
 	if lines.is_empty():
 		return [
 			"· 她登门那天，你说可以留下帮工。",
@@ -598,11 +512,66 @@ func _pick_journal_lines(max_lines: int) -> Array[String]:
 	return lines
 
 
+func _try_append_awakening_journal_line(raw: String, lines: Array[String], seen: Dictionary) -> void:
+	var line := _awakening_journal_line(raw)
+	if line == "" or _is_duplicate_journal_line(line, seen):
+		return
+	lines.append("· %s" % line)
+
+
+func _awakening_journal_line(raw: String) -> String:
+	var cleaned := raw.strip_edges()
+	while cleaned.begins_with("·"):
+		cleaned = cleaned.substr(1).strip_edges()
+	for _i in range(3):
+		var stripped := false
+		for prefix in ["归档 ·", "归档·", "聊天 ·", "聊天·", "主线 ·", "主线·"]:
+			if cleaned.begins_with(prefix):
+				cleaned = cleaned.substr(prefix.length()).strip_edges()
+				stripped = true
+		if not stripped:
+			break
+	var day_rx := RegEx.new()
+	day_rx.compile("^第\\s*\\d+\\s*天[，,]?\\s*(?:晴天|雨天|阴天)?[，,]?")
+	cleaned = day_rx.sub(cleaned, "").strip_edges()
+	for prefix in ["归档 ·", "归档·", "聊天 ·", "聊天·", "主线 ·", "主线·"]:
+		if cleaned.begins_with(prefix):
+			cleaned = cleaned.substr(prefix.length()).strip_edges()
+	var count_rx := RegEx.new()
+	count_rx.compile("^你们聊了\\s*\\d+\\s*句[，,、]?")
+	cleaned = count_rx.sub(cleaned, "").strip_edges()
+	var quote_rx := RegEx.new()
+	quote_rx.compile("^最后提到[：:]\\s*[「\"](.+)[」\"]。?$")
+	var quoted := quote_rx.search(cleaned)
+	if quoted:
+		cleaned = "「%s」" % quoted.get_string(1)
+	for prefix in ["你提到：", "你提到:", "今天：", "今天:"]:
+		if cleaned.begins_with(prefix):
+			cleaned = cleaned.substr(prefix.length()).strip_edges()
+	if cleaned == "" or cleaned in ["打理了农场。", "打理了农场", "晴天", "雨天", "阴天"]:
+		return ""
+	if MemoryService.is_generic_farm_log(cleaned):
+		return ""
+	if "小狸写进本子" in cleaned:
+		return ""
+	if " · " in cleaned:
+		var left := cleaned.get_slice(" · ", 0)
+		if left in ["白天", "傍晚", "夜晚", "清晨", "夜里", "归档", "聊天", "主线"]:
+			return ""
+	if cleaned.begins_with("你们聊了") and "句" in cleaned:
+		return ""
+	var beat_rx := RegEx.new()
+	beat_rx.compile("^(?:[A-Z]{1,3}_)?N\\d+[a-z]?$")
+	if beat_rx.search(cleaned) != null:
+		return ""
+	return cleaned
+
+
 func _journal_line_key(line: String) -> String:
-	var cleaned := line.strip_edges()
-	if cleaned.begins_with("聊天 ·"):
-		cleaned = cleaned.substr(4).strip_edges()
-	if cleaned.begins_with("·"):
+	var cleaned := _awakening_journal_line(line)
+	if cleaned == "":
+		cleaned = line.strip_edges()
+	while cleaned.begins_with("·"):
 		cleaned = cleaned.substr(1).strip_edges()
 	return cleaned
 

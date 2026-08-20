@@ -369,6 +369,32 @@ func _weighted_ratio(value: int, target: int, weight: float) -> float:
 	return clampf(float(value) / float(target), 0.0, 1.0) * weight
 
 
+func player_quiet_days() -> int:
+	var last := int(get_signals().get("last_chat_day", 0))
+	if last <= 0:
+		return maxi(0, GameState.game_day - 1)
+	return maxi(0, GameState.game_day - last)
+
+
+func get_player_quiet_context() -> Dictionary:
+	var days := player_quiet_days()
+	var kind := ""
+	if days >= 2:
+		kind = "several"
+	elif days >= 1:
+		kind = "today"
+	return {
+		"quiet_days": days,
+		"last_chat_day": int(get_signals().get("last_chat_day", 0)),
+		"should_nudge": (
+			kind != ""
+			and GameState.game_day >= 3
+			and not GameState.is_pure_narrative_day()
+		),
+		"nudge_kind": kind,
+	}
+
+
 func get_ending_factors() -> Dictionary:
 	var flags := GameState.get_ending_flags()
 	var signals := get_signals()

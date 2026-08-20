@@ -85,6 +85,14 @@ func latest_visible_excerpt() -> String:
 	return best
 
 
+func on_live_slip(line_id: String) -> void:
+	_trigger_dark_line(line_id)
+
+
+func on_persona_shift() -> void:
+	_trigger_dark_line("time_sense_gap")
+
+
 func on_beat_completed(beat_id: String) -> void:
 	var base := beat_id
 	if base.begins_with("BE_"):
@@ -190,6 +198,20 @@ func reveal_for_awakening() -> Array[String]:
 	GameState.long_term_memory["player_notebook"] = nb
 	_notify()
 	return lines
+
+
+func is_awakening_revealed() -> bool:
+	return bool(_ensure_notebook().get("awakening_revealed", false))
+
+
+func has_unrevealed_questions() -> bool:
+	for raw in _ensure_notebook().get("pages", []):
+		if not raw is Dictionary:
+			continue
+		var page: Dictionary = raw
+		if str(page.get("status", "")) == "question" and not bool(page.get("revealed", false)):
+			return true
+	return false
 
 
 func has_deep_two_way_hint() -> bool:

@@ -313,20 +313,23 @@ func _pick_journal_line(preferred_tags: Array, fallback: String) -> String:
 		if tags is Array:
 			for tag in tags:
 				if str(tag) in preferred_tags:
-					var line := _journal_entry_line(entry)
+					var line := MemoryService.player_facing_journal_line(_journal_entry_line(entry))
 					if line != "":
 						return "· %s" % line
 	for summary_entry in GameState.get_week_summaries():
 		for highlight in summary_entry.get("highlights", []):
-			var line := str(highlight).strip_edges()
+			var line := MemoryService.player_facing_journal_line(str(highlight))
 			if line != "":
 				return "· %s" % line
 	for entry in GameState.day_journal:
 		if entry is Dictionary:
-			var line := _journal_entry_line(entry)
+			var line := MemoryService.player_facing_journal_line(_journal_entry_line(entry))
 			if line != "":
 				return "· %s" % line
-	return "· %s" % fallback
+	var authored := fallback.strip_edges()
+	if authored == "":
+		return ""
+	return "· %s" % authored
 
 
 func _journal_entry_line(entry: Dictionary) -> String:

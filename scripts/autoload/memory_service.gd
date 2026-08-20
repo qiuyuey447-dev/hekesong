@@ -6,8 +6,284 @@ signal anchor_eviction_pending(candidates: Array)
 
 const MAX_CITABLE := 3
 const ANCHOR_CAP := 12
+const TEN_DAY_ANCHOR_CAP := 6
 const MAX_WEEK_SUMMARIES := 5
 const MAX_WEEK_HIGHLIGHTS := 8
+const LIFE_PAGE_KINDS := ["task_water", "task_plant", "task_harvest", "day_end", "journal_chat", "gift"]
+const CITABLE_EVENTS := [
+	"player_chat",
+	"task_complete",
+	"companion_proactive",
+	"companion_casual",
+	"morning_sidewrite",
+	"session_start",
+	"companion_react",
+]
+
+
+func anchor_cap() -> int:
+	return TEN_DAY_ANCHOR_CAP if GameState.IS_TEN_DAY_EDITION else ANCHOR_CAP
+
+
+func notebook_line_of(entry: Dictionary) -> String:
+	var line := strip_notebook_meta(str(entry.get("notebook_line", "")).strip_edges())
+	if looks_like_system_label(line):
+		line = ""
+	if line != "":
+		return line
+	var summary := strip_notebook_meta(str(entry.get("summary", "")).strip_edges())
+	if looks_like_system_label(summary):
+		return ""
+	return summary
+
+
+func looks_like_system_label(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return true
+	if is_generic_farm_log(cleaned):
+		return true
+	if looks_like_journal_digest(cleaned):
+		return true
+	if cleaned.begins_with("第") and "天，" in cleaned:
+		return true
+	if cleaned.begins_with("你说："):
+		return true
+	if "小狸写进本子" in cleaned:
+		return true
+	if " · " in cleaned:
+		var left := cleaned.get_slice(" · ", 0)
+		if left in ["白天", "傍晚", "夜晚", "清晨", "夜里"]:
+			return true
+	return false
+
+
+func strip_notebook_meta(text: String) -> String:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return ""
+	for tail in [
+		"我怕忘，先写在这里。",
+		"我怕忘，先写在这里",
+		"我先记下。",
+		"我先记下",
+		"我写下来了。",
+		"我写下来了",
+		"我怕念错，写在第一页。",
+		"我怕念错，写在第一页",
+	]:
+		if cleaned.ends_with(tail):
+			cleaned = cleaned.substr(0, cleaned.length() - tail.length()).strip_edges()
+			break
+	return cleaned
+
+
+func looks_like_journal_digest(text: String) -> bool:
+	## 日结腰封，不能当她的口头记忆念出来。
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	if cleaned.begins_with("你们聊了"):
+		return true
+	if cleaned.begins_with("你们在") and "聊了" in cleaned:
+		return true
+	if "聊了几句" in cleaned:
+		return true
+	if "句，最后提到" in cleaned or "句，小狸" in cleaned:
+		return true
+	if cleaned.begins_with("刚才那一下，像真做过"):
+		return true
+	return false
+
+
+func looks_like_relationship_audit(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	for marker in ["关系仍", "关系还陌生", "对话简短", "亲密度", "关系阶段", "仍很生疏", "还不熟", "关系生疏", "关系疏远"]:
+		if marker in cleaned:
+			return true
+	return false
+
+
+func player_facing_journal_line(text: String) -> String:
+	## 信纸 / 觉醒只留做过的事，去掉「聊天 ·」和关系档评估。
+	var cleaned := text.strip_edges()
+	while cleaned.begins_with("·"):
+		cleaned = cleaned.substr(1).strip_edges()
+	for prefix in ["归档 ·", "归档·", "聊天 ·", "聊天·", "主线 ·", "主线·"]:
+		if cleaned.begins_with(prefix):
+			cleaned = cleaned.substr(prefix.length()).strip_edges()
+	cleaned = strip_relationship_audit_sentences(cleaned)
+	if cleaned == "" or looks_like_journal_digest(cleaned) or looks_like_system_label(cleaned) or is_generic_farm_log(cleaned):
+		return ""
+	if looks_like_relationship_audit(cleaned):
+		return ""
+	return cleaned
+
+
+func strip_relationship_audit_sentences(text: String) -> String:
+	var parts := text.split("。")
+	var kept: Array[String] = []
+	for part in parts:
+		var sentence := part.strip_edges()
+		if sentence == "":
+			continue
+		if looks_like_relationship_audit(sentence):
+			continue
+		kept.append(sentence)
+	if kept.is_empty():
+		return ""
+	var joined := "。".join(kept)
+	if not joined.ends_with("。") and text.ends_with("。"):
+		joined += "。"
+	return joined
+
+
+func is_generic_farm_log(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	return cleaned.begins_with("第") and "打理了农场" in cleaned
+
+
+func eviction_spoken_excerpt(entry: Dictionary) -> String:
+	## 只念本子正文。空页或系统摘要保持沉默，避免把「第 N 天，聊天 · …」读出口。
+	var line := notebook_line_of(entry)
+	if line == "":
+		return ""
+	if line.length() > 28:
+		return line.substr(0, 28) + "…"
+	return line
+
+
+func compose_notebook_line(kind: String, summary: String, facts: Dictionary = {}) -> String:
+	match kind:
+		"name_set":
+			var pname := str(facts.get("player_name", GameState.player_name)).strip_edges()
+			if pname == "":
+				return ""
+			return "你让我叫你「%s」。" % pname
+		"promise":
+			var promise_text := str(facts.get("promise_summary", "")).strip_edges()
+			if promise_text == "":
+				promise_text = summary.replace("小狸写进本子：", "").strip_edges()
+			if promise_text == "":
+				return ""
+			return promise_text if promise_text.ends_with("。") else promise_text + "。"
+		"promise_done":
+			return "约定兑了。萝卜长好了，我们一起看过。"
+		"chat":
+			var said := str(facts.get("text", "")).strip_edges()
+			if said == "":
+				said = summary.replace("你说：“", "").replace("你说：「", "").trim_suffix("”").trim_suffix("」").strip_edges()
+			if said == "":
+				return ""
+			if said.length() > 28:
+				said = said.substr(0, 28) + "…"
+			return "你说「%s」。" % said
+		"task_water":
+			return "今天把田浇过了。手还记得垄。"
+		"task_plant":
+			return "今天一起下了种。土还松着。"
+		"task_harvest":
+			return "萝卜收上来了。你说要一起看的那畦。"
+		"journal_chat", "day_end":
+			return _life_journal_line(summary, facts)
+		"story_beat":
+			return ""
+		_:
+			if looks_like_system_label(summary):
+				return ""
+			return strip_notebook_meta(summary.strip_edges())
+
+
+func _life_journal_line(summary: String, facts: Dictionary) -> String:
+	var highlights: Variant = facts.get("highlights", [])
+	if highlights is Array and highlights.size() > 0:
+		var highlight := str(highlights[0]).strip_edges()
+		if highlight.begins_with("聊天 ·"):
+			highlight = highlight.substr(4).strip_edges()
+		if highlight != "" and not looks_like_system_label(highlight):
+			if highlight.length() > 36:
+				highlight = highlight.substr(0, 36) + "…"
+			return "今天：%s。" % highlight.trim_suffix("。")
+	var cleaned := summary.strip_edges()
+	if cleaned == "" or looks_like_system_label(cleaned):
+		return ""
+	if cleaned.length() > 36:
+		cleaned = cleaned.substr(0, 36) + "…"
+	return cleaned
+
+
+func has_life_page_today() -> bool:
+	var day := GameState.game_day
+	for raw in GameState.long_term_memory.get("anchors", []):
+		if not raw is Dictionary:
+			continue
+		if int(raw.get("game_day", 0)) != day:
+			continue
+		if str(raw.get("kind", "")) in LIFE_PAGE_KINDS:
+			return true
+	return false
+
+
+func should_promote_to_anchor(kind: String, importance: float, notebook_line: String) -> bool:
+	if notebook_line.strip_edges() == "" or looks_like_system_label(notebook_line):
+		return false
+	if kind == "story_beat":
+		return false
+	if importance >= 0.75:
+		return true
+	if not GameState.IS_TEN_DAY_EDITION:
+		return false
+	if StoryDirector.is_stranger_mode():
+		return false
+	if kind in LIFE_PAGE_KINDS and not has_life_page_today():
+		return true
+	return false
+
+
+func latest_notebook_line_for_day(day: int) -> String:
+	var best := ""
+	for raw in GameState.long_term_memory.get("anchors", []):
+		if not raw is Dictionary:
+			continue
+		if int(raw.get("game_day", 0)) != day:
+			continue
+		var line := notebook_line_of(raw)
+		if line != "":
+			best = line
+	return best
+
+
+func infer_cited_ids_from_reply(reply: String) -> Array[String]:
+	var hits: Array[String] = []
+	var text := reply.strip_edges()
+	if text == "" or StoryDirector.is_stranger_mode():
+		return hits
+	for entry in get_citable_memories("player_chat", {}):
+		var line := notebook_line_of(entry)
+		if line.length() < 6:
+			continue
+		var probe := line.substr(0, mini(10, line.length()))
+		if probe in text or line in text:
+			hits.append(str(entry.get("id", "")))
+	return hits
+
+
+func reply_already_voices_citation(reply: String, cited_ids: Array) -> bool:
+	var text := reply.strip_edges()
+	if text == "":
+		return false
+	for raw_id in cited_ids:
+		var line := lookup_memory_summary(str(raw_id))
+		if line.length() < 6:
+			continue
+		var probe := line.substr(0, mini(8, line.length()))
+		if probe in text or line in text:
+			return true
+	return false
 
 var debug_disable_memory := false
 
@@ -63,7 +339,11 @@ func get_story_boundaries() -> Dictionary:
 		"week_index": week,
 		"loop_day": GameState.get_loop_day(),
 		"recovery_tier": _recovery_tier(),
-		"can_cite_episodic": not StoryDirector.is_stranger_mode() and week >= 3,
+		"can_cite_episodic": (
+			not StoryDirector.is_stranger_mode()
+			if GameState.IS_TEN_DAY_EDITION
+			else (not StoryDirector.is_stranger_mode() and week >= 3)
+		),
 		"can_use_player_name": GameState.companion_can_say_player_name(),
 		"forbidden_topics": _forbidden_topics(mode),
 	}
@@ -72,7 +352,7 @@ func get_story_boundaries() -> Dictionary:
 func get_citable_memories(event: String, extra: Dictionary = {}) -> Array[Dictionary]:
 	if debug_disable_memory or StoryDirector.is_stranger_mode():
 		return []
-	if str(event) not in ["player_chat", "task_complete", "companion_proactive", "companion_casual", "morning_sidewrite"]:
+	if str(event) not in CITABLE_EVENTS:
 		return []
 
 	var recent: Array = GameState.get_recent_memories(6)
@@ -92,7 +372,7 @@ func get_citable_memories(event: String, extra: Dictionary = {}) -> Array[Dictio
 		if picked.size() >= MAX_CITABLE:
 			break
 
-	if picked.is_empty() and event in ["player_chat", "companion_proactive", "companion_casual", "morning_sidewrite"]:
+	if picked.is_empty() and str(event) in CITABLE_EVENTS:
 		for entry in anchors.slice(maxi(0, anchors.size() - MAX_CITABLE), anchors.size()):
 			var copy := _as_citable(entry)
 			if copy.is_empty():
@@ -155,11 +435,11 @@ func lookup_memory_summary(mem_id: String) -> String:
 		return ""
 	for entry in GameState.get_recent_memories(12):
 		if entry is Dictionary and str(entry.get("id", "")) == target:
-			return str(entry.get("summary", "")).strip_edges()
+			return notebook_line_of(entry)
 	var anchors: Array = GameState.long_term_memory.get("anchors", [])
 	for entry in anchors:
 		if entry is Dictionary and str(entry.get("id", "")) == target:
-			return str(entry.get("summary", "")).strip_edges()
+			return notebook_line_of(entry)
 	return ""
 
 
@@ -177,8 +457,8 @@ func build_citation_feedback(cited_ids: Array) -> String:
 	if summaries.is_empty():
 		return ""
 	if summaries.size() == 1:
-		return "（%s好像想起了：%s）" % [GameState.companion_name, summaries[0]]
-	return "（%s把几件旧事连在了一起）" % GameState.companion_name
+		return "……%s。刚才一下子冒出来。" % summaries[0]
+	return "……好几件旧事一下子挤上来。"
 
 
 func get_debug_snapshot() -> Dictionary:
@@ -198,7 +478,7 @@ func enforce_anchor_cap() -> void:
 	if has_pending_eviction():
 		return
 	var anchors: Array = GameState.long_term_memory.get("anchors", [])
-	while anchors.size() > ANCHOR_CAP:
+	while anchors.size() > anchor_cap():
 		if _try_queue_player_eviction(anchors):
 			return
 		var idx := _lowest_evictable_index(anchors)
@@ -272,9 +552,13 @@ func get_anchor_pages() -> Array:
 		if not raw is Dictionary:
 			continue
 		var entry: Dictionary = raw
+		var line := notebook_line_of(entry)
+		if line == "" or looks_like_system_label(line):
+			continue
 		pages.append({
 			"id": str(entry.get("id", "")),
-			"summary": str(entry.get("summary", "")).strip_edges(),
+			"summary": line,
+			"notebook_line": line,
 			"game_day": int(entry.get("game_day", 0)),
 			"kind": str(entry.get("kind", "")),
 			"pinned": is_anchor_pinned(entry),
@@ -322,7 +606,14 @@ func pin_from_player_chat(text: String) -> Dictionary:
 	if not pin_anchor_by_id(mem_id):
 		return {"ok": false, "reason": "pin_failed"}
 	enforce_anchor_cap()
-	return {"ok": true, "id": mem_id, "summary": summary}
+	var line := summary
+	for raw in GameState.long_term_memory.get("anchors", []):
+		if raw is Dictionary and str(raw.get("id", "")) == mem_id:
+			line = notebook_line_of(raw)
+			if line == "":
+				line = summary
+			break
+	return {"ok": true, "id": mem_id, "summary": line}
 
 
 func looks_like_pin_request(text: String) -> bool:
@@ -475,14 +766,18 @@ func _find_anchor_id_by_summary(summary: String) -> String:
 		if not raw is Dictionary:
 			continue
 		var entry: Dictionary = raw
-		var line := str(entry.get("summary", "")).strip_edges()
+		var line := notebook_line_of(entry)
+		if line == "":
+			line = str(entry.get("summary", "")).strip_edges()
 		if line == probe or probe in line or line in probe:
 			return str(entry.get("id", ""))
 	for raw in GameState.get_recent_memories(12):
 		if not raw is Dictionary:
 			continue
 		var entry: Dictionary = raw
-		var line := str(entry.get("summary", "")).strip_edges()
+		var line := notebook_line_of(entry)
+		if line == "":
+			line = str(entry.get("summary", "")).strip_edges()
 		if line == probe or probe in line or line in probe:
 			return str(entry.get("id", ""))
 	return ""
@@ -733,13 +1028,14 @@ func _as_citable(entry: Variant) -> Dictionary:
 	if not entry is Dictionary:
 		return {}
 	var mem_id := str(entry.get("id", "")).strip_edges()
-	var summary := str(entry.get("summary", "")).strip_edges()
+	var summary := notebook_line_of(entry)
 	if mem_id == "" or summary == "":
 		return {}
 	return {
 		"id": mem_id,
 		"kind": str(entry.get("kind", "")),
 		"summary": summary,
+		"notebook_line": summary,
 	}
 
 

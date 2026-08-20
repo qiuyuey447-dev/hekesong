@@ -4,9 +4,10 @@ extends Node
 ## 不截图（无头 dummy texture 会崩）。
 
 const OUT_DIR := "user://persona20_fullplay/"
-const REPORT_RES := "res://docs/二十画像十日实机_2026-08-19.md"
+const REPORT_RES := "res://docs/二十画像十日实机_2026-08-20.md"
 const TIME_SCALE_PLAY := 6.0
 const CHAT_TIMEOUT_SEC := 14.0
+const CLIMAX_TITLES := ["记起的片段", "雾又起了", "小狸想对你说"]
 
 var _packed: PackedScene
 var _main: Node2D
@@ -115,6 +116,8 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 				walked = await _walk_a_bit()
 			if bool(spec.get("basket", false)):
 				await _open_basket()
+		if bool(spec.get("farm", false)) or (bool(spec.get("basket", false)) and day <= 2):
+			await _try_farm_aside(run)
 		flipped.append_array(await _flip_remaining_periods(spec))
 		letter_titles.append_array(flipped)
 		if "一起看" in " ".join(_day_letters) or "写进本子" in " ".join(_day_letters) \
@@ -150,6 +153,11 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 			await _feed_treat_harness(day)
 		await _wait_snuggle_if_any(spec)
 		await _resolve_notebook_eviction(spec, run)
+		if day >= 6 and day <= 8:
+			await _settle(0.9)
+			_snapshot_infiltration(run)
+		if day == 3 or day == 6 or day >= 9:
+			_snapshot_notebook(run)
 		await _await_npc_idle(90)
 		if GameState.is_story_complete() or _ending_visible():
 			await _flip_awakening_and_ending(run)
@@ -640,6 +648,9 @@ func _pick_notebook_eviction_ui(run: Dictionary) -> void:
 	_note("本子划掉 UI pick=%s「%s」anchors %d→%d" % [
 		pick_id, pick_label, anchors_before, _anchor_count(),
 	])
+	if MemoryService.looks_like_system_label(pick_label) or "白天 ·" in pick_label or "第 " in pick_label and " · " in pick_label:
+		run["eviction_system_label"] = true
+		_err("划页仍是系统标签「%s」" % pick_label)
 	var chat_after := _chat_tail()
 	if chat_after != chat_before and "划掉了" in chat_after:
 		run["eviction_chat_ok"] = true
@@ -730,6 +741,9 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 		return
 	run["_awakening_done"] = true
 	_log_true_ending_gates(run)
+	_snapshot_notebook(run)
+	_snapshot_infiltration(run)
+	var aw_pages: PackedStringArray = []
 	if GameState.should_show_awakening() and _ui.has_method("_maybe_show_awakening"):
 		_ui.call("_maybe_show_awakening")
 		await _settle(0.35)
@@ -750,6 +764,7 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 		if aw.get("_body_label"):
 			body = _richtext_body(aw.get("_body_label"))
 		_print("%s AWAKEN %s | %s" % [_pid, title, body.substr(0, 100).replace("\n", " / ")])
+		aw_pages.append("%s:%s" % [title, body.substr(0, 70).replace("\n", " ")])
 		_check_two_way_text(body, run)
 		if aw.has_method("_on_continue_pressed"):
 			aw.call("_on_continue_pressed")
@@ -776,6 +791,9 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 		if en.get("_body_label"):
 			eb = _richtext_body(en.get("_body_label"))
 		pages.append("%s:%s" % [et, eb.substr(0, 70).replace("\n", " ")])
+		if et in CLIMAX_TITLES:
+			run["ending_replays_climax"] = true
+			_err("结局页重播高潮标题=%s" % et)
 		_check_two_way_text(eb, run)
 		var steps: Array = en.get("_steps")
 		var idx := int(en.get("_step_index"))
@@ -794,6 +812,7 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 		if en.has_method("_on_continue_pressed"):
 			en.call("_on_continue_pressed")
 		await _settle(0.08)
+	run["awakening_pages"] = " / ".join(aw_pages).substr(0, 280)
 	run["ending_pages"] = " / ".join(pages).substr(0, 280)
 	run["ending"] = EndingDirector.resolve_ending(false)
 	run["complete"] = GameState.is_story_complete()
@@ -801,24 +820,39 @@ func _flip_awakening_and_ending(run: Dictionary) -> void:
 
 func _send_chat_wait(text: String) -> Dictionary:
 	Engine.time_scale = 1.0
-	var before := _chat_tail()
+	var player_line := text.strip_edges()
+	var before := _companion_chat_tail()
 	var t0 := Time.get_ticks_msec()
 	if _ui.has_method("_send_chat"):
-		_ui.call("_send_chat", text)
+		_ui.call("_send_chat", player_line)
 	else:
-		NpcBridge.request_event("player_chat", {"text": text})
+		NpcBridge.request_event("player_chat", {"text": player_line})
 	var waited := 0.0
 	while waited < CHAT_TIMEOUT_SEC:
 		await get_tree().create_timer(0.4).timeout
 		waited += 0.4
-		if _chat_tail() != before and _chat_tail() != "":
+		if _ui != null and bool(_ui.get("_npc_busy")):
+			continue
+		var after := _companion_chat_tail()
+		if after != "" and after != before and after != player_line:
 			break
 	var ms := Time.get_ticks_msec() - t0
-	var after := _chat_tail()
-	var ok := after != before and after.strip_edges() != ""
+	var after := _companion_chat_tail()
+	var ok := after != before and after.strip_edges() != "" and after != player_line
 	_print("%s CHAT %dms ok=%s tail=%s" % [_pid, ms, str(ok), after.substr(0, 80).replace("\n", " ")])
 	Engine.time_scale = TIME_SCALE_PLAY
 	return {"ok": ok, "ms": ms, "tail": after}
+
+
+func _companion_chat_tail() -> String:
+	var turns := GameState.snapshot_today_chat_log()
+	for i in range(turns.size() - 1, -1, -1):
+		var turn: Variant = turns[i]
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) in ["companion", "assistant", "xiaoli"]:
+			return str(turn.get("text", "")).strip_edges()
+	return ""
 
 
 func _walk_a_bit() -> float:
@@ -849,6 +883,92 @@ func _open_basket() -> void:
 	])
 	if drawer and drawer.has_method("close_drawer"):
 		drawer.call("close_drawer")
+
+
+func _try_farm_aside(run: Dictionary) -> void:
+	if _ui == null or GameState.is_pure_narrative_day():
+		return
+	if bool(run.get("farm_aside_ok", false)):
+		return
+	var plot_id := -1
+	var reason := "plant"
+	var plantable: Array = GameState.get_plantable_plot_ids()
+	if not plantable.is_empty():
+		plot_id = int(plantable[0])
+	else:
+		var unwatered: Array = GameState.get_unwatered_growing_plot_ids()
+		if not unwatered.is_empty():
+			plot_id = int(unwatered[0])
+			reason = "water"
+	if plot_id < 0:
+		_note("农事无空垄/可浇")
+		return
+	if _ui.has_method("_is_gameplay_locked") and bool(_ui.call("_is_gameplay_locked")):
+		_note("农事跳过：gameplay locked")
+		return
+	run["farm_tried"] = true
+	_ui.call("on_plot_clicked", plot_id, Vector2.ZERO)
+	await _settle(0.2)
+	var aside := str(_ui.get("_transient_companion_aside")).strip_edges()
+	if aside == "":
+		run["farm_aside_empty"] = true
+		_note("农事 aside 空 plot=%d reason=%s locked=%s" % [
+			plot_id, reason, str(_ui.get("_gameplay_locked") if _ui.get("_gameplay_locked") != null else "?"),
+		])
+	else:
+		run["farm_aside_ok"] = true
+		run["farm_aside_empty"] = false
+		run["farm_aside"] = aside.substr(0, 80)
+		_note("农事 aside=%s" % aside.substr(0, 70).replace("\n", " "))
+
+
+func _snapshot_notebook(run: Dictionary) -> void:
+	var pages: Array = MemoryService.get_anchor_pages()
+	var samples := PackedStringArray()
+	var sys := 0
+	for raw in pages:
+		if not raw is Dictionary:
+			continue
+		var line := str(raw.get("notebook_line", "")).strip_edges()
+		if line == "":
+			continue
+		samples.append(line.substr(0, 36))
+		if (
+			MemoryService.looks_like_system_label(line)
+			or "白天 ·" in line
+			or "你说：" in line
+			or "小狸写进本子" in line
+			or ("第 " in line and " · " in line)
+		):
+			sys += 1
+	run["notebook_n"] = samples.size()
+	run["notebook_sys"] = sys
+	if not samples.is_empty():
+		run["notebook_sample"] = " / ".join(samples).substr(0, 240)
+	if sys > 0:
+		_note("本子系统标签 %d/%d：%s" % [sys, samples.size(), str(run.get("notebook_sample", ""))])
+	elif not samples.is_empty() and not bool(run.get("_nb_logged", false)):
+		run["_nb_logged"] = true
+		_note("本子页 %d：%s" % [samples.size(), str(run.get("notebook_sample", ""))])
+
+
+func _snapshot_infiltration(run: Dictionary) -> void:
+	if bool(GameState.get_ending_flags().get("notebook_pin_hint_spoken", false)):
+		run["pin_hint"] = true
+	var tail := _chat_tail()
+	if "不想忘掉" in tail:
+		run["pin_hint"] = true
+	var q_n := 0
+	for raw in PlayerNotebookService.get_pages_for_ui():
+		if raw is Dictionary and str(raw.get("text", "")) == "？":
+			q_n += 1
+	if q_n > 0:
+		run["player_q"] = q_n
+	var leak_seen: Variant = GameState.long_term_memory.get("leaks_seen", [])
+	if leak_seen is Array and not leak_seen.is_empty():
+		run["leak_seen"] = (leak_seen as Array).size()
+	elif leak_seen is PackedStringArray and leak_seen.size() > 0:
+		run["leak_seen"] = leak_seen.size()
 
 
 func _ending_visible() -> bool:
@@ -1041,9 +1161,9 @@ func _persona_filter_ids() -> PackedStringArray:
 func _persona_specs() -> Array[Dictionary]:
 	return [
 		{"id": "N1", "label": "第一次玩独立游戏的小白", "player": "小白", "keep": true, "sit": true, "walk": true, "basket": true, "chats": ["你是谁呀"], "chat_days": [1]},
-		{"id": "N2", "label": "只会点按钮的种田新手", "player": "阿田", "keep": true, "sit": false, "basket": true, "chats": []},
+		{"id": "N2", "label": "只会点按钮的种田新手", "player": "阿田", "keep": true, "sit": false, "basket": true, "farm": true, "chats": []},
 		{"id": "N3", "label": "Steam前30分钟差评猎人", "player": "差评", "keep": true, "sit": false, "walk": true, "basket": true, "chats": []},
-		{"id": "S1", "label": "Stardew种田老手", "player": "星露", "keep": true, "sit": false, "basket": true, "chats": []},
+		{"id": "S1", "label": "Stardew种田老手", "player": "星露", "keep": true, "sit": false, "basket": true, "farm": true, "chats": []},
 		{"id": "G1", "label": "Gal泣き老炮", "player": "阿松", "keep": true, "sit": true, "eviction_manual": true, "d9": "d9_continue", "chats": ["我会把你写进本子"], "chat_days": [2, 6]},
 		{"id": "G2", "label": "结构路线表党", "player": "表党", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["昨天的约定还在吗"], "chat_days": [6]},
 		{"id": "G3", "label": "选择肢洁癖", "player": "洁癖", "keep": true, "sit": true, "d9": "d9_defer", "chats": []},
@@ -1055,7 +1175,7 @@ func _persona_specs() -> Array[Dictionary]:
 		{"id": "P2", "label": "失智陪护敏感读者", "player": "陪护", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["我会等你想起来"], "chat_days": [4]},
 		{"id": "B1", "label": "专门开赶走线", "player": "路人", "keep": false, "sit": false, "chats": []},
 		{"id": "E1", "label": "全收集True猎人", "player": "收集", "keep": true, "sit": true, "eviction_manual": true, "d9": "d9_continue", "feed_true_targets": true, "chats": ["萝卜长好了我们一起看", "我记下了", "你的名字我不会忘"], "chat_days": [1, 3, 6, 8]},
-		{"id": "F1", "label": "不聊天纯种田", "player": "农夫", "keep": true, "sit": false, "basket": true, "chats": []},
+		{"id": "F1", "label": "不聊天纯种田", "player": "农夫", "keep": true, "sit": false, "basket": true, "farm": true, "chats": []},
 		{"id": "R1", "label": "速通跳过所有字", "player": "速通", "keep": true, "sit": false, "skip_first": true, "chats": []},
 		{"id": "L1", "label": "直播吐槽", "player": "主播", "keep": true, "sit": true, "walk": true, "basket": true, "chats": ["观众问你从哪来的"], "chat_days": [2]},
 		{"id": "W1", "label": "二周目收集党（首周）", "player": "二周", "keep": true, "sit": true, "d9": "d9_continue", "chats": ["这是第几轮了"], "chat_days": [8]},
@@ -1101,6 +1221,53 @@ func _write_report() -> void:
 	lines.append("")
 	lines.append("平均 **%.2f / 5**。打完或到结局 **%d / %d**。" % [avg, finished, _runs.size()])
 	lines.append("")
+	var n := _runs.size()
+	var nb_sys := 0
+	var farm_try := 0
+	var farm_empty := 0
+	var farm_ok := 0
+	var climax := 0
+	var pin := 0
+	var player_q := 0
+	var leak := 0
+	var ev_sys := 0
+	for run in _runs:
+		if int(run.get("notebook_sys", 0)) > 0:
+			nb_sys += 1
+		if bool(run.get("farm_tried", false)):
+			farm_try += 1
+		if bool(run.get("farm_aside_empty", false)):
+			farm_empty += 1
+		if bool(run.get("farm_aside_ok", false)):
+			farm_ok += 1
+		if bool(run.get("ending_replays_climax", false)):
+			climax += 1
+		if bool(run.get("pin_hint", false)):
+			pin += 1
+		if int(run.get("player_q", 0)) > 0:
+			player_q += 1
+		if int(run.get("leak_seen", 0)) > 0:
+			leak += 1
+		if bool(run.get("eviction_system_label", false)):
+			ev_sys += 1
+	lines.append("## 四问题复核（相对 2026-08-19）")
+	lines.append("")
+	lines.append("| 问题 | 仍在？ | 局数 | 判据 |")
+	lines.append("|------|--------|------|------|")
+	lines.append("| 本子不是第一人称（白天 · / 你说：） | %s | %d / %d | `get_anchor_pages()` 含系统标签 |" % [
+		"仍在" if nb_sys > 0 else "已消失", nb_sys, n,
+	])
+	lines.append("| 农事无反馈（aside 被清掉） | %s | 空 %d / 有声 %d / 试种 %d | D1–D2 点垄后 `_transient_companion_aside` |" % [
+		("仍在" if farm_empty > 0 and farm_ok == 0 else ("部分" if farm_empty > 0 else "已消失")),
+		farm_empty, farm_ok, farm_try,
+	])
+	lines.append("| 结局重播 D10 高潮 | %s | %d / %d | 结局页标题 ∈ 记起的片段 / 雾又起了 / 小狸想对你说 |" % [
+		"仍在" if climax > 0 else "已消失", climax, n,
+	])
+	lines.append("| 渗透未发生（钉页/渗漏/玩家问号/划页标签） | 钉页 %d · 渗漏 %d · 问号 %d · 划页系统标签 %d / %d | 见逐局 |" % [
+		pin, leak, player_q, ev_sys, n,
+	])
+	lines.append("")
 	lines.append("## 逐局笔记")
 	for run in _runs:
 		lines.append("")
@@ -1115,8 +1282,21 @@ func _write_report() -> void:
 			lines.append("- D1 聊天 %sms：%s" % [str(run.get("chat_d1_ms", "")), str(run.get("chat_d1", "")).replace("\n", " ")])
 		if str(run.get("letters", "")) != "":
 			lines.append("- 信纸标题：%s" % str(run.get("letters", "")))
+		if str(run.get("awakening_pages", "")) != "":
+			lines.append("- 觉醒页：%s" % str(run.get("awakening_pages", "")))
 		if str(run.get("ending_pages", "")) != "":
 			lines.append("- 结局页：%s" % str(run.get("ending_pages", "")))
+		if str(run.get("notebook_sample", "")) != "":
+			lines.append("- 本子：sys=%s n=%s %s" % [
+				str(run.get("notebook_sys", 0)), str(run.get("notebook_n", 0)),
+				str(run.get("notebook_sample", "")),
+			])
+		if str(run.get("farm_aside", "")) != "":
+			lines.append("- 农事 aside：%s" % str(run.get("farm_aside", "")))
+		lines.append("- 渗透：pin=%s leak=%s player_q=%s climax_replay=%s" % [
+			str(run.get("pin_hint", false)), str(run.get("leak_seen", 0)),
+			str(run.get("player_q", 0)), str(run.get("ending_replays_climax", false)),
+		])
 		if str(run.get("notes", "")) != "":
 			lines.append("- 笔记：%s" % str(run.get("notes", "")))
 		if str(run.get("errors", "")) != "":

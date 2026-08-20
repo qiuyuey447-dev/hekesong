@@ -33,6 +33,8 @@ func _ready() -> void:
 	GameState.memory_changed.connect(refresh)
 	GameState.day_advanced.connect(refresh)
 	refresh()
+	if _memory_label != null and not _memory_label.meta_clicked.is_connected(_on_notebook_meta_clicked):
+		_memory_label.meta_clicked.connect(_on_notebook_meta_clicked)
 
 
 func open(mode: ViewMode = ViewMode.FULL) -> void:
@@ -60,7 +62,6 @@ func close() -> void:
 
 
 func refresh() -> void:
-	var snapshot := GameState.get_memory_snapshot()
 	_summary_label.text = "第 %d 天" % GameState.game_day
 
 	_memory_label.text = ""
@@ -75,6 +76,7 @@ func refresh() -> void:
 			var line := str(page.get("summary", "")).strip_edges()
 			if line == "":
 				continue
+			var mem_id := str(page.get("id", "")).strip_edges()
 			var day_n := int(page.get("game_day", 0))
 			if bool(page.get("pinned", false)):
 				_memory_label.append_text("[i]第 %d 页 · 留住了[/i]" % page_no)
@@ -82,18 +84,11 @@ func refresh() -> void:
 				_memory_label.append_text("第 %d 页" % page_no)
 			if day_n > 0:
 				_memory_label.append_text("（第 %d 天）" % day_n)
+			if mem_id != "" and not bool(page.get("pinned", false)):
+				_memory_label.append_text("  [url=pin:%s]留住[/url]" % mem_id)
 			_memory_label.append_text("\n%s\n\n" % line)
 			page_no += 1
 			wrote = true
-	var long_term: Dictionary = snapshot.get("long_term_memory", {})
-	var promise: Dictionary = long_term.get("promise", {})
-	if not promise.is_empty():
-		_memory_label.append_text("约定\n%s\n\n" % str(promise.get("summary", "")))
-		wrote = true
-	var player_name := GameState.get_player_display_name()
-	if player_name != "":
-		_memory_label.append_text("名字\n%s\n\n" % player_name)
-		wrote = true
 	if not wrote:
 		_memory_label.append_text("本子还空着。日子过了，字会来。")
 
@@ -109,6 +104,15 @@ func refresh() -> void:
 	if player_pages.is_empty():
 		_player_notebook_label.append_text("还没写下什么。")
 	else:
+		if (
+			GameState.is_awakening_day()
+			and not PlayerNotebookService.is_awakening_revealed()
+			and PlayerNotebookService.has_unrevealed_questions()
+		):
+			_player_notebook_label.append_text(
+				"[i]有些字还看不清……等今天她说完，也许会亮起来。[/i]\n\n"
+			)
+		var page_no := 1
 		for page_raw in player_pages:
 			if not page_raw is Dictionary:
 				continue
@@ -117,9 +121,34 @@ func refresh() -> void:
 			if line == "":
 				continue
 			var day_n := int(page.get("game_day", 0))
-			if day_n > 0:
-				_player_notebook_label.append_text("（第 %d 天）\n" % day_n)
-			_player_notebook_label.append_text("%s\n\n" % line)
+			var status := str(page.get("status", "visible"))
+			if status == "missing":
+				_player_notebook_label.append_text("第 %d 页" % page_no)
+				if day_n > 0:
+					_player_notebook_label.append_text("（第 %d 天）" % day_n)
+				_player_notebook_label.append_text("\n[color=#998877]%s[/color]\n\n" % line)
+			elif status == "question" and not bool(page.get("revealed", false)):
+				_player_notebook_label.append_text("第 %d 页" % page_no)
+				if day_n > 0:
+					_player_notebook_label.append_text("（第 %d 天）" % day_n)
+				_player_notebook_label.append_text("\n[color=#998877]%s[/color]\n\n" % line)
+			else:
+				_player_notebook_label.append_text("第 %d 页" % page_no)
+				if day_n > 0:
+					_player_notebook_label.append_text("（第 %d 天）" % day_n)
+				_player_notebook_label.append_text("\n%s\n\n" % line)
+			page_no += 1
+
+
+func _on_notebook_meta_clicked(meta: Variant) -> void:
+	var token := str(meta).strip_edges()
+	if not token.begins_with("pin:"):
+		return
+	var mem_id := token.substr(4).strip_edges()
+	if mem_id == "":
+		return
+	if MemoryService.pin_anchor_by_id(mem_id):
+		refresh()
 
 
 func _build_styles() -> void:
@@ -143,16 +172,18 @@ func _build_styles() -> void:
 func _build_shell() -> void:
 	_dim = ColorRect.new()
 	_dim.name = "Dim"
-	_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_dim.set_offsets_preset(Control.PRESET_FULL_RECT)
+	_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_dim.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dim.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_dim.color = Color(0.03, 0.03, 0.06, 0.45)
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_dim)
 
 	var center := CenterContainer.new()
 	center.name = "Center"
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	center.set_offsets_preset(Control.PRESET_FULL_RECT)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(center)
 
@@ -262,7 +293,7 @@ func _apply_view_mode() -> void:
 			_fragment_wrap.visible = false
 			_memory_label.custom_minimum_size = Vector2(560, 360)
 			if _card:
-				_card.custom_minimum_size = CARD_SIZE_SINGLE
+				_card.custom_minimum_size = _card_size_for_mode()
 		ViewMode.PLAYER:
 			_title_label.text = "你的本子"
 			_memory_wrap.visible = false
@@ -270,7 +301,7 @@ func _apply_view_mode() -> void:
 			_fragment_wrap.visible = false
 			_player_notebook_label.custom_minimum_size = Vector2(560, 360)
 			if _card:
-				_card.custom_minimum_size = CARD_SIZE_SINGLE
+				_card.custom_minimum_size = _card_size_for_mode()
 		_:
 			_title_label.text = "记忆与本子"
 			_memory_wrap.visible = true
@@ -280,16 +311,26 @@ func _apply_view_mode() -> void:
 			_player_notebook_label.custom_minimum_size = Vector2(280, 360)
 			_fragment_label.custom_minimum_size = Vector2(280, 360)
 			if _card:
-				_card.custom_minimum_size = CARD_SIZE_FULL
+				_card.custom_minimum_size = _card_size_for_mode()
+
+
+func _card_size_for_mode() -> Vector2:
+	var vp := get_viewport().get_visible_rect().size
+	var wanted := CARD_SIZE_SINGLE if _view_mode != ViewMode.FULL else CARD_SIZE_FULL
+	return Vector2(minf(wanted.x, maxf(320.0, vp.x - 48.0)), minf(wanted.y, maxf(280.0, vp.y - 48.0)))
 
 
 func _sync_layout() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
-	set_offsets_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	size = get_viewport().get_visible_rect().size
 	if _dim:
-		_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-		_dim.set_offsets_preset(Control.PRESET_FULL_RECT)
+		_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_dim.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_dim.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var center := get_node_or_null("Center") as CenterContainer
 	if center:
-		center.set_anchors_preset(Control.PRESET_FULL_RECT)
-		center.set_offsets_preset(Control.PRESET_FULL_RECT)
+		center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if _card:
+		_card.custom_minimum_size = _card_size_for_mode()

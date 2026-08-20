@@ -30,6 +30,10 @@ TaskSystem="*res://scripts/autoload/task_system.gd"
 IntentParser="*res://scripts/autoload/intent_parser.gd"
 IntentBridge="*res://scripts/autoload/intent_bridge.gd"
 PersonaGuard="*res://scripts/autoload/persona_guard.gd"
+PendingOfferStore="*res://scripts/autoload/pending_offer_store.gd"
+ChorePreprocessor="*res://scripts/autoload/chore_preprocessor.gd"
+ChoreOrchestrator="*res://scripts/autoload/chore_orchestrator.gd"
+SayDoValidator="*res://scripts/autoload/say_do_validator.gd"
 ActionExecutor="*res://scripts/autoload/action_executor.gd"
 StoryDirector="*res://scripts/autoload/story_director.gd"
 StoryNodeCopy="*res://scripts/autoload/story_node_copy.gd"
@@ -47,6 +51,7 @@ EndingDirector="*res://scripts/autoload/ending_director.gd"
 RelationshipDirector="*res://scripts/autoload/relationship_director.gd"
 CompanionDirector="*res://scripts/autoload/companion_director.gd"
 CompanionAgent="*res://scripts/autoload/companion_agent.gd"
+CompanionBodyAction="*res://scripts/autoload/companion_body_action.gd"
 UIFontTheme="*res://scripts/autoload/ui_theme.gd"
 BgmDirector="*res://scripts/autoload/bgm_director.gd"
 AmbientAudio="*res://scripts/autoload/ambient_audio.gd"
@@ -117,6 +122,8 @@ interact={
 [rendering]
 
 textures/canvas_textures/default_texture_filter=0
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.58, 0.78, 0.96, 1)
 2d/snap/snap_2d_transforms_to_pixel=true
 2d/snap/snap_2d_vertices_to_pixel=true

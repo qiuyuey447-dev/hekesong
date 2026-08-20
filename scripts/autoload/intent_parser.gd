@@ -79,7 +79,7 @@ func parse(text: String) -> Dictionary:
 		result["intent"] = INTENT_OPEN_SHOP
 		result["confidence"] = 0.95
 		result["matched_terms"] = ["shop_purchase"]
-		return result
+		return _attach_shop_flags(result, trimmed)
 
 	if is_explicit_sleep_utterance(trimmed):
 		result["intent"] = INTENT_SLEEP
@@ -107,7 +107,7 @@ func parse(text: String) -> Dictionary:
 		result["intent"] = best_intent
 		result["confidence"] = clampf(float(best_score) / 20.0, 0.0, 1.0)
 		result["matched_terms"] = best_terms
-		return result
+		return _attach_shop_flags(result, trimmed)
 
 	var refuse_kind := _detect_refuse_kind(normalized)
 	if refuse_kind != "":
@@ -352,6 +352,13 @@ func merge_intents(
 					"source": "classify_failed",
 				}
 		elif str(api_intent.get("intent", "")) == INTENT_CHAT:
+			var api_plan_early: Variant = api_intent.get("plan", [])
+			if api_plan_early is Array and not api_plan_early.is_empty():
+				var planned_chat := api_intent.duplicate(true)
+				planned_chat["raw_text"] = raw_text
+				planned_chat["source"] = "api"
+				planned_chat["plan"] = ChorePreprocessor.normalize_plan_steps(api_plan_early, raw_text)
+				return planned_chat
 			var chat_from_api := api_intent.duplicate(true)
 			chat_from_api["raw_text"] = raw_text
 			chat_from_api["source"] = "api"
@@ -388,6 +395,20 @@ func merge_intents(
 		if int(merged.get("plot_id", -1)) < 0:
 			merged["plot_id"] = int(local_intent.get("plot_id", -1))
 		return merged
+
+	var api_plan: Variant = api_intent.get("plan", [])
+	if api_plan is Array and not api_plan.is_empty():
+		var planned := {
+			"intent": INTENT_CHAT,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": float(api_intent.get("confidence", 0.75)),
+			"raw_text": raw_text,
+			"plan": ChorePreprocessor.normalize_plan_steps(api_plan, raw_text),
+			"matched_terms": ["api:plan"],
+			"source": "api",
+		}
+		return planned
 
 	var fallback := local_intent.duplicate(true)
 	fallback["source"] = "local"
@@ -428,7 +449,16 @@ func from_api_response(parsed: Variant, raw_text: String) -> Dictionary:
 	if result["plot_id"] < 0:
 		result["plot_id"] = _extract_plot_id(raw_text, _normalize(raw_text))
 
-	return _sanitize_intent(result)
+	var plan_steps := _extract_plan_from_data(data, raw_text)
+	if not plan_steps.is_empty():
+		result["plan"] = plan_steps
+		if not is_action_intent(result):
+			result["intent"] = INTENT_CHAT
+
+	if bool(data.get("max_gold", false)):
+		result["max_gold"] = true
+
+	return _sanitize_intent(_attach_shop_flags(result, raw_text))
 
 
 func from_api_classify_response(parsed: Variant, raw_text: String) -> Dictionary:
@@ -447,7 +477,8 @@ func from_api_classify_response(parsed: Variant, raw_text: String) -> Dictionary
 	var intent_key := _normalize_intent_key(str(data.get("intent", data.get("action", ""))))
 	if intent_key == "":
 		intent_key = INTENT_CHAT
-	return {
+	var plan_steps := _extract_plan_from_data(data, raw_text)
+	var result := {
 		"intent": intent_key if intent_key in ACTION_INTENTS or intent_key == INTENT_CHAT or intent_key == INTENT_REFUSE else INTENT_CHAT,
 		"refuse_kind": str(data.get("refuse_kind", "")),
 		"plot_id": int(data.get("plot_id", -1)),
@@ -456,6 +487,13 @@ func from_api_classify_response(parsed: Variant, raw_text: String) -> Dictionary
 		"matched_terms": ["classify:%s" % intent_key],
 		"source": "api",
 	}
+	if not plan_steps.is_empty():
+		result["plan"] = plan_steps
+		result["intent"] = INTENT_CHAT
+		result["matched_terms"] = ["classify:plan"]
+	if bool(data.get("max_gold", false)):
+		result["max_gold"] = true
+	return _attach_shop_flags(result, raw_text)
 
 
 func looks_like_ambiguous_command(text: String) -> bool:
@@ -743,6 +781,10 @@ func _score_water(normalized: String) -> Dictionary:
 	if "浇" in normalized and not _looks_like_water_all(normalized):
 		scored["score"] = int(scored.get("score", 0)) + 3
 		scored["terms"].append("浇")
+	var compact := normalized.strip_edges().replace(" ", "")
+	if compact in ["浇", "浇水", "去浇", "去浇水", "浇田", "浇一下"]:
+		scored["score"] = 8
+		scored["terms"].append("bare_water")
 	return scored
 
 
@@ -946,3 +988,18 @@ func _extract_plot_id(raw_text: String, normalized: String) -> int:
 		return 3
 
 	return -1
+
+
+func _extract_plan_from_data(data: Dictionary, raw_text: String = "") -> Array:
+	var raw_plan: Variant = data.get("plan", data.get("steps", []))
+	return ChorePreprocessor.normalize_plan_steps(raw_plan, raw_text)
+
+
+func _attach_shop_flags(result: Dictionary, raw_text: String) -> Dictionary:
+	if str(result.get("intent", "")) != INTENT_OPEN_SHOP:
+		return result
+	if bool(result.get("max_gold", false)):
+		return result
+	if ChorePreprocessor.looks_like_max_gold_seed_buy(raw_text):
+		result["max_gold"] = true
+	return result

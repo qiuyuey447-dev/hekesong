@@ -19,24 +19,27 @@ const COLOR_PLANT := Color(0.52, 0.88, 0.48, 0.88)
 var _active := false
 var _style := Style.READY
 var _pulse_t := 0.0
+var _web_redraw_age := 0.0
 
 
 func _ready() -> void:
 	z_index = 50
 	visible = false
-	set_process(true)
+	set_process(false)
 
 
 func show_highlight(style: Style = Style.READY) -> void:
 	_active = true
 	_style = style
 	visible = true
+	set_process(true)
 	queue_redraw()
 
 
 func hide_highlight() -> void:
 	_active = false
 	visible = false
+	set_process(false)
 	queue_redraw()
 
 
@@ -44,6 +47,11 @@ func _process(delta: float) -> void:
 	if not _active:
 		return
 	_pulse_t += delta * 4.5
+	if OS.has_feature("web"):
+		_web_redraw_age += delta
+		if _web_redraw_age < 0.066:
+			return
+		_web_redraw_age = 0.0
 	queue_redraw()
 
 
@@ -85,7 +93,7 @@ func _draw_ellipse_stroke(rect: Rect2, color: Color, width: float) -> void:
 	var ry := rect.size.y * 0.5
 	if rx <= 0.5 or ry <= 0.5:
 		return
-	var steps := 48
+	var steps := 16 if OS.has_feature("web") else 48
 	var points := PackedVector2Array()
 	points.resize(steps)
 	for i in steps:

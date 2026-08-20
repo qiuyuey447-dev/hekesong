@@ -3,7 +3,7 @@
 	"api_url": "http://127.0.0.1:8080/v1/chat",
 	"api_key": "",
 	"npc_id": "xiaoli",
-	"timeout_sec": 15.0,
+	"timeout_sec": 22.0,
 	"mock_delay_sec": 0.4,
 	"require_relationship_delta": true,
 	"intent_fallback_enabled": true,

@@ -437,6 +437,9 @@ func _sanitize_chat_summary(summary: String, chat_log: Array) -> String:
 	var cleaned := _sanitize_text(summary, MAX_CHAT_SUMMARY_LEN)
 	if cleaned == "":
 		return ""
+	cleaned = MemoryService.strip_relationship_audit_sentences(cleaned)
+	if cleaned == "":
+		return ""
 	if _chat_log_supports_invite_claims(cleaned, chat_log):
 		return cleaned
 	return _strip_unverified_invite_claims(cleaned)

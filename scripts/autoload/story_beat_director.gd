@@ -5,7 +5,7 @@ extends Node
 const FRAGMENTS: Dictionary = {
 	"F01": {"title": "登门", "subtitle": "她请求留下帮工", "unlock_node": "N02p"},
 	"F02": {"title": "约定", "subtitle": "等萝卜长好了，一起看看", "unlock_node": "N11"},
-	"F03": {"title": "小狸的本子", "subtitle": "日期乱了——失忆物证", "unlock_node": "N15"},
+	"F03": {"title": "小狸的本子", "subtitle": "日期乱了，仍写着不能弄丢这里", "unlock_node": "N15"},
 	"F04": {"title": "名字", "subtitle": "让我留下来的那个人", "unlock_node": "N16"},
 	"F05": {"title": "完整的家", "subtitle": "你的农场，她的安顿", "unlock_node": "N20"},
 	## 以下保留解锁键以兼容旧存档；十日版主流程以 F01–F05 / F07 为主
@@ -593,13 +593,6 @@ func complete_beat(beat_id: String) -> void:
 		var promise: Dictionary = GameState.long_term_memory.get("promise", {})
 		if not promise.is_empty() and not bool(promise.get("fulfilled", false)):
 			GameState.fulfill_promise("萝卜快熟了。她按约定照看着这片田。")
-	var node_label := str(def.get("node_label", beat_id))
-	GameState.record_memory_event(
-		"story_beat",
-		"%s · %s" % [GameState.get_day_period_label(), str(def.get("emotion", node_label))],
-		0.8,
-		{"node": node_label, "beat_id": beat_id, "route": get_active_route(), "game_day": GameState.game_day}
-	)
 	PlayerNotebookService.on_beat_completed(beat_id)
 
 

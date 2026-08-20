@@ -233,7 +233,8 @@ static func looks_like_water_commitment(text: String) -> bool:
 		"我现在就去浇", "这就去浇", "马上去浇", "去浇田", "去浇地", "帮你浇",
 		"帮你们浇", "我去浇", "去帮你浇", "把田都浇", "都浇一遍", "还没浇的",
 		"我去给它们浇", "我去给它们浇点", "把它们都浇", "把水浇上", "这就去把水",
-		"我这就去浇", "去把水浇",
+		"我这就去浇", "去把水浇", "拿壶", "浇一遍", "去把田", "把田浇", "我去把田",
+		"我就去浇", "该去把", "水浇了", "看着有点干",
 	]:
 		if phrase in normalized:
 			return true
@@ -372,8 +373,13 @@ static func _looks_like_offer_question(normalized: String) -> bool:
 		or "行不行" in normalized
 		or "能不能" in normalized
 		or "可不可以" in normalized
-		or normalized.ends_with("？")
-		or normalized.ends_with("?")
+		or "是不是" in normalized
+		or "该去" in normalized
+		or "要是不忙" in normalized
+		or "你要是不忙" in normalized
+		or "？" in normalized
+		or "?" in normalized
 		or normalized.ends_with("吗")
 		or normalized.ends_with("嘛")
+		or normalized.ends_with("吧")
 	)

@@ -356,6 +356,9 @@ func _route_def(prefix: String, suffix: String, beat_id: String) -> Dictionary:
 			steps = [{"title": n20c_title, "template": beat_id}]
 			if GameState.IS_TEN_DAY_EDITION:
 				steps.append({"title": "灯还亮着", "template": "%s_b" % beat_id})
+				if prefix != "BL":
+					fragment = "F05"
+					steps.append({"title": "完整的家", "template": "F05", "kind": "fragment"})
 		"N08p":
 			emotion = "周末"
 			recovery = 0.05
@@ -707,12 +710,16 @@ func _crop_label() -> String:
 
 
 func _fragment_body(fragment_id: String, fallback: String) -> String:
-	var entry := StoryNodeCopy.get_fragment(fragment_id)
-	var subtitle := str(entry.get("subtitle", ""))
-	if subtitle == "":
-		subtitle = fragment_id
-	var personal := _personal_fragment_line(fragment_id, fallback)
-	return "%s\n\n%s" % [subtitle, personal]
+	var authored := fallback.strip_edges()
+	if authored == "":
+		authored = _fragment_fallback(fragment_id)
+	authored = StorySlotService.apply(authored, StorySlotService.build_context())
+	var personal := MemoryService.player_facing_journal_line(
+		_personal_fragment_line(fragment_id, "")
+	)
+	if personal == "" or personal in authored:
+		return authored
+	return "%s\n\n%s" % [authored, personal]
 
 
 func _personal_fragment_line(fragment_id: String, fallback: String) -> String:

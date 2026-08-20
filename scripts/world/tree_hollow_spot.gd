@@ -8,6 +8,8 @@ var _label: Label
 var _action_label: Label
 var _hover: InteractHover
 var _shape: CollisionShape2D
+var _near_check_age := 0.0
+const NEAR_CHECK_SEC := 0.08
 
 
 func _ready() -> void:
@@ -32,7 +34,11 @@ func _ready() -> void:
 	call_deferred("_refresh_hint")
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_near_check_age += delta
+	if _near_check_age < NEAR_CHECK_SEC:
+		return
+	_near_check_age = 0.0
 	_refresh_hover_focus()
 
 

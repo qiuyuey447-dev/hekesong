@@ -122,6 +122,15 @@ func _execute_open_market() -> Dictionary:
 
 func _execute_open_shop(intent: Dictionary) -> Dictionary:
 	var raw := str(intent.get("raw_text", ""))
+	var max_gold := bool(intent.get("max_gold", false)) or ChorePreprocessor.looks_like_max_gold_seed_buy(raw)
+	var preset := ShopDelegate.parse_seed_purchase_quantity(raw) if raw != "" else 0
+	if max_gold or preset > 0:
+		var bought := ChoreOrchestrator.buy_seeds_from_text(raw, max_gold)
+		return {
+			"executed": bool(bought.get("executed", false)),
+			"task_started": false,
+			"companion_extra": str(bought.get("reply", "")),
+		}
 	var auto_seed := IntentParser.looks_like_shop_purchase(raw)
 	if TaskSystem.start_shop_task(auto_seed):
 		return {"executed": true, "task_started": true, "auto_seed_flow": auto_seed}

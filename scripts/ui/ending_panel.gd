@@ -45,7 +45,8 @@ func _ready() -> void:
 
 func open(ending_id: String) -> void:
 	_ending_id = ending_id
-	_steps = EndingDirector.get_full_ending_steps(ending_id)
+	## 只播尾声。高潮已在觉醒面板演过（赶走短终章则跟在 BE_N07 后）。
+	_steps = EndingDirector.get_epilogue_steps(ending_id)
 	_begin_show()
 
 

@@ -69,10 +69,12 @@ func commit_leak_from_context(ctx: Dictionary) -> void:
 	var node_id := str(ctx.get("node_id", "")).strip_edges()
 	if node_id != "" and not GameState.has_leak_seen(node_id):
 		GameState.mark_leak_seen(node_id)
+	if GameState.IS_TEN_DAY_EDITION:
+		PlayerNotebookService.on_live_slip("player_knows_detail_d6")
 
 
 func _pack_leak_context(anchor: Dictionary, node_id: String) -> Dictionary:
-	var summary := str(anchor.get("summary", "")).strip_edges()
+	var summary := _anchor_notebook_line(anchor)
 	if summary == "" and node_id != "" and not GameState.IS_TEN_DAY_EDITION:
 		summary = _demo_leak_fallback(node_id)
 	if summary == "":
@@ -182,7 +184,7 @@ func try_leak_line(context: String = "session") -> String:
 			return ""
 		return _fallback_from_prefs(GameState.get_week_index())
 
-	var summary := str(anchor.get("summary", "")).strip_edges()
+	var summary := _anchor_notebook_line(anchor)
 	if summary == "":
 		return ""
 
@@ -268,7 +270,7 @@ func _journal_memory_entries() -> Array[Dictionary]:
 		if highlights is Array:
 			for highlight in highlights:
 				var summary := str(highlight).strip_edges()
-				if summary == "":
+				if summary == "" or MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary):
 					continue
 				entries.append({
 					"id": "journal_%d_%d" % [int(entry.get("day", 0)), entries.size()],
@@ -278,7 +280,7 @@ func _journal_memory_entries() -> Array[Dictionary]:
 					"facts": {"source": "day_journal"},
 				})
 		var summary := str(entry.get("summary", "")).strip_edges()
-		if summary != "":
+		if summary != "" and not MemoryService.looks_like_journal_digest(summary) and not MemoryService.looks_like_system_label(summary):
 			entries.append({
 				"id": "journal_summary_%d" % int(entry.get("day", 0)),
 				"kind": "day_end",
@@ -324,7 +326,7 @@ func _node_match_score(entry: Dictionary, node_id: String) -> float:
 
 
 func _format_anchor_leak(anchor: Dictionary, node_id: String, context: String) -> String:
-	var summary := str(anchor.get("summary", "")).strip_edges()
+	var summary := _anchor_notebook_line(anchor)
 	if summary == "":
 		if GameState.IS_TEN_DAY_EDITION:
 			return ""
@@ -340,16 +342,23 @@ func _format_anchor_leak(anchor: Dictionary, node_id: String, context: String) -
 			return _wrap_anchor_summary(summary, context)
 
 
+func _anchor_notebook_line(anchor: Dictionary) -> String:
+	return MemoryService.notebook_line_of(anchor)
+
+
 func _wrap_anchor_summary(summary: String, context: String) -> String:
+	var cleaned := summary.strip_edges()
+	if cleaned == "" or MemoryService.looks_like_journal_digest(cleaned) or MemoryService.looks_like_system_label(cleaned):
+		return ""
 	match context:
 		"session":
-			return "不知道为什么，%s 这个画面突然冒了出来。" % summary
+			return "不知道为什么……%s" % cleaned
 		"chat":
-			return "你刚才说的，让我想起了：%s" % summary
+			return "你刚才说的，让我想起：%s" % cleaned
 		"react":
-			return "看着现在的田，我想起%s。" % summary
+			return "看着现在的田，忽然想起：%s" % cleaned
 		_:
-			return "我记得%s。" % summary
+			return "……%s" % cleaned
 
 
 func _leak_chance() -> float:
@@ -370,10 +379,12 @@ func _pick_anchor() -> Dictionary:
 		var item: Dictionary = entry
 		if str(item.get("kind", "")) == "promise_done":
 			continue
-		var summary := str(item.get("summary", "")).strip_edges()
+		var summary := MemoryService.notebook_line_of(item)
 		if summary == "":
 			continue
 		var score := float(item.get("importance", 0.5))
+		if MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary):
+			continue
 		if score > best_score:
 			best_score = score
 			best = item
