@@ -8,6 +8,7 @@ var _queue: Array = []
 var _last_player_request := ""
 var _last_executed_steps: Array[String] = []
 var _player_was_affirmative := false
+var _hold_next_step: bool = false
 
 const OFFER_STEP_MAP := {
 	PendingOfferStore.OfferType.WATER: "water_all",
@@ -105,7 +106,7 @@ var _last_nudge_reply := ""
 
 func try_confirm_offer(text: String) -> Dictionary:
 	if not PendingOfferStore.has_any():
-		PendingOfferStore.infer_from_recent_companion_lines(PendingOfferStore.recent_companion_lines(4))
+		PendingOfferStore.infer_from_recent_companion_lines(PendingOfferStore.recent_companion_lines(1))
 	if not PendingOfferStore.has_any():
 		return {"handled": false}
 
@@ -145,8 +146,17 @@ func execute_plan_from_api(plan: Array, player_text: String) -> Dictionary:
 	return enqueue_and_start(normalized, player_text)
 
 
-func execute_reply_followthrough(reply_text: String, api_intent: Dictionary) -> Dictionary:
+func execute_reply_followthrough(reply_text: String, api_intent: Dictionary, player_text: String = "") -> Dictionary:
 	var executed: Array[String] = []
+	var source := player_text.strip_edges()
+	if source == "":
+		source = str(api_intent.get("raw_text", "")).strip_edges()
+	if (
+		source != ""
+		and not IntentParser.looks_like_farm_directive(source)
+		and not PendingOfferStore.is_confirmable_player(source)
+	):
+		return {"executed_steps": executed, "handled": false}
 	var plan: Variant = api_intent.get("plan", [])
 	if plan is Array and not plan.is_empty():
 		var batch := execute_plan_from_api(plan, str(api_intent.get("raw_text", "")))
@@ -350,7 +360,14 @@ func _continue_after_sync(prev_reply: String) -> Dictionary:
 	return _start_next_step()
 
 
-func _on_task_completed(_task_type: int, summary: String, _facts: Dictionary) -> void:
+func has_pending_steps() -> bool:
+	return not _queue.is_empty()
+
+
+func continue_after_task_speech() -> void:
+	if not _hold_next_step:
+		return
+	_hold_next_step = false
 	if _queue.is_empty():
 		return
 	var next := _start_next_step()
@@ -358,7 +375,14 @@ func _on_task_completed(_task_type: int, summary: String, _facts: Dictionary) ->
 	if reply != "":
 		get_tree().call_group("main_ui", "append_companion_line_from_orchestrator", reply)
 	elif _queue.is_empty():
-		plan_finished.emit(summary)
+		plan_finished.emit("")
+
+
+func _on_task_completed(_task_type: int, _summary: String, _facts: Dictionary) -> void:
+	if _queue.is_empty():
+		return
+	## 等收工口播完再开工，避免「好，我这就去浇」盖掉刚做完的那句。
+	_hold_next_step = true
 
 
 func _step_start_reply(step_key: String) -> String:

@@ -52,7 +52,11 @@ func _resolve_d35_ending(flashback_skipped: bool) -> String:
 	var promise: Dictionary = GameState.long_term_memory.get("promise", {})
 
 	if GameState.IS_TEN_DAY_EDITION:
-		if recovery < 0.22 or interaction < 0.18 or (nights == 0 and GameState.affection < 12):
+		## D7 才有夜坐。此前 nights=0 不能当 Bad 证据，否则留下线 D6 会锁成空土垄。
+		var sit_night_passed := GameState.game_day >= 8
+		if recovery < 0.22 or interaction < 0.18:
+			return ENDING_BAD
+		if sit_night_passed and nights == 0 and GameState.affection < 12:
 			return ENDING_BAD
 		if _meets_true(flashback_skipped, recovery, fragments, nights, promise, factors):
 			return ENDING_TRUE

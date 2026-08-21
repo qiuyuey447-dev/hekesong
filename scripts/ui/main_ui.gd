@@ -84,6 +84,8 @@ var _pending_harvest_offer: bool = false
 var _skip_player_chat_reply: bool = false
 var _pending_feed_item_id: String = ""
 var _pending_feed_refuse: bool = false
+var _pending_feed_leak: Dictionary = {}
+var _pending_feed_request_id: int = -1
 var _last_chat_activity_msec: int = 0
 var _deferred_invite_speech: Dictionary = {}
 var _pending_invite_story_beat_id: String = ""
@@ -128,6 +130,17 @@ var _typewriter_full_text: String = ""
 var _typewriter_visible_count: int = 0
 var _transient_companion_aside: String = ""
 var _player_echo_base_y: float = 0.0
+var _farm_reaction_reason := ""
+var _farm_reaction_at_msec := 0
+var _pending_farm_speech: Dictionary = {}
+var _farm_speech_token: int = 0
+var _farm_speech_waiting_busy: bool = false
+var _pending_task_facts: Dictionary = {}
+var _pending_task_continue_water: bool = false
+var _keep_spoken_line: bool = false
+const FARM_REACTION_DEBOUNCE_MSEC := 2800
+const FARM_SPEECH_OK_DELAY_SEC := 1.15
+const FARM_SPEECH_FAIL_DELAY_SEC := 0.4
 
 
 func _ready() -> void:
@@ -1383,8 +1396,12 @@ func _has_unfinished_story_beat_today() -> bool:
 
 
 func _maybe_show_story_beat(force_open: bool = false) -> void:
-	if _story_beat_blocked or GameState.is_story_complete():
+	if GameState.is_story_complete():
 		return
+	if _story_beat_blocked:
+		if _story_beat_panel != null and _story_beat_panel.visible:
+			return
+		_story_beat_blocked = false
 	if GameState.should_show_awakening():
 		return
 	if _story_choice_blocked:
@@ -1399,6 +1416,9 @@ func _maybe_show_story_beat(force_open: bool = false) -> void:
 	if beat.is_empty() and StoryBeatDirector.has_pending_night_beat():
 		if StoryBeatDirector.can_trigger_night_beat_at_hollow() or force_open:
 			beat = StoryBeatDirector.get_pending_night_beat(_pending_beat_yesterday_echo)
+	if beat.is_empty() and GameState.has_pending_story_beat_tail():
+		call_deferred("_maybe_resume_beat_tail")
+		return
 	if beat.is_empty():
 		if not force_open:
 			StoryBeatDirector.refresh_daily_schedule()
@@ -1434,8 +1454,12 @@ func _open_story_beat_panel(beat: Dictionary) -> void:
 
 
 func _maybe_resume_beat_tail() -> void:
-	if _story_beat_blocked or GameState.is_story_complete():
+	if GameState.is_story_complete():
 		return
+	if _story_beat_blocked:
+		if _story_beat_panel != null and _story_beat_panel.visible:
+			return
+		_story_beat_blocked = false
 	if _story_choice_blocked:
 		_yield_eviction_for_story()
 	if _story_beat_panel.visible or _awakening_panel.visible or _ending_panel.visible:
@@ -1822,35 +1846,35 @@ func on_plot_clicked(plot_id: int, _world_pos: Vector2) -> void:
 
 	if stage == 0:
 		if GameState.plant_turnip(plot_id):
-			_companion_farm_reaction("plant_ok")
+			_queue_farm_speech("plant_ok", plot_id)
 			_refresh_hud()
 		else:
-			_companion_farm_reaction("no_seeds")
+			_queue_farm_speech("no_seeds", plot_id)
 		return
 
 	if GameState.can_harvest(plot_id):
 		if GameState.harvest_turnip(plot_id):
-			_companion_farm_reaction("harvest_ok")
+			_queue_farm_speech("harvest_ok", plot_id)
 			_refresh_hud()
 		else:
-			_companion_farm_reaction("harvest_failed")
+			_queue_farm_speech("harvest_failed", plot_id)
 		return
 
 	if stage >= GameState.MATURE_STAGE:
-		_companion_farm_reaction("not_mature")
+		_queue_farm_speech("not_mature", plot_id)
 		return
 
 	if plot_id in GameState.watered_plots or bool(plot.get("watered", false)):
-		_companion_farm_reaction("already_watered")
+		_queue_farm_speech("already_watered", plot_id)
 		return
 
 	if GameState.weather_today == GameState.WEATHER_RAIN:
-		_companion_farm_reaction("rain")
+		_queue_farm_speech("rain", plot_id)
 		return
 
 	GameState.mark_plot_watered(plot_id)
 	AmbientAudio.play_prop_sfx("water")
-	_companion_farm_reaction("water_ok")
+	_queue_farm_speech("water_ok", plot_id)
 	_refresh_hud()
 
 
@@ -2078,9 +2102,8 @@ func _maybe_trigger_persona_shift() -> void:
 
 
 func _on_feed_requested(item_id: String) -> void:
-	if _npc_busy:
-		_feed_panel.set_status_message("小狸还在想上一句话…")
-		return
+	NpcBridge.cancel_in_flight()
+	_set_npc_busy(false)
 
 	var check := GameState.inspect_feed_attempt(item_id)
 	match str(check.get("status", "")):
@@ -2096,7 +2119,7 @@ func _on_feed_requested(item_id: String) -> void:
 		"refuse_already", "refuse_many":
 			_pending_feed_item_id = item_id
 			_pending_feed_refuse = true
-			_request_companion_line("companion_feed", {
+			_pending_feed_request_id = _request_companion_line("companion_feed", {
 				"feed_item": check.get("item", {}),
 				"refused": true,
 				"pester_count": int(check.get("pester_count", 1)),
@@ -2106,10 +2129,12 @@ func _on_feed_requested(item_id: String) -> void:
 		"ok":
 			_pending_feed_item_id = item_id
 			_pending_feed_refuse = false
-			_request_companion_line("companion_feed", {
+			_pending_feed_leak = LeakageEngine.peek_feed_leak_context(item_id)
+			_pending_feed_request_id = _request_companion_line("companion_feed", {
 				"feed_item": check.get("item", {}),
 				"refused": false,
 				"previous_replies": GameState.get_today_feed_replies(),
+				"leak_context": _pending_feed_leak,
 			})
 			return
 		_:
@@ -2146,18 +2171,22 @@ func _on_task_progress(_seconds_left: float) -> void:
 	pass
 
 
-func _on_task_completed(task_type: TaskSystem.TaskType, _summary: String, game_facts: Dictionary) -> void:
+func _on_task_completed(task_type: TaskSystem.TaskType, summary: String, game_facts: Dictionary) -> void:
 	_refresh_hud()
+	## 代买到达商店时买种对话已经开口，不再叠一句「到了」。编排器仍要续下一步。
+	if _auto_seed_shop_flow and task_type == TaskSystem.TaskType.SHOP:
+		ChoreOrchestrator.continue_after_task_speech()
+		return
 	if _farm_chain_after_task == "water_all" and task_type == TaskSystem.TaskType.PLANT:
 		_farm_chain_after_task = ""
-		var planted_line := NpcFallback.task_complete(game_facts, {})
-		if planted_line.strip_edges() != "":
-			_append_companion_message(planted_line)
-		_try_start_water_all_after_buy(true)
-		return
-	if _auto_seed_shop_flow and task_type == TaskSystem.TaskType.SHOP:
-		return
-	_request_companion_line("task_complete", {"game_facts": game_facts})
+		_pending_task_continue_water = true
+	_pending_task_facts = game_facts.duplicate(true)
+	_pending_task_facts["summary"] = summary
+	if ChoreOrchestrator.has_pending_steps():
+		_pending_task_facts["has_next_chore"] = true
+	if _pending_task_continue_water:
+		_pending_task_facts["has_next_chore"] = true
+	_request_companion_line("task_complete", {"game_facts": _pending_task_facts})
 
 
 func _on_next_day_pressed() -> void:
@@ -2315,10 +2344,11 @@ func sleep_from_companion() -> void:
 func _try_sleep_from_chat() -> void:
 	_queued_busy_chat = ""
 	if _has_unfinished_story_beat_today():
-		if StoryBeatDirector.should_force_schedule_now():
-			call_deferred("_maybe_show_story_beat", true)
 		_system_hint("blocking_sleep_story")
-		_append_companion_message("信纸还没翻完呢。看完再睡？")
+		if GameState.has_pending_story_beat_tail():
+			call_deferred("_maybe_resume_beat_tail")
+		else:
+			call_deferred("_maybe_show_story_beat", true)
 		return
 	TaskSystem.reconcile_stale_task()
 	if TaskSystem.is_busy():
@@ -2348,6 +2378,43 @@ func _send_chat_async(text: String) -> void:
 	if _is_gameplay_locked():
 		return
 
+	if PlayerNotebookService.looks_like_write_request(trimmed):
+		var write_result := PlayerNotebookService.write_from_player_chat(trimmed)
+		if bool(write_result.get("ok", false)):
+			CompanionDirector.notify_player_active()
+			_mark_chat_activity()
+			_clear_companion_aside()
+			_chat_input.clear()
+			GameState.record_player_chat(trimmed)
+			_append_player_message(trimmed)
+			_hint("记下了。")
+			return
+		if str(write_result.get("reason", "")) == "dup":
+			_hint("这页已经有了。")
+			return
+		_hint("记下什么？把那句再说一遍。")
+		return
+
+	if MemoryService.looks_like_pin_request(trimmed):
+		var pin_result := MemoryService.pin_from_player_chat(trimmed)
+		if bool(pin_result.get("ok", false)):
+			CompanionDirector.notify_player_active()
+			_mark_chat_activity()
+			_clear_companion_aside()
+			_chat_input.clear()
+			GameState.record_player_chat(trimmed)
+			_append_player_message(trimmed)
+			var pinned_summary := str(pin_result.get("summary", "")).strip_edges()
+			if pinned_summary != "":
+				var quoted := MemoryService.notebook_quote_for_speech(pinned_summary)
+				if quoted == "":
+					_append_companion_message("写进本子了。")
+				else:
+					_append_companion_message("写进本子了——%s。" % quoted)
+			else:
+				_append_companion_message("写进本子了。")
+			return
+
 	# 睡觉指令不排队等 LLM：否则会在次日清晨才被当作普通聊天处理。
 	if IntentParser.looks_like_sleep_request(trimmed):
 		CompanionDirector.notify_player_active()
@@ -2374,6 +2441,22 @@ func _send_chat_async(text: String) -> void:
 	_append_player_message(trimmed)
 
 	_ensure_pending_invite_delivered()
+	_expire_stale_farm_offers(trimmed)
+
+	if _try_handle_seed_quantity_reply(trimmed):
+		return
+
+	if _try_handle_shop_offer_reply(trimmed):
+		return
+
+	if _try_answer_missed_purchase(trimmed):
+		return
+
+	if _try_answer_why_helping(trimmed):
+		return
+
+	if _try_answer_harvest_attribution(trimmed):
+		return
 
 	var chore_pre := ChoreOrchestrator.handle_player_message(trimmed)
 	if bool(chore_pre.get("handled", false)):
@@ -2389,24 +2472,11 @@ func _send_chat_async(text: String) -> void:
 	if _try_answer_planting_rebuttal(trimmed):
 		return
 
-	if MemoryService.looks_like_pin_request(trimmed):
-		var pin_result := MemoryService.pin_from_player_chat(trimmed)
-		if bool(pin_result.get("ok", false)):
-			var pinned_summary := str(pin_result.get("summary", "")).strip_edges()
-			if pinned_summary != "":
-				_append_companion_message("写进本子了——「%s」。" % pinned_summary)
-			else:
-				_append_companion_message("写进本子了。")
-			return
-
 	if IntentParser.looks_like_stop_farm_chore(trimmed):
 		if _try_cancel_active_chore_from_chat():
 			_pending_chat_text = ""
 			_append_companion_message("好。那我先停下手上的。")
 			return
-
-	if _try_handle_seed_quantity_reply(trimmed):
-		return
 
 	if ShopDelegate.is_affirmative_reply(trimmed):
 		_maybe_arm_pending_from_last_companion_line()
@@ -2422,9 +2492,6 @@ func _send_chat_async(text: String) -> void:
 			return
 
 	if _try_handle_water_offer_reply(trimmed):
-		return
-
-	if _try_handle_shop_offer_reply(trimmed):
 		return
 
 	if _try_handle_plant_offer_reply(trimmed):
@@ -2475,10 +2542,10 @@ func _send_chat_async(text: String) -> void:
 	})
 
 
-func _request_companion_line(event: String, extra: Dictionary = {}) -> void:
+func _request_companion_line(event: String, extra: Dictionary = {}) -> int:
 	_pending_session_absence = event == "session_start" and bool(extra.get("include_absence_comeback", false))
 	_set_npc_busy(true)
-	NpcBridge.request_event(event, extra)
+	return NpcBridge.request_event(event, extra)
 
 
 func _on_npc_reply_ready(
@@ -2500,8 +2567,24 @@ func _on_npc_reply_ready(
 		_pending_react_facts = {}
 		if react_type == "persona_shift":
 			GameState.mark_persona_shift_announced(str(react_facts.get("dimension", "")))
-		if reacted != "" and reacted != "……":
-			_append_companion_message(reacted)
+		if reacted == "" or reacted == "……":
+			var snapshot := WorldSnapshot.capture({
+				"react_type": react_type,
+				"react_facts": react_facts,
+			})
+			reacted = NpcFallback.companion_react(
+				react_type,
+				snapshot,
+				StoryDirector.get_story_hint(),
+				GameState.get_stage(),
+				MemoryService.get_context_for_event("companion_react", {})
+			)
+		_speak_react_line(reacted, react_type)
+		return
+
+	if event == "task_complete":
+		_set_npc_busy(false)
+		_speak_task_complete_line(text)
 		return
 
 	if event == "story_beat":
@@ -2570,7 +2653,7 @@ func _on_npc_reply_ready(
 		if not _chat_action_handled:
 			_try_execute_chat_intent(false)
 		if not _chat_action_handled:
-			var follow := ChoreOrchestrator.execute_reply_followthrough(display_text, chat_api_intent)
+			var follow := ChoreOrchestrator.execute_reply_followthrough(display_text, chat_api_intent, _pending_chat_text)
 			llm_executed_steps = follow.get("executed_steps", [])
 			if bool(follow.get("handled", false)):
 				_chat_action_handled = true
@@ -2676,8 +2759,7 @@ func _on_npc_request_failed(_request_id: int, event: String, _error: String) -> 
 			GameState.get_stage(),
 			MemoryService.get_context_for_event("companion_react", {})
 		)
-		if local.strip_edges() != "":
-			_append_companion_message(local)
+		_speak_react_line(local, react_type)
 		if react_type == "persona_shift":
 			GameState.mark_persona_shift_announced(str(react_facts.get("dimension", "")))
 		return
@@ -2688,15 +2770,20 @@ func _on_npc_request_failed(_request_id: int, event: String, _error: String) -> 
 		item,
 		GameState.get_today_feed_replies(),
 		_pending_feed_refuse,
-		GameState.feed_pester_count
+		GameState.feed_pester_count,
+		_pending_feed_leak
 	)
 	_handle_companion_feed_reply(_request_id, fallback, true)
 
 
 func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: bool) -> void:
+	if _pending_feed_request_id >= 0 and request_id != _pending_feed_request_id:
+		return
 	_set_npc_busy(false)
 	var item := ShopCatalog.get_treat_item(_pending_feed_item_id)
 	var previous := GameState.get_today_feed_replies()
+	if _looks_like_stale_feed_text(text):
+		text = ""
 	var reply := _finalize_feed_reply(text, item, previous, _pending_feed_refuse)
 
 	if _pending_feed_refuse:
@@ -2706,6 +2793,8 @@ func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: 
 		_show_api_source_hint(request_id, used_fallback)
 		_pending_feed_item_id = ""
 		_pending_feed_refuse = false
+		_pending_feed_leak = {}
+		_pending_feed_request_id = -1
 		return
 
 	var commit := GameState.commit_feed_treat(_pending_feed_item_id)
@@ -2713,12 +2802,16 @@ func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: 
 		_feed_panel.set_status_message("投喂没成功，零食还在背包里。")
 		_pending_feed_item_id = ""
 		_pending_feed_refuse = false
+		_pending_feed_leak = {}
+		_pending_feed_request_id = -1
 		return
 
 	GameState.register_feed_reply(reply)
 	_refresh_hud()
 	# 投喂结果由她的回话交代，不再叠系统旁白。
 	_append_companion_message(reply)
+	if not _pending_feed_leak.is_empty():
+		LeakageEngine.commit_feed_leak(_pending_feed_leak)
 	if GameState.try_fulfill_promise_from_feed():
 		var fulfill_line := StoryNodeCopy.get_system("promise_fulfilled_feed_companion").strip_edges()
 		if fulfill_line != "":
@@ -2735,6 +2828,25 @@ func _handle_companion_feed_reply(request_id: int, text: String, used_fallback: 
 
 	_pending_feed_item_id = ""
 	_pending_feed_refuse = false
+	_pending_feed_leak = {}
+	_pending_feed_request_id = -1
+
+
+func _looks_like_stale_feed_text(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	for turn in GameState.snapshot_today_chat_log():
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "companion":
+			continue
+		if str(turn.get("text", "")).strip_edges() == cleaned:
+			return true
+	for said in GameState.get_recent_initiation_lines(4):
+		if str(said).strip_edges() == cleaned:
+			return true
+	return false
 
 
 func _finalize_feed_reply(
@@ -2750,7 +2862,8 @@ func _finalize_feed_reply(
 		item,
 		previous,
 		refused,
-		GameState.feed_pester_count
+		GameState.feed_pester_count,
+		_pending_feed_leak if not refused else {}
 	)
 
 
@@ -3067,6 +3180,8 @@ func _try_handle_harvest_offer_reply(text: String) -> bool:
 		return false
 
 	var trimmed := text.strip_edges()
+	if IntentParser.looks_like_chore_question(trimmed):
+		return false
 	if ShopDelegate.is_negative_reply(trimmed):
 		_pending_harvest_offer = false
 		_append_companion_message("好，你想收的时候再叫我。")
@@ -3117,6 +3232,53 @@ func _try_handle_harvest_offer_reply(text: String) -> bool:
 	return true
 
 
+func _try_answer_why_helping(text: String) -> bool:
+	if not IntentParser.looks_like_why_helping(text):
+		return false
+	_pending_harvest_offer = false
+	if StoryDirector.is_stranger_mode():
+		_append_companion_message("田熟了。霜要来。跟认不认得你没关系。")
+	else:
+		_append_companion_message("熟了就该收。不是因为别的。")
+	_chat_action_handled = true
+	return true
+
+
+func _try_answer_harvest_attribution(text: String) -> bool:
+	if not IntentParser.looks_like_harvest_attribution(text):
+		return false
+	_pending_harvest_offer = false
+	var last := GameState.last_task_summary.strip_edges()
+	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+	if "收" in last and ("完" in last or "好" in last):
+		_append_companion_message("是我拔的。田里那几根。")
+	elif harvestable > 0:
+		_append_companion_message("还没收。熟了的那几垄，你要我去吗？")
+	else:
+		_append_companion_message("不是我。这会儿田里还没熟的。")
+	_chat_action_handled = true
+	return true
+
+
+func _try_answer_missed_purchase(text: String) -> bool:
+	if not IntentParser.looks_like_missed_purchase(text):
+		return false
+	if _queued_seed_count > 0:
+		_append_companion_message("记下了，买 %d 包。手上这趟忙完就去。" % _queued_seed_count)
+		_chat_action_handled = true
+		return true
+	if _pending_seed_purchase or _pending_shop_offer or _auto_seed_shop_flow:
+		_append_companion_message("还没买上。你说个数字，我现在去。")
+		_seed_quantity_prompted = true
+		_pending_seed_purchase = true
+		_chat_action_handled = true
+		return true
+	_append_companion_message("还没买。刚才那句我接岔了。现在去商店？")
+	_pending_shop_offer = true
+	_chat_action_handled = true
+	return true
+
+
 func _try_answer_planting_rebuttal(text: String) -> bool:
 	if not IntentParser.looks_like_planting_rebuttal(text):
 		return false
@@ -3147,7 +3309,15 @@ func _try_handle_seed_quantity_reply(text: String) -> bool:
 	if _seed_purchase_resolved:
 		return false
 	if not _pending_seed_purchase and not _auto_seed_shop_flow:
-		return false
+		var last_line := _last_companion_chat_line()
+		if ShopDelegate.parse_quantity(text) > 0 and last_line != "" and ShopDelegate.looks_like_shop_offer(last_line):
+			_pending_shop_offer = true
+			_pending_harvest_offer = false
+			_pending_seed_purchase = true
+		elif _pending_shop_offer and ShopDelegate.parse_quantity(text) > 0:
+			_pending_seed_purchase = true
+		else:
+			return false
 
 	var trimmed := text.strip_edges()
 	if trimmed in ["取消", "算了", "不用了", "不买了"]:
@@ -3171,7 +3341,8 @@ func _try_handle_seed_quantity_reply(text: String) -> bool:
 	if TaskSystem.is_busy():
 		_queued_seed_count = count
 		_pending_seed_purchase = true
-		_append_companion_message("好，记下了，买 %d 包萝卜种子。" % count)
+		_pending_shop_offer = false
+		_append_companion_message("好，记下了，买 %d 包。忙完就去买。" % count)
 		return true
 
 	_execute_companion_seed_purchase(count, true)
@@ -3261,17 +3432,13 @@ func _begin_plant_and_water_chain() -> void:
 	_try_start_water_all_after_buy()
 
 
-func _try_start_water_all_after_buy(from_plant_chain: bool = false) -> void:
+func _try_start_water_all_after_buy(_from_plant_chain: bool = false) -> void:
 	var unwatered := GameState.get_unwatered_growing_plot_ids()
 	if unwatered.is_empty():
 		return
 	if TaskSystem.start_water_all_task():
 		_pending_water_offer = false
-		if from_plant_chain:
-			_append_companion_message("我去给它们浇点水。")
 		return
-	if from_plant_chain:
-		pass
 	_offer_water_help()
 
 
@@ -3293,6 +3460,8 @@ func _try_handle_water_offer_reply(text: String) -> bool:
 		return false
 
 	var trimmed := text.strip_edges()
+	if IntentParser.looks_like_chore_question(trimmed):
+		return false
 	if ShopDelegate.is_negative_reply(trimmed):
 		_pending_water_offer = false
 		_append_companion_message("好，那你需要的时候再叫我。")
@@ -3322,7 +3491,7 @@ func _try_handle_water_offer_reply(text: String) -> bool:
 
 
 func _try_handle_shop_offer_reply(text: String) -> bool:
-	## 玩家对「要不要我去买种子」回「可以」时，直接开代买流程，不再只靠 LLM 嘴上答应。
+	## 玩家对「要不要我去买种子」回「可以」或「买 5 包」时，直接开代买流程。
 	if not _pending_shop_offer:
 		return false
 
@@ -3331,6 +3500,14 @@ func _try_handle_shop_offer_reply(text: String) -> bool:
 		_pending_shop_offer = false
 		_append_companion_message("好，想买的时候再叫我。")
 		return true
+
+	if ShopDelegate.parse_quantity(trimmed) > 0:
+		_pending_shop_offer = false
+		_begin_auto_seed_shop_flow(trimmed)
+		return true
+
+	if IntentParser.looks_like_chore_question(trimmed):
+		return false
 
 	if not ShopDelegate.is_affirmative_reply(trimmed):
 		return false
@@ -3354,6 +3531,8 @@ func _try_handle_plant_offer_reply(text: String) -> bool:
 		return false
 
 	var trimmed := text.strip_edges()
+	if IntentParser.looks_like_chore_question(trimmed):
+		return false
 	if ShopDelegate.is_negative_reply(trimmed):
 		_pending_plant_offer = false
 		_append_companion_message("好，想种的时候再叫我。")
@@ -3511,6 +3690,13 @@ func _try_start_plant_from_correction(text: String) -> bool:
 func _try_execute_companion_followthrough(reply_text: String, api_intent: Dictionary) -> void:
 	if _chat_action_handled or TaskSystem.is_busy():
 		return
+	var player_text := _pending_chat_text.strip_edges()
+	if (
+		player_text != ""
+		and not IntentParser.looks_like_farm_directive(player_text)
+		and not PendingOfferStore.is_confirmable_player(player_text)
+	):
+		return
 
 	if not api_intent.is_empty() and IntentParser.is_action_intent(api_intent):
 		var guard := PersonaGuard.check_intent(api_intent)
@@ -3639,6 +3825,36 @@ func _arm_pending_offers_from_companion_line(text: String) -> void:
 	_pending_harvest_offer = PendingOfferStore.get_type() == PendingOfferStore.OfferType.HARVEST
 
 
+func _companion_line_is_live_farm_offer(text: String) -> bool:
+	var line := text.strip_edges()
+	if line == "":
+		return false
+	return (
+		ShopDelegate.looks_like_shop_offer(line)
+		or ShopDelegate.looks_like_shop_seed_offer(line)
+		or ShopDelegate.looks_like_plant_offer(line)
+		or ShopDelegate.looks_like_water_offer(line)
+		or ShopDelegate.looks_like_harvest_offer(line)
+		or ShopDelegate.looks_like_seed_quantity_prompt(line)
+	)
+
+
+func _expire_stale_farm_offers(player_text: String) -> void:
+	## 上一句已不是农事邀约时，丢掉残留的「要买几包 / 我去种」，避免闲聊「对啊」当成确认。
+	var last_line := _last_companion_chat_line()
+	if _companion_line_is_live_farm_offer(last_line):
+		return
+	if ShopDelegate.parse_quantity(player_text) > 0 and (_pending_seed_purchase or _auto_seed_shop_flow or _pending_shop_offer):
+		return
+	_pending_shop_offer = false
+	_pending_plant_offer = false
+	_pending_water_offer = false
+	_pending_harvest_offer = false
+	if not ShopDelegate.looks_like_seed_quantity_prompt(last_line):
+		_clear_seed_purchase_flow()
+	PendingOfferStore.clear()
+
+
 func _maybe_arm_pending_from_last_companion_line() -> void:
 	## 玩家回「好/行」时，若 pending 未挂上（LLM 措辞偏口语），再扫上一句小狸台词。
 	if _pending_shop_offer or _pending_plant_offer or _pending_water_offer or _pending_harvest_offer:
@@ -3711,6 +3927,8 @@ func _set_npc_busy(busy: bool) -> void:
 		_queued_busy_chat = ""
 		if queued != "":
 			call_deferred("_send_chat_async", queued)
+		elif _farm_speech_waiting_busy or not _pending_farm_speech.is_empty():
+			call_deferred("_flush_farm_speech")
 
 
 func _set_companion_thinking(active: bool) -> void:
@@ -3770,10 +3988,12 @@ func _append_player_message(text: String) -> void:
 
 func _append_companion_message(text: String, ephemeral: bool = false, reply_contract: Dictionary = {}) -> void:
 	var raw := text.strip_edges()
-	if not _body_action_handled:
+	var keep_line := _keep_spoken_line
+	_keep_spoken_line = false
+	if not _body_action_handled and not keep_line:
 		_maybe_sync_companion_move_from_line(raw)
-	var cleaned := ResponseValidator.strip_stage_directions(raw)
-	if cleaned != "" and ResponseValidator.looks_repetitive_companion_line(cleaned):
+	var cleaned := ResponseValidator.sanitize_spoken_reply(raw)
+	if cleaned != "" and not keep_line and ResponseValidator.looks_repetitive_companion_line(cleaned):
 		if not SayDoValidator.should_skip_repetitive_fallback(_pending_chat_text):
 			var previous := _recent_companion_line_texts(8)
 			cleaned = NpcFallback.pick_non_duplicate([
@@ -3783,6 +4003,7 @@ func _append_companion_message(text: String, ephemeral: bool = false, reply_cont
 				"好，我在这儿。",
 			], previous)
 		if cleaned.strip_edges() == "":
+			_body_action_handled = false
 			return
 	_transient_companion_aside = ""
 	if cleaned != "":
@@ -3790,7 +4011,8 @@ func _append_companion_message(text: String, ephemeral: bool = false, reply_cont
 		if not contract.is_empty():
 			contract["reply"] = cleaned
 		GameState.record_chat_turn("companion", cleaned, ephemeral, contract)
-		_arm_pending_offers_from_companion_line(cleaned)
+		if not keep_line:
+			_arm_pending_offers_from_companion_line(cleaned)
 	_render_chat_log()
 	_body_action_handled = false
 
@@ -3835,19 +4057,23 @@ func _render_chat_log() -> void:
 		history = GameState.snapshot_today_chat_log()
 	else:
 		history = GameState.get_chat_history_for_ui()
+	var visible: Array[Dictionary] = []
+	for turn in history:
+		if not turn is Dictionary:
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or GameState.looks_like_chat_counter_label(line):
+			continue
+		visible.append(turn)
 	var first := true
-	if history.is_empty() and _transient_companion_aside == "":
+	if visible.is_empty() and _transient_companion_aside == "":
 		_chat_log.append_text("[color=#8A6E4F]……[/color]")
 		_sync_companion_sign_for_surface(false)
 		_scroll_chat_to_end()
 		return
-	for turn in history:
-		if not turn is Dictionary:
-			continue
+	for turn in visible:
 		var role := str(turn.get("role", ""))
 		var line := str(turn.get("text", "")).strip_edges()
-		if line == "":
-			continue
 		var prefix := "" if first else "\n"
 		first = false
 		if role == "player":
@@ -3870,12 +4096,21 @@ func _sync_companion_sign_for_surface(aside_active: bool) -> void:
 		_companion_sign.visible = true
 		return
 	var history := GameState.snapshot_today_chat_log() if GameState.IS_TEN_DAY_EDITION else GameState.get_chat_history_for_ui()
-	if history.is_empty():
+	var last: Dictionary = {}
+	for i in range(history.size() - 1, -1, -1):
+		var turn: Variant = history[i]
+		if not turn is Dictionary:
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or GameState.looks_like_chat_counter_label(line):
+			continue
+		last = turn
+		break
+	if last.is_empty():
 		_companion_sign.text = "和她说说话"
 		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_companion_sign.visible = true
 		return
-	var last := history[history.size() - 1]
 	if str(last.get("role", "")) == "companion":
 		_companion_sign.text = str(GameState.companion_name)
 		_companion_sign.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -3913,9 +4148,123 @@ func _ambient_sidewrite_fallback() -> String:
 
 
 func _companion_farm_reaction(reason: String) -> void:
+	## 仅追跑等纯 UI 提示走本地短句。种/浇/收的开口走 _queue_farm_speech。
 	var line := PersonaGuard.reply_for_plot_click(reason).strip_edges()
-	if line != "":
-		_speak_companion_aside(line)
+	if line == "":
+		return
+	var now := Time.get_ticks_msec()
+	if reason == _farm_reaction_reason and now - _farm_reaction_at_msec < FARM_REACTION_DEBOUNCE_MSEC:
+		return
+	_farm_reaction_reason = reason
+	_farm_reaction_at_msec = now
+	_transient_companion_aside = ""
+	GameState.record_chat_turn(
+		"companion",
+		line,
+		true,
+		GameState.make_reply_contract(line, {"intent": "farm_reaction"})
+	)
+	_render_chat_log()
+
+
+func _queue_farm_speech(reason: String, plot_id: int = -1) -> void:
+	if _is_gameplay_locked() or GameState.is_story_complete():
+		return
+	var prev_reason := str(_pending_farm_speech.get("reason", ""))
+	if not _pending_farm_speech.is_empty() and prev_reason != "" and prev_reason != reason:
+		_flush_farm_speech()
+	var ids: Array = _pending_farm_speech.get("plot_ids", [])
+	if plot_id > 0 and plot_id not in ids:
+		ids.append(plot_id)
+	var count := ids.size()
+	if count <= 0:
+		count = int(_pending_farm_speech.get("plot_count", 0)) + 1
+	_pending_farm_speech = {
+		"reason": reason,
+		"action": _farm_reason_to_action(reason),
+		"ok": reason.ends_with("_ok"),
+		"plot_ids": ids,
+		"plot_count": maxi(count, 1),
+		"plot_id": plot_id,
+	}
+	_farm_speech_token += 1
+	var token := _farm_speech_token
+	var delay := FARM_SPEECH_OK_DELAY_SEC if reason.ends_with("_ok") else FARM_SPEECH_FAIL_DELAY_SEC
+	get_tree().create_timer(delay).timeout.connect(_on_farm_speech_timer.bind(token))
+
+
+func _on_farm_speech_timer(token: int) -> void:
+	if token != _farm_speech_token:
+		return
+	_flush_farm_speech()
+
+
+func _farm_reason_to_action(reason: String) -> String:
+	if reason.begins_with("plant"):
+		return "plant"
+	if reason.begins_with("harvest") or reason == "not_mature":
+		return "harvest"
+	if reason in ["water_ok", "already_watered", "rain"]:
+		return "water"
+	return reason
+
+
+func _flush_farm_speech() -> void:
+	if _pending_farm_speech.is_empty():
+		return
+	if _is_gameplay_locked() or GameState.is_story_complete():
+		_pending_farm_speech = {}
+		_farm_speech_waiting_busy = false
+		return
+	if _story_beat_panel.visible or _story_beat_blocked or _story_choice_blocked:
+		_farm_speech_waiting_busy = true
+		return
+	if _npc_busy or NpcBridge.is_request_in_flight():
+		_farm_speech_waiting_busy = true
+		return
+	_farm_speech_waiting_busy = false
+	var facts: Dictionary = _pending_farm_speech.duplicate(true)
+	_pending_farm_speech = {}
+	_pending_react_type = "player_farm"
+	_pending_react_facts = facts
+	_request_companion_line("companion_react", {
+		"react_type": "player_farm",
+		"react_facts": facts,
+	})
+
+
+func _speak_react_line(text: String, react_type: String) -> void:
+	var line := text.strip_edges()
+	if line == "" or line == "……":
+		return
+	if line == _last_companion_chat_line():
+		return
+	_keep_spoken_line = true
+	_body_action_handled = true
+	var ephemeral := react_type == "player_farm"
+	var contract := {}
+	if ephemeral:
+		contract = GameState.make_reply_contract(line, {"intent": "farm_reaction"})
+	_append_companion_message(line, ephemeral, contract)
+
+
+func _speak_task_complete_line(text: String) -> void:
+	var line := text.strip_edges()
+	if line == "" or line == "……":
+		line = NpcFallback.task_complete(_pending_task_facts, GameState.get_market_snapshot())
+	_keep_spoken_line = true
+	_body_action_handled = true
+	if line.strip_edges() != "":
+		_append_companion_message(line)
+	call_deferred("_continue_after_task_speech")
+
+
+func _continue_after_task_speech() -> void:
+	if _pending_task_continue_water:
+		_pending_task_continue_water = false
+		_try_start_water_all_after_buy(true)
+	ChoreOrchestrator.continue_after_task_speech()
+	_pending_task_facts = {}
 
 
 func _system_hint(key: String) -> void:

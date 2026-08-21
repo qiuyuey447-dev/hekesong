@@ -506,7 +506,10 @@ func _render_n16_line(beat_id: String, route_tone: String) -> String:
 				else:
 					variant = "default"
 			"cold":
-				variant = "cold"
+				if GameState.companion_can_say_player_name() and GameState.has_player_name_set():
+					variant = "mid"
+				else:
+					variant = "cold"
 			_:
 				if route_tone == "normal":
 					variant = "mid"
@@ -524,16 +527,23 @@ func _render_n16_line(beat_id: String, route_tone: String) -> String:
 	if n16.strip_edges() == "":
 		n16 = StoryNodeCopy.get_route("_N16", route_tone)
 	if n16.strip_edges() != "":
-		return StorySlotService.apply(
+		var rendered := StorySlotService.apply(
 			n16,
 			StorySlotService.build_context({"beat_id": beat_id})
 		)
+		var can_name := GameState.companion_can_say_player_name() and GameState.has_player_name_set()
+		var keep := bool(GameState.get_ending_flags().get("w2_chose_keep", false))
+		if can_name and keep and "这儿的主人" in rendered:
+			return StorySlotService.render_player_name_line(route_tone)
+		return rendered
 	return StorySlotService.render_player_name_line(route_tone)
 
 
 func _render_n02p_chat_line(_beat_id: String) -> String:
 	var companion := StorySlotService.slot("companion_name")
 	var snippet := extract_chat_snippet_for_beat(_beat_id)
+	if snippet == "":
+		return ""
 	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
 	if routed.strip_edges() != "":
 		return routed % [companion, snippet]
@@ -541,35 +551,46 @@ func _render_n02p_chat_line(_beat_id: String) -> String:
 
 
 func extract_chat_snippet_for_beat(_beat_id: String) -> String:
-	var yesterday := GameState.get_yesterday_journal_entry()
-	var snippet := str(yesterday.get("chat_summary", "")).strip_edges()
+	var snippet := LeakageEngine.pick_personal_snippet()
+	if snippet != "":
+		return normalize_personal_snippet(snippet)
+	for turn in GameState.get_recent_chat_turns(12):
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "player":
+			continue
+		snippet = str(turn.get("text", "")).strip_edges()
+		if snippet == "" or MemoryService.looks_like_player_instruction(snippet):
+			snippet = ""
+			continue
+		if MemoryService.looks_like_journal_digest(snippet) or MemoryService.looks_like_system_label(snippet):
+			snippet = ""
+			continue
+		break
 	if snippet == "":
-		var highlights: Variant = yesterday.get("highlights", [])
-		if highlights is Array:
-			for raw in highlights:
-				var line := str(raw).strip_edges()
-				if line == "":
-					continue
-				if line.begins_with("主线"):
-					continue
-				snippet = line
-				break
-	if snippet == "":
-		snippet = str(yesterday.get("summary", "")).strip_edges()
-	if snippet == "":
-		snippet = GameState.last_day_summary.strip_edges()
-	if snippet == "":
-		for turn in GameState.get_recent_chat_turns(8):
-			if not turn is Dictionary:
-				continue
-			if str(turn.get("role", "")) != "player":
-				continue
-			snippet = str(turn.get("text", "")).strip_edges()
-			if snippet != "":
-				break
-	if snippet == "":
-		snippet = "你说过的话，她本子上有一行，字迹比正文轻。"
-	return normalize_personal_snippet(snippet)
+		var yesterday := GameState.get_yesterday_journal_entry()
+		snippet = str(yesterday.get("chat_summary", "")).strip_edges()
+		if snippet == "":
+			var highlights: Variant = yesterday.get("highlights", [])
+			if highlights is Array:
+				for raw in highlights:
+					var line := str(raw).strip_edges()
+					if line == "":
+						continue
+					if line.begins_with("主线"):
+						continue
+					snippet = line
+					break
+		if snippet == "":
+			snippet = str(yesterday.get("summary", "")).strip_edges()
+		if snippet == "":
+			snippet = GameState.last_day_summary.strip_edges()
+	snippet = normalize_personal_snippet(snippet)
+	if snippet == "" or MemoryService.looks_like_journal_digest(snippet) or MemoryService.looks_like_system_label(snippet):
+		return ""
+	if MemoryService.looks_like_player_instruction(snippet):
+		return ""
+	return snippet
 
 
 func normalize_personal_snippet(text: String) -> String:

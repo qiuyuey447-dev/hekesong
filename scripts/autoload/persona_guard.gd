@@ -182,7 +182,9 @@ func reply_for_chore_progress_inquiry(player_text: String) -> String:
 	var asks_plant := _asks_chore_kind(compact, ["种完", "种好了", "种了吗", "种上了", "你种完"])
 	var asks_water := _asks_chore_kind(compact, ["浇完", "浇好了", "浇了吗", "你浇完"])
 	var asks_harvest := _asks_chore_kind(compact, ["收完", "收好了", "收了吗", "你收完"])
-	var asks_shop := _asks_chore_kind(compact, ["买好了", "买到了", "买完了", "种子买了", "买种子了吗"])
+	var asks_shop := _asks_chore_kind(compact, [
+		"买好了", "买到了", "买完了", "种子买了", "买种子了吗", "咋没买", "怎么没买", "没买",
+	])
 	if not (asks_plant or asks_water or asks_harvest or asks_shop):
 		return ""
 

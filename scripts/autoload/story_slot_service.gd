@@ -14,7 +14,7 @@ const SLOT_FALLBACKS := {
 	"first_plant_summary": "你们在你的田上种下第一粒种子。",
 	"absence_comeback": "你回来了。",
 	"yesterday_echo": "在家园里忙了一天",
-	"journal_line_1": "你们一起把家园又往前推了一小步。",
+	"journal_line_1": "田浇过。手还泥着。",
 	"journal_line_2": "",
 	"journal_line_3": "",
 }
@@ -184,6 +184,8 @@ func _last_gift_name() -> String:
 		var summary := str(raw.get("summary", "")).strip_edges()
 		if summary.begins_with("你给小狸喂了 "):
 			return summary.trim_prefix("你给小狸喂了 ").trim_suffix("。").strip_edges()
+		if summary.begins_with("你喂她"):
+			return summary.trim_prefix("你喂她").trim_suffix("。").strip_edges()
 	return str(SLOT_FALLBACKS["item_name"])
 
 
@@ -192,24 +194,28 @@ func _notebook_excerpt() -> String:
 		if not raw is Dictionary:
 			continue
 		var kind := str(raw.get("kind", ""))
-		if kind in ["story_beat", "day_end", "chat", "journal_chat"]:
-			var summary := str(raw.get("summary", "")).strip_edges()
-			if summary != "" and summary.length() <= 48:
-				return summary
+		if kind not in ["chat", "journal_chat", "story_beat"]:
+			continue
+		var line := _player_facing_excerpt(str(raw.get("summary", "")))
+		if line != "":
+			return line
 	for entry in GameState.day_journal:
 		if not entry is Dictionary:
 			continue
 		var highlights: Variant = entry.get("highlights", [])
-		if highlights is Array and highlights.size() > 0:
-			return str(highlights[0]).strip_edges()
-		var summary := str(entry.get("summary", "")).strip_edges()
+		if highlights is Array:
+			for raw in highlights:
+				var line := _player_facing_excerpt(str(raw))
+				if line != "":
+					return line
+		var summary := _player_facing_excerpt(str(entry.get("summary", "")))
 		if summary != "":
-			return summary.substr(0, mini(summary.length(), 48))
-	for summary_entry in GameState.get_week_summaries():
-		for highlight in summary_entry.get("highlights", []):
-			var line := str(highlight).strip_edges()
-			if line != "":
-				return line.substr(0, mini(line.length(), 48))
+			return summary
+	var promise := GameState.get_story_promise_summary().strip_edges()
+	if promise != "":
+		return promise.substr(0, mini(promise.length(), 48))
+	if GameState.has_player_name_set():
+		return "你让我叫你「%s」。" % GameState.player_name.strip_edges()
 	return str(SLOT_FALLBACKS["notebook_excerpt"])
 
 
@@ -251,9 +257,15 @@ func _my_notebook_excerpt() -> String:
 
 
 func _clean_excerpt(text: String) -> String:
-	var cleaned := text.strip_edges()
-	if cleaned.begins_with("聊天 ·"):
-		cleaned = cleaned.trim_prefix("聊天 ·").strip_edges()
+	return _player_facing_excerpt(text)
+
+
+func _player_facing_excerpt(text: String) -> String:
+	var cleaned := MemoryService.player_facing_journal_line(text)
+	if cleaned == "":
+		return ""
+	if MemoryService.looks_like_player_instruction(cleaned):
+		return ""
 	if cleaned.length() > 44:
 		cleaned = cleaned.substr(0, 44).strip_edges() + "…"
 	return cleaned
@@ -345,8 +357,9 @@ func _collect_journal_lines(max_lines: int) -> Array[String]:
 		if not entry is Dictionary:
 			continue
 		var line := _journal_entry_line(entry)
-		if line != "":
-			lines.append(line)
+		var cleaned := MemoryService.player_facing_journal_line(line)
+		if cleaned != "":
+			lines.append(cleaned)
 		if lines.size() >= max_lines:
 			return lines
 	for summary_entry in GameState.get_week_summaries():

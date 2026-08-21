@@ -187,6 +187,18 @@ static func looks_like_shop_offer(text: String) -> bool:
 	return "商店" in normalized and _looks_like_offer_question(normalized)
 
 
+static func looks_like_seed_quantity_prompt(text: String) -> bool:
+	var normalized := text.strip_edges().replace(" ", "")
+	if normalized.is_empty():
+		return false
+	return (
+		"要买几包" in normalized
+		or "买几包" in normalized
+		or "说个数字" in normalized
+		or "几包萝卜种子" in normalized
+	)
+
+
 static func looks_like_plant_offer(text: String) -> bool:
 	## 小狸在征求：要不要代种空田。买种子邀约优先归 shop offer。
 	var normalized := text.strip_edges()

@@ -26,6 +26,8 @@ func parse_plan(text: String) -> Array:
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
 		return []
+	if IntentParser.looks_like_chore_question(trimmed):
+		return []
 	var segments := _split_segments(trimmed)
 	var steps: Array = []
 	for segment in segments:
@@ -132,6 +134,8 @@ func looks_like_explicit_delegate(text: String) -> bool:
 func should_auto_start_single_plan(text: String, plan: Array) -> bool:
 	if plan.size() != 1:
 		return false
+	if IntentParser.looks_like_chore_question(text):
+		return false
 	if looks_like_explicit_delegate(text):
 		return true
 	if looks_like_bare_farm_command(text):
@@ -227,6 +231,8 @@ func should_block_llm_for_busy_farm_chat(text: String) -> bool:
 	if not TaskSystem.is_busy():
 		return false
 	if IntentParser.looks_like_sleep_request(text):
+		return false
+	if IntentParser.looks_like_chore_question(text):
 		return false
 	if looks_like_player_correction(text):
 		return true

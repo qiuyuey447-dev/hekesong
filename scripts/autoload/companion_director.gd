@@ -62,46 +62,38 @@ func pick_speech() -> Dictionary:
 		if today_id == "" or not GameState.was_invite_spoken_for(today_id):
 			return {}
 
-	if GameState.can_proactive_speech("leak"):
-		var leak_ctx := LeakageEngine.peek_leak_context()
-		if not leak_ctx.is_empty():
-			return {
-				"channel": "leak",
-				"line": "",
-				"beat_id": "",
-				"leak_context": leak_ctx,
-			}
-
+	## 主动口先走闲聊。D6–D8 随机把渗漏夹进同一句，不再单独开一场「念本子」。
+	var mix_leak := _should_mix_leak()
 	var today_beat := StoryBeatDirector.get_today_beat_id()
 	if (
 		today_beat != ""
 		and not StoryBeatDirector.is_beat_seen(today_beat)
 		and _should_offer_casual(_consider_reason)
 	):
-		return {
-			"channel": "casual",
-			"line": "",
-			"beat_id": today_beat,
-			"beat_context": StoryBeatDirector.get_beat_context_for_llm(today_beat),
-			"leak_context": LeakageEngine.peek_leak_context(),
-		}
+		return _pack_casual_speech(today_beat, mix_leak)
 
 	if _should_offer_casual(_consider_reason):
-		return {
-			"channel": "casual",
-			"line": "",
-			"beat_id": "",
-			"leak_context": LeakageEngine.peek_leak_context(),
-		}
+		return _pack_casual_speech("", mix_leak)
+
+	## 闲聊名额用尽、渗漏还在：仍用闲聊口吻夹半句，不宣读锚点。
+	if (
+		not GameState.can_proactive_speech("casual")
+		and GameState.can_proactive_speech("leak")
+		and not LeakageEngine.peek_leak_context().is_empty()
+	):
+		return _pack_casual_speech("", true)
 	return {}
 
 
 func collect_llm_extra(speech: Dictionary) -> Dictionary:
 	var channel := str(speech.get("channel", "casual")).strip_edges()
 	var beat_id := str(speech.get("beat_id", "")).strip_edges()
+	var also_leak := bool(speech.get("also_leak", false))
 	var leak_raw: Variant = speech.get("leak_context", {})
 	var leak_ctx: Dictionary = leak_raw if leak_raw is Dictionary else {}
-	if leak_ctx.is_empty():
+	if channel != "leak" and not also_leak:
+		leak_ctx = {}
+	elif leak_ctx.is_empty():
 		leak_ctx = LeakageEngine.peek_leak_context()
 	var beat_def := StoryRouteData.get_beat_def(beat_id) if beat_id != "" else {}
 	var beat_ctx: Dictionary = speech.get("beat_context", {})
@@ -136,6 +128,7 @@ func collect_llm_extra(speech: Dictionary) -> Dictionary:
 				})
 	return {
 		"proactive_intent": channel,
+		"also_leak": also_leak,
 		"proactive_goal": _goal_for(speech, beat_id),
 		"invite_remind": bool(speech.get("remind", false)),
 		"beat_id": beat_id,
@@ -215,22 +208,71 @@ func _goal_for(speech: Dictionary, beat_id: String) -> String:
 		"invite":
 			base = StoryBeatDirector.get_invite_goal(beat_id, bool(speech.get("remind", false)))
 		"leak":
-			base = "用这个玩家真实发生过的记忆，写一句身体先记得、脑子还对不上的话。禁止编造锚点里没有的事，禁止念信纸。"
+			base = _leak_slip_goal()
 		_:
-			if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
-				base = (
-					"闲聊或轻轻点到今日节点氛围。可以接位置、天气、心情。"
-					+ "不要念信纸，不要报田块数字。禁止主动问要不要种/浇/收。"
-				)
-			else:
-				base = (
-					"闲聊。只说你此刻所在的位置和正在做的事。"
-					+ "可以接天气或心情。不要报售价、行情、背包、种子包数、叶片或田块数字。"
-					+ "禁止主动问要不要种/浇/收。"
-				)
+			base = _casual_talk_goal(beat_id)
+			if bool(speech.get("also_leak", false)):
+				base += " " + _leak_slip_goal()
 	if channel == "invite":
 		return base
 	return base + _quiet_goal_suffix()
+
+
+func _casual_talk_goal(beat_id: String) -> String:
+	var base := (
+		"闲聊：像在场的人随口 1～2 句。话题从眼前生活里挑，不要只会种田——"
+		+ "廊下、树洞、河声、水壶、手套、灯、尾巴、发呆、你站那儿的样子都可以。"
+		+ "位置只当背景，不必汇报正在种/浇/收。禁止报背包数字，禁止主动问要不要种/浇/收/买种子。"
+		+ "禁止念本子、禁止整句复述日记。"
+	)
+	if beat_id != "" and not StoryBeatDirector.is_beat_seen(beat_id):
+		return "轻轻点到今日气氛，但仍是闲聊，不要念信纸。" + base
+	return base
+
+
+func _leak_slip_goal() -> String:
+	return (
+		"渗漏须夹在闲聊里：把锚点化成感觉、动作、气味或半句口误。"
+		+ "禁止宣读本子（本子上写着／我翻到那页／写着「…」），禁止念锚点原文，禁止编造锚点没有的事。"
+	)
+
+
+func _pack_casual_speech(beat_id: String, mix_leak: bool) -> Dictionary:
+	var leak_ctx := {}
+	var mix := mix_leak
+	if mix:
+		leak_ctx = LeakageEngine.peek_leak_context()
+		if leak_ctx.is_empty() or not GameState.can_proactive_speech("leak"):
+			mix = false
+			leak_ctx = {}
+	var speech := {
+		"channel": "casual",
+		"line": "",
+		"beat_id": beat_id,
+		"also_leak": mix,
+		"leak_context": leak_ctx,
+	}
+	if beat_id != "":
+		speech["beat_context"] = StoryBeatDirector.get_beat_context_for_llm(beat_id)
+	return speech
+
+
+func _should_mix_leak() -> bool:
+	if StoryDirector.get_story_mode() != "leak":
+		return false
+	if GameState.game_day < 6 or GameState.game_day > 8:
+		return false
+	if not GameState.can_proactive_speech("leak"):
+		return false
+	if LeakageEngine.peek_leak_context().is_empty():
+		return false
+	if _consider_reason == "period":
+		if GameState.time_of_day == GameState.TIME_EVENING:
+			return randf() < 0.72
+		if GameState.time_of_day == GameState.TIME_MORNING:
+			return randf() < 0.38
+		return randf() < 0.50
+	return randf() < 0.45
 
 
 func _quiet_goal_suffix() -> String:

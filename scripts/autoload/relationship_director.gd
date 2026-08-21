@@ -109,8 +109,9 @@ func _default_stranger_intimate_phrases() -> Array[String]:
 func _default_awkward_waiting_phrases() -> Array[String]:
 	return [
 		"我在这儿等", "你忙你的", "我就在旁边看着", "我站这儿就行", "我在旁边看着",
-		"你忙，我就守着", "我看着就好", "不吵你", "你忙的话，我就在这儿", "我就在这儿",
+		"你忙，我就守着", 	"我看着就好", "不吵你", "你忙的话，我就在这儿", "我就在这儿",
 		"我就守着", "陪着你就好", "你忙你的，我", "我就在旁边", "我在这儿。你忙",
+		"还有要说的吗", "没有也行，我坐着", "没有也行我坐着",
 	]
 
 
@@ -348,6 +349,15 @@ func get_interaction_score() -> float:
 	var s := get_signals()
 	var weights: Dictionary = _rules.get("interaction_weights", {})
 	var targets: Dictionary = _rules.get("interaction_targets", {})
+	if GameState.IS_TEN_DAY_EDITION:
+		## 35 日靶（chat 12 / nodes 18）会让十日 D6 互动分永远 < 0.18，留下线被错锁成 Bad。
+		targets = {
+			"chat_days": 5,
+			"gifts": 2,
+			"nodes": 8,
+			"nights": 1,
+			"tasks": 4,
+		}
 	var chat_days := int(s.get("chat_days", 0))
 	var gifts := int(s.get("gifts_given", 0))
 	var nodes := maxi(int(s.get("nodes_cleared", 0)), GameState.get_story_nodes_seen().size())
@@ -379,9 +389,10 @@ func player_quiet_days() -> int:
 func get_player_quiet_context() -> Dictionary:
 	var days := player_quiet_days()
 	var kind := ""
+	var late := GameState.time_of_day in [GameState.TIME_EVENING, GameState.TIME_NIGHT]
 	if days >= 2:
 		kind = "several"
-	elif days >= 1:
+	elif days >= 1 and late:
 		kind = "today"
 	return {
 		"quiet_days": days,

@@ -28,6 +28,10 @@ func arm_from_companion_line(text: String) -> void:
 	var normalized := text.strip_edges()
 	if normalized.is_empty():
 		return
+	if ShopDelegate.looks_like_seed_quantity_prompt(normalized):
+		_type = OfferType.SHOP
+		_source_line = normalized
+		return
 	var has_shop := ShopDelegate.looks_like_shop_offer(normalized)
 	var has_plant := (not has_shop) and ShopDelegate.looks_like_plant_offer(normalized)
 	var has_water := ShopDelegate.looks_like_water_offer(normalized)
@@ -38,6 +42,7 @@ func arm_from_companion_line(text: String) -> void:
 		and ShopDelegate.looks_like_harvest_offer(normalized)
 	)
 	if not (has_shop or has_plant or has_water or has_harvest):
+		clear()
 		return
 	if has_shop:
 		_type = OfferType.SHOP
@@ -64,31 +69,32 @@ func infer_from_recent_companion_lines(lines: Array) -> bool:
 
 
 func infer_from_recent_companion_verbs(lines: Array) -> bool:
-	## 口语邀请漏检时，按最近一句里的浇/种/收/买补挂 pending。
+	## 只看最近一句，且须像在征求；禁止用四句前的「种」把闲聊「对啊」当成种田。
 	if has_any():
 		return true
-	for i in range(lines.size() - 1, -1, -1):
-		var line := str(lines[i]).strip_edges()
-		if line == "":
-			continue
-		if ShopDelegate.looks_like_chore_declined(line):
-			continue
-		if "浇" in line:
-			_type = OfferType.WATER
-			_source_line = line
-			return true
-		if "买" in line and "种子" in line:
-			_type = OfferType.SHOP
-			_source_line = line
-			return true
-		if "种" in line and "种子" not in line:
-			_type = OfferType.PLANT
-			_source_line = line
-			return true
-		if "收" in line or "摘" in line:
-			_type = OfferType.HARVEST
-			_source_line = line
-			return true
+	if lines.is_empty():
+		return false
+	var line := str(lines[lines.size() - 1]).strip_edges()
+	if line == "" or ShopDelegate.looks_like_chore_declined(line):
+		return false
+	if not ShopDelegate._looks_like_offer_question(line) and not ShopDelegate.looks_like_seed_quantity_prompt(line):
+		return false
+	if "浇" in line:
+		_type = OfferType.WATER
+		_source_line = line
+		return true
+	if "买" in line and ("种子" in line or ShopDelegate.looks_like_seed_quantity_prompt(line)):
+		_type = OfferType.SHOP
+		_source_line = line
+		return true
+	if "种" in line and "种子" not in line:
+		_type = OfferType.PLANT
+		_source_line = line
+		return true
+	if "收" in line or "摘" in line:
+		_type = OfferType.HARVEST
+		_source_line = line
+		return true
 	return false
 
 

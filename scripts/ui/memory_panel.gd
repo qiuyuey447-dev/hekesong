@@ -86,6 +86,8 @@ func refresh() -> void:
 				_memory_label.append_text("（第 %d 天）" % day_n)
 			if mem_id != "" and not bool(page.get("pinned", false)):
 				_memory_label.append_text("  [url=pin:%s]留住[/url]" % mem_id)
+			if mem_id != "" and not PlayerNotebookService.has_visible_text(line):
+				_memory_label.append_text("  [url=mine:%s]写进我的本子[/url]" % mem_id)
 			_memory_label.append_text("\n%s\n\n" % line)
 			page_no += 1
 			wrote = true
@@ -102,7 +104,7 @@ func refresh() -> void:
 	_player_notebook_label.text = ""
 	var player_pages: Array = PlayerNotebookService.get_pages_for_ui()
 	if player_pages.is_empty():
-		_player_notebook_label.append_text("还没写下什么。")
+		_player_notebook_label.append_text("还没写下什么。打开她的本子，点「写进我的本子」；或跟她说「我记下来：……」。")
 	else:
 		if (
 			GameState.is_awakening_day()
@@ -142,6 +144,13 @@ func refresh() -> void:
 
 func _on_notebook_meta_clicked(meta: Variant) -> void:
 	var token := str(meta).strip_edges()
+	if token.begins_with("mine:"):
+		var mem_id := token.substr(5).strip_edges()
+		if mem_id == "":
+			return
+		PlayerNotebookService.write_from_anchor_id(mem_id)
+		refresh()
+		return
 	if not token.begins_with("pin:"):
 		return
 	var mem_id := token.substr(4).strip_edges()

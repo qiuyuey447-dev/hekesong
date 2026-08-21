@@ -73,7 +73,7 @@ const FALLBACK_CHAT_PREFERENCE := [
 
 const FALLBACK_CHAT_GENERIC := [
 	"我在听。说慢点也行，我记性一般。",
-	"嗯。还有要说的吗。没有也行，我坐着。",
+	"嗯。刚才那句我接上了，你再说。",
 ]
 
 const FALLBACK_REACT_RAIN := [
@@ -160,14 +160,15 @@ const FALLBACK_CASUAL_LEAK := {
 	"morning": [
 		"手刚才自己动了一下。像是……做过这件事。",
 		"早。风从河边过来的时候，心里会轻轻一紧。",
+		"树洞口那只壶还温着。我想坐一会儿。",
 	],
 	"noon": [
-		"看着田，忽然觉得脚步比脑子先认得路。",
+		"日头有点懒。尾巴扫到土，倒也不想挪。",
 		"有些事说不清。你要是不嫌，我就再待一会儿。",
 	],
 	"evening": [
 		"傍晚这点凉意，好像以前也尝过。",
-		"我不太敢问。问了，又怕答案从手指缝里漏走。",
+		"灯还没点。廊下风倒是轻。",
 	],
 }
 
@@ -206,12 +207,12 @@ const FALLBACK_CASUAL_AWAKEN := {
 const FALLBACK_CASUAL_TIER := [
 	{
 		"morning": [
-			"……你还在。田也在。我先去看看垄歪不歪——歪的话，算你教的。",
 			"早。我还不太会找话说。灶上有红薯的话，就好找了。",
+			"树洞口风轻轻的。我先坐一会儿。",
 		],
 		"noon": [
-			"垄有点歪。我顺手扶一扶，不算帮你吧。",
-			"田里风轻轻的。我去看看苗有没有缺水。",
+			"日头有点懒。你要是不嫌，我就挨着歇。",
+			"水壶还温着。倒也不急着做什么。",
 		],
 		"evening": [
 			"傍晚风有点凉。廊下干的那块我先坐着。你来了我让你。",
@@ -220,15 +221,15 @@ const FALLBACK_CASUAL_TIER := [
 	},
 	{
 		"morning": [
-			"早。看到你，先松一口气。再去看苗有没有被我拨歪。",
-			"今天也一起过吧。我先去田边转转。歪的垄我认。",
+			"早。看到你，先松一口气。",
+			"尾巴尖还沾着露。今天也一起过吧。",
 		],
 		"noon": [
 			"你做事的样子我看过好几回了。还是想挑刺两句。",
-			"正午了。我去浇那几垄，你歇你的。",
+			"正午了。河那边有点响，我听着就行。",
 		],
 		"evening": [
-			"天色渐晚。今天有你在，田也安静些。",
+			"天色渐晚。灯还没点，倒也不赶。",
 			"傍晚了。有句话想说，又觉得……闲聊也挺好。",
 		],
 	},
@@ -238,7 +239,7 @@ const FALLBACK_CASUAL_TIER := [
 			"早。你在，我就知道今天该怎么过。",
 		],
 		"noon": [
-			"你要是走神，我就喊你一声。别误会，是怕苗歪了。",
+			"你要是走神，我就喊你一声。别误会，是怕你站傻了。",
 			"挨着你，连日头都不那么晒了。……我随口说的。",
 		],
 		"evening": [
@@ -252,8 +253,8 @@ const FALLBACK_CASUAL_TIER := [
 			"早。我认得你。就算有些事会淡，这一眼不会。",
 		],
 		"noon": [
-			"你忙田，我就去把壶装满。",
-			"正午也很好。只要你还在这片田里。",
+			"你忙的话，我就去把壶装满。",
+			"正午也很好。只要你还在这儿。",
 		],
 		"evening": [
 			"天要黑了。今晚把我留在灯旁边吧。",
@@ -268,13 +269,18 @@ const FALLBACK_CASUAL_RAIN := [
 ]
 
 const FALLBACK_REACT_PLANTED := [
-	"种下啦，接下来记得让它喝饱水。",
-	"新种上了，我会帮你留意这块田的长势。",
+	"种上了。空着的那截现在有苗了。",
+	"这一垄你刚埋下。土还松着。",
 ]
 
 const FALLBACK_REACT_HARVESTED := [
-	"收得不错，萝卜先放进背包吧。",
-	"又收了一个，家园慢慢充实起来了。",
+	"收回来了。筐里又沉一截。",
+	"拔出来了。这颗归你。",
+]
+
+const FALLBACK_REACT_WATERED := [
+	"这垄你浇过了。土沉下去，苗才喝得着。",
+	"浇过了。手还带着水汽。",
 ]
 
 const FALLBACK_REACT_STORY := [
@@ -409,20 +415,23 @@ static func proactive_line(extra: Dictionary) -> String:
 	var intent := str(extra.get("proactive_intent", extra.get("channel", "casual")))
 	var leak: Dictionary = extra.get("leak_context", {})
 	var summary := str(leak.get("anchor_summary", "")).strip_edges()
-	if MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary):
+	if MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary) or MemoryService.looks_like_player_instruction(summary):
 		summary = ""
-	if intent == "leak" and summary != "":
+	var also_leak := bool(extra.get("also_leak", false))
+	if intent == "leak" or also_leak:
 		var wraps := [
-			"手比脑子先动了一下。……%s。" % summary,
-			"……%s。想不起来是哪一回。" % summary,
+			"手刚才自己动了一下。像是……做过这件事。",
+			"早。风从河边过来的时候，心里会轻轻一紧。",
 			"这事像做过。不是刚才。",
+			"傍晚这点凉意，好像以前也尝过。",
+			"树洞里头那只壶，摸着倒熟。想不起来是哪一回。",
 		]
 		var quiet := quiet_nudge_line(previous, extra)
 		if quiet != "" and str(extra.get("story_mode", StoryDirector.get_story_mode())) != "stranger":
 			wraps = [
-				"手比脑子先动了一下。……%s。你这几天都不怎么开口。" % summary,
-				"……%s。想不起来是哪一回。你也不说话。" % summary,
-				"这事像做过。不是刚才。你这几天都不怎么开口。",
+				"手刚才自己动了一下。你这几天都不怎么开口。",
+				"这事像做过。不是刚才。你也不说话。",
+				"风从河边过来的时候心里轻轻一紧。你都不怎么开口。",
 			]
 		var leak_line := pick_non_duplicate(wraps, previous)
 		if leak_line != "":
@@ -445,8 +454,8 @@ static func proactive_line(extra: Dictionary) -> String:
 					"傍晚了。你过来一下——我有句话，想现在就说。",
 					"苗齐了。你别走远，听我说个笨主意。",
 				], previous)
-		if summary != "" and str(extra.get("story_mode", "")) == "leak":
-			return "刚才……%s。你过来一下。" % summary
+		if str(extra.get("story_mode", "")) == "leak":
+			return "刚才……手自己动了一下。你过来一下。"
 		if weather == GameState.WEATHER_RAIN:
 			return "雨还在下。你方便的话，过来坐一会儿？"
 		if tod == GameState.TIME_EVENING:
@@ -490,6 +499,31 @@ static func _location_grounded_line(extra: Dictionary) -> String:
 	return "我在%s。" % loc
 
 
+static func _looks_like_where_or_place_challenge(text: String) -> bool:
+	if "去哪" in text or "去哪儿" in text or "哪里" in text or "哪儿" in text:
+		return true
+	if "商店" in text and (
+		"咋" in text or "怎么" in text or "为什么" in text or "为啥" in text
+		or "干嘛" in text or "去商店了" in text or "你去商店" in text
+	):
+		return true
+	if ("你在" in text or "人在" in text) and (
+		"田" in text or "廊" in text or "树洞" in text or "门口" in text
+		or "河边" in text or "小径" in text or "这儿" in text or "那里" in text
+		or "商店" in text
+	):
+		return true
+	return false
+
+
+static func _grounded_presence_reply() -> String:
+	var snap := CompanionAgent.get_snapshot() if CompanionAgent else {}
+	var loc := str(snap.get("location_name", "")).strip_edges()
+	if loc == "":
+		loc = "这儿"
+	return "就在%s这边。刚才要是说岔了，以你看见的为准。" % loc
+
+
 static func _casual_pool_from(by_time: Dictionary, time_of_day: String) -> Array:
 	var raw: Variant = by_time.get(time_of_day, by_time.get("noon", []))
 	if raw is Array:
@@ -520,7 +554,8 @@ static func companion_feed(
 	item: Dictionary,
 	previous_replies: Array,
 	refused: bool,
-	pester_count: int = 0
+	pester_count: int = 0,
+	leak_context: Dictionary = {}
 ) -> String:
 	if refused:
 		if pester_count >= 2:
@@ -545,7 +580,12 @@ static func companion_feed(
 			for line in pool:
 				named_pool.append("%s，是 %s。" % [str(line), item_name])
 			pool = named_pool
-	return pick_non_duplicate(pool, previous_replies)
+	var base := pick_non_duplicate(pool, previous_replies)
+	if not leak_context.is_empty() and bool(leak_context.get("available", false)):
+		var leak_line := str(leak_context.get("fallback_line", "")).strip_edges()
+		if leak_line != "" and leak_line not in base:
+			return "%s……%s" % [base.trim_suffix("。"), leak_line]
+	return base
 
 
 static func greet(
@@ -601,13 +641,24 @@ static func task_complete(game_facts: Dictionary, _market: Dictionary) -> String
 	match task:
 		"water":
 			var count := int(game_facts.get("plot_count", 1))
-			return pick_random(FALLBACK_TASK_WATER) % count
+			if count > 1:
+				return pick_random([
+					"这几垄我浇过了。土沉下去一截，苗才喝得着。",
+					"浇完了。%d 块田都湿着，你摸摸。" % count,
+				])
+			return pick_random(FALLBACK_TASK_WATER) % maxi(count, 1)
 		"plant":
 			var planted := int(game_facts.get("plot_count", 1))
-			return "种好了。空垄上现在有 %d 块新苗。" % planted
+			return pick_random([
+				"种好了。空垄上现在有 %d 块新苗。" % planted,
+				"种完了。这 %d 垄以后得喝水。" % planted,
+			])
 		"harvest":
 			var harvested := int(game_facts.get("plot_count", 1))
-			return "收回来了。筐里多了 %d 块田的萝卜。" % harvested
+			return pick_random([
+				"收回来了。筐里多了 %d 块田的萝卜。" % harvested,
+				"拔完了。这趟收成在筐里。",
+			])
 		"shop":
 			return "商店到了。你看，要不要买点种子。"
 		_:
@@ -657,6 +708,9 @@ static func player_chat(
 	if _asks_prior_acquaintance(text):
 		return _prior_acquaintance_reply(memory_context)
 
+	if _looks_like_where_or_place_challenge(text):
+		return _grounded_presence_reply()
+
 	if _looks_like_save_bug_worry(text):
 		return pick_random(FALLBACK_STRANGER_SAVE_WORRY)
 
@@ -700,6 +754,8 @@ static func stranger_chat(text: String, memory_context: Dictionary) -> String:
 			return "……商店里甜的、咸的我都见过。我这会儿想不起自己爱吃哪个。"
 		if "我是谁" in text or "你是谁" in text or "不认识" in text or "记得我" in text:
 			return "……你说我们见过？对不起。我想不起来。"
+		if "约定" in text or "一起看" in text or "本子" in text:
+			return "……我想不起来。也许有过字。我认不得是谁写的。"
 		if "小狸" in text and ("认识" in text or "记得" in text or "一起" in text):
 			return "你叫我的名字……好像对。可我还是想不起来，在这里做过什么。"
 		if "萝卜" in text or "田" in text:
@@ -773,14 +829,13 @@ static func companion_react(
 				return pick_random(FALLBACK_REACT_CROP_READY_ONE)
 			return pick_random(FALLBACK_REACT_IDLE)
 		"player_planted":
-			var plot_id := int(react_facts.get("plot_id", 0))
-			if plot_id > 0:
-				return "%s（第 %d 块田）" % [pick_random(FALLBACK_REACT_PLANTED), plot_id]
-			return pick_random(FALLBACK_REACT_PLANTED)
+			return _player_farm_line({"reason": "plant_ok", "plot_id": int(react_facts.get("plot_id", 0)), "plot_count": 1})
 		"player_harvested":
-			if turnip_count > 0:
-				return "%s 要卖的话，跟我说一声。" % pick_random(FALLBACK_REACT_HARVESTED)
-			return pick_random(FALLBACK_REACT_HARVESTED)
+			return _player_farm_line({"reason": "harvest_ok", "plot_count": 1})
+		"player_watered":
+			return _player_farm_line({"reason": "water_ok", "plot_id": int(react_facts.get("plot_id", 0)), "plot_count": 1})
+		"player_farm":
+			return _player_farm_line(react_facts)
 		"story_nudge":
 			var leak := LeakageEngine.try_leak_for_react(react_type)
 			if leak.strip_edges() != "":
@@ -788,6 +843,70 @@ static func companion_react(
 			return _story_nudge_line(story_hint, snapshot, stage, memory_context)
 		"persona_shift":
 			return _persona_shift_line(react_facts)
+		_:
+			return pick_random(FALLBACK_REACT_IDLE)
+
+
+static func _player_farm_line(facts: Dictionary) -> String:
+	var reason := str(facts.get("reason", "")).strip_edges()
+	var count := int(facts.get("plot_count", 0))
+	if count <= 0:
+		var ids: Variant = facts.get("plot_ids", [])
+		if ids is Array:
+			count = ids.size()
+	if count <= 0:
+		count = 1
+	var stranger := StoryDirector.is_stranger_mode()
+	match reason:
+		"water_ok":
+			if stranger:
+				return "……这垄湿了。土沉下去一截。"
+			if count > 1:
+				return pick_random([
+					"这几垄你浇过了。土沉下去，苗才喝得着。",
+					"连着浇了好几垄。手还带着水汽。",
+				])
+			return pick_random(FALLBACK_REACT_WATERED)
+		"plant_ok":
+			if stranger:
+				return "……种上了。土还松着。"
+			return pick_random(FALLBACK_REACT_PLANTED)
+		"harvest_ok":
+			if stranger:
+				return "……收回来了。筐里沉一截。"
+			return pick_random(FALLBACK_REACT_HARVESTED)
+		"no_seeds":
+			if stranger:
+				return "……没种了。"
+			return pick_random([
+				"种子袋空的。要买的话跟我说一声。",
+				"没种了。篮子也是空的。",
+			])
+		"already_watered":
+			if stranger:
+				return "……这块浇过了。"
+			return pick_random([
+				"这块浇过了。再浇苗要倒。",
+				"浇过了。手比记性快。",
+			])
+		"rain":
+			if stranger:
+				return "……雨下着，不用浇。"
+			return pick_random([
+				"下雨了，别浇。廊下见。",
+				"雨自己下。苗自己喝。",
+			])
+		"not_mature":
+			if stranger:
+				return "……还不能收。"
+			return pick_random([
+				"还没熟。急什么，萝卜跑不了。",
+				"收不了。再等一等。",
+			])
+		"harvest_failed":
+			if stranger:
+				return "……还不行。"
+			return "还收不了。再等等。"
 		_:
 			return pick_random(FALLBACK_REACT_IDLE)
 
@@ -881,6 +1000,8 @@ static func story_step_render(extra: Dictionary) -> String:
 	if snippet == "":
 		snippet = StoryRouteData.extract_chat_snippet_for_beat(str(extra.get("beat_id", "")))
 	if snippet == "":
+		if GameState.IS_TEN_DAY_EDITION:
+			return ""
 		snippet = "你说过的那句，字迹比正文轻。"
 	var routed := StoryNodeCopy.get_route("_N02p_chat", "default", "default")
 	if routed.strip_edges() != "":

@@ -214,7 +214,7 @@ func get_story_context_for_llm() -> Dictionary:
 		"scheduled_beat_id": str(sched.get("beat_id", "")),
 		"scheduled_period": str(sched.get("period", "")),
 		"invite_goal": str(beat_ctx.get("invite_goal", "")),
-		"recent_story_beats": recent_story,
+		"recent_story_beats": [] if is_stranger_mode() else recent_story,
 		"memory_revealed": GameState.has_revealed_memory(),
 		"story_route_locked": GameState.get_story_route(),
 		"player_name_context": GameState.get_player_name_context(),
@@ -236,6 +236,7 @@ func _narrative_constraints() -> Array[String]:
 
 	if mode == "stranger":
 		constraints.append("陌生化：像不认识玩家，不说「又见面了」或具体共同回忆，不亲昵")
+		constraints.append("禁止直呼玩家曾用过的称呼；问起约定/本子只说想不起来，禁止复述约定原文")
 	elif mode == "leak":
 		constraints.append("渗漏期：可隐约熟悉但仍会断片；引用记忆须克制，仍会问「刚才说到哪」")
 	elif mode == "awaken":

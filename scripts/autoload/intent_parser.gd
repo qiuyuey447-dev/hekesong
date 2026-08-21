@@ -34,6 +34,18 @@ const ACTION_INTENTS := [
 	INTENT_PLANT_ALL,
 ]
 
+## 闲聊短句被 LLM 标成这些时，一律打回 chat（睡觉/本子/状态除外）。
+const FARM_CHORE_INTENTS := [
+	INTENT_WATER,
+	INTENT_WATER_ALL,
+	INTENT_OPEN_MARKET,
+	INTENT_OPEN_SHOP,
+	INTENT_HARVEST,
+	INTENT_HARVEST_ALL,
+	INTENT_PLANT,
+	INTENT_PLANT_ALL,
+]
+
 ## 出现这些词且像在下指令时，给意图加分。
 const DELEGATE_CUES := [
 	"帮", "请", "麻烦", "能不能", "可不可以", "可以", "去", "让", "派",
@@ -67,6 +79,18 @@ func parse(text: String) -> Dictionary:
 		result["intent"] = INTENT_CHAT
 		result["confidence"] = 0.95
 		result["matched_terms"] = ["stop_chore"]
+		return result
+
+	if looks_like_shop_inquiry(trimmed):
+		result["intent"] = INTENT_CHAT
+		result["confidence"] = 0.95
+		result["matched_terms"] = ["shop_inquiry"]
+		return result
+
+	if looks_like_chore_question(trimmed):
+		result["intent"] = INTENT_CHAT
+		result["confidence"] = 0.95
+		result["matched_terms"] = ["chore_question"]
 		return result
 
 	if looks_like_status_inquiry(trimmed):
@@ -124,6 +148,21 @@ func parse(text: String) -> Dictionary:
 
 func is_action_intent(intent: Dictionary) -> bool:
 	return str(intent.get("intent", INTENT_CHAT)) in ACTION_INTENTS
+
+
+func is_farm_chore_intent(intent: Dictionary) -> bool:
+	return str(intent.get("intent", INTENT_CHAT)) in FARM_CHORE_INTENTS
+
+
+func looks_like_farm_directive(text: String) -> bool:
+	## 玩家这句本身是在下农事指令，才允许走浇/种/收/买。
+	if text.strip_edges().is_empty():
+		return false
+	if looks_like_chore_question(text) or looks_like_shop_inquiry(text):
+		return false
+	if is_farm_chore_intent(parse(text)):
+		return true
+	return not ChorePreprocessor.parse_plan(text).is_empty()
 
 
 func is_explicit_sleep_utterance(text: String) -> bool:
@@ -269,7 +308,98 @@ func looks_like_stop_farm_chore(text: String) -> bool:
 	return false
 
 
+func looks_like_shop_inquiry(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "" or "商店" not in compact:
+		return false
+	if _match_any(compact, ["咋", "怎么", "为什么", "为啥", "干嘛", "为何", "怎么会", "去哪", "去哪儿"]):
+		return true
+	if "买" in compact or "帮" in compact or "进货" in compact or "采购" in compact:
+		return false
+	if compact.ends_with("了") or compact.ends_with("了？") or compact.ends_with("了?"):
+		return true
+	if compact.begins_with("你去") or compact.begins_with("她去"):
+		return true
+	return false
+
+
+func looks_like_chore_question(text: String) -> bool:
+	## 问为什么帮忙 / 是不是你做的 / 咋没买：聊天，不是浇种收买指令。
+	if looks_like_why_helping(text) or looks_like_harvest_attribution(text) or looks_like_missed_purchase(text):
+		return true
+	if looks_like_shop_inquiry(text):
+		return true
+	var compact := _compact(_normalize(text))
+	if compact == "" or not _mentions_farm_chore(compact):
+		return false
+	if _match_any(compact, ["我是问", "我问你", "是不是", "咋还", "怎么还", "为什么还", "为啥还"]):
+		return true
+	if _match_any(compact, ["咋", "怎么", "为什么", "为啥", "干嘛", "为何"]):
+		return true
+	if ("收的" in compact or "种的" in compact or "浇的" in compact or "买的" in compact) \
+			and _match_any(compact, ["是不是", "我是问", "吗", "么"]):
+		return true
+	return false
+
+
+func _mentions_farm_chore(compact: String) -> bool:
+	## 田务词，避免「买酒 / 为什么帮我记名字」误伤闲聊。
+	if _match_any(compact, ["收萝卜", "浇水", "浇田", "种萝卜", "商店", "种子", "收田"]):
+		return true
+	if "浇" in compact:
+		return true
+	if ("收" in compact or "摘" in compact or "拔" in compact) and _match_any(compact, ["萝卜", "田"]):
+		return true
+	if "种" in compact and ("田" in compact or "萝卜" in compact or "空田" in compact):
+		return true
+	if "买" in compact and _match_any(compact, ["种子", "商店", "包"]):
+		return true
+	return false
+
+
+func looks_like_why_helping(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if not _mentions_farm_chore(compact) and not _match_any(compact, ["收萝卜", "浇", "田"]):
+		return false
+	if not _match_any(compact, ["帮", "不认识", "不认得"]):
+		return false
+	return _match_any(compact, [
+		"不认识", "不认得", "咋还帮", "怎么还帮", "为什么帮", "为啥帮", "干嘛帮", "为何帮", "咋还", "怎么还",
+	])
+
+
+func looks_like_harvest_attribution(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if _match_any(compact, [
+		"是不是帮我收", "帮我收的萝卜", "是你收的萝卜", "你帮我收的", "是不是你收", "是不是帮我收的",
+	]):
+		return true
+	return "我是问" in compact and ("收萝卜" in compact or "帮我收" in compact or "你收的" in compact)
+
+
+func looks_like_missed_purchase(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if "买" not in compact:
+		return false
+	if compact == "你咋没买" or compact == "咋没买" or compact == "怎么没买":
+		return true
+	if not _match_any(compact, ["种", "包", "商店", "萝卜"]):
+		return false
+	return _match_any(compact, [
+		"咋没买", "怎么没买", "为什么没买", "为啥没买", "咋不买", "怎么不买",
+		"没去买", "为啥不买",
+	])
+
+
 func looks_like_shop_purchase(text: String) -> bool:
+	if looks_like_shop_inquiry(text):
+		return false
 	var normalized := _normalize(text)
 	var compact := _compact(normalized)
 	if _looks_like_shop_seed_purchase(normalized) or _looks_like_shop_seed_purchase(compact):
@@ -318,6 +448,16 @@ func merge_intents(
 			"matched_terms": ["stop_chore"],
 			"source": "local",
 		}
+	if looks_like_shop_inquiry(raw_text):
+		return {
+			"intent": INTENT_CHAT,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": 0.95,
+			"raw_text": raw_text,
+			"matched_terms": ["shop_inquiry"],
+			"source": "local",
+		}
 	if looks_like_status_inquiry(raw_text):
 		return {
 			"intent": INTENT_CHECK_STATUS,
@@ -338,6 +478,24 @@ func merge_intents(
 			"matched_terms": ["sleep_guard"],
 			"source": "local",
 		}
+
+	## 「对啊 / 你玩那个？」一类闲聊：禁止 API 把 intent 改成种田或买种。
+	if not looks_like_farm_directive(raw_text) and not is_farm_chore_intent(local_intent):
+		var has_farm_plan := false
+		if not api_intent.is_empty():
+			var api_plan: Variant = api_intent.get("plan", [])
+			if api_plan is Array:
+				has_farm_plan = not (api_plan as Array).is_empty()
+		if is_farm_chore_intent(api_intent) or has_farm_plan:
+			return {
+				"intent": INTENT_CHAT,
+				"refuse_kind": "",
+				"plot_id": -1,
+				"confidence": 0.95,
+				"raw_text": raw_text,
+				"matched_terms": ["chat_guard"],
+				"source": "local_chat_guard",
+			}
 
 	if classified_by_api:
 		if api_intent.is_empty():

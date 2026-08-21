@@ -121,7 +121,7 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 		flipped.append_array(await _flip_remaining_periods(spec))
 		letter_titles.append_array(flipped)
 		if "一起看" in " ".join(_day_letters) or "写进本子" in " ".join(_day_letters) \
-				or "这一句我不想拿它赖掉" in " ".join(_day_letters) or "拿这个砸我" in " ".join(_day_letters):
+				or "这一句我不想忘掉" in " ".join(_day_letters) or "拿这个砸我" in " ".join(_day_letters):
 			knife = true
 		if bool(spec.get("basket", false)) and day == 3:
 			await _open_basket()
@@ -1046,7 +1046,7 @@ func _settle(sec: float = 0.12) -> void:
 func _check_story_body(body: String) -> void:
 	if body.strip_edges() == "":
 		return
-	if "这一句我不想拿它赖掉" in body or "拿这个砸我" in body:
+	if "这一句我不想忘掉" in body or "拿这个砸我" in body:
 		_note("看到 D3 刀垫")
 	if "像不认得" in body and "清晨风很凉" in body:
 		_note("信纸里有 telegraph")

@@ -23,6 +23,15 @@ const CHAT_LIKE_EVENTS := [
 	"task_complete",
 ]
 
+const NO_NOTEBOOK_RECITE_EVENTS := [
+	"player_chat",
+	"session_start",
+	"companion_proactive",
+	"companion_casual",
+	"morning_sidewrite",
+	"companion_feed",
+]
+
 const L3_EPISODIC_PHRASES := [
 	"上周",
 	"上回",
@@ -109,10 +118,93 @@ func strip_stage_directions(text: String) -> String:
 	return cleaned.strip_edges()
 
 
+func sanitize_spoken_reply(text: String) -> String:
+	return _strip_speech_quotes_and_pov(strip_stage_directions(text))
+
+
+func _unwrap_line_quotes(line: String) -> String:
+	var cleaned := line.strip_edges()
+	var pairs := [
+		["「", "」"], ["『", "』"], ["“", "”"], ["‘", "’"], ["\"", "\""], ["'", "'"],
+	]
+	for _i in range(2):
+		var changed := false
+		for pair in pairs:
+			if cleaned.begins_with(pair[0]) and cleaned.ends_with(pair[1]) and cleaned.length() >= 2:
+				cleaned = cleaned.substr(1, cleaned.length() - 2).strip_edges()
+				changed = true
+				break
+		if not changed:
+			break
+	return cleaned
+
+
+func _is_player_pov_narration(line: String) -> bool:
+	for cue in ["我抬眼", "我看了看天", "我看着天", "暮色里显得", "显得安静"]:
+		if cue in line:
+			return true
+	return false
+
+
+func _is_self_action_narration(sentence: String) -> bool:
+	## 嘴里不应出现「我抖了下尾巴」这类自己给自己写舞台说明。
+	var compact := sentence.strip_edges().replace(" ", "").replace("　", "")
+	if compact == "":
+		return false
+	for cue in [
+		"我抖了", "抖了下尾巴", "抖了抖尾巴", "晃了晃尾巴", "摇了摇尾巴",
+		"甩了甩尾巴", "竖起耳朵", "耳朵动了", "打了个哈欠", "眨了眨眼",
+		"我抬爪", "我把尾巴", "尾巴尖轻轻", "我蹲下", "我趴下",
+		"我凑过去闻", "我闻了闻", "我晃了晃",
+	]:
+		if cue in compact:
+			return true
+	return false
+
+
+func _strip_self_action_narration(line: String) -> String:
+	var kept: PackedStringArray = []
+	var buf := ""
+	for ch in line:
+		buf += ch
+		if ch in ["。", "！", "？", ".", "!", "?"]:
+			var piece := buf.strip_edges()
+			buf = ""
+			if piece != "" and not _is_self_action_narration(piece):
+				kept.append(piece)
+	var tail := buf.strip_edges()
+	if tail != "" and not _is_self_action_narration(tail):
+		kept.append(tail)
+	return "".join(kept).strip_edges()
+
+
+func _strip_speech_quotes_and_pov(text: String) -> String:
+	var kept: PackedStringArray = []
+	for raw in text.replace("\r", "").split("\n"):
+		var line := _unwrap_line_quotes(raw.strip_edges())
+		if line == "":
+			continue
+		if _is_player_pov_narration(line):
+			continue
+		line = _strip_self_action_narration(line)
+		if line == "":
+			continue
+		kept.append(line)
+	return "\n".join(kept)
+
+
 func validate(event: String, text: String, payload: Dictionary, cited_ids: Array = []) -> Dictionary:
 	var cleaned := strip_stage_directions(text.strip_edges())
+	if event in [
+		"player_chat", "session_start", "companion_casual", "companion_proactive",
+		"companion_react", "companion_feed", "morning_sidewrite",
+	]:
+		cleaned = _strip_speech_quotes_and_pov(cleaned)
 	if cleaned == "":
 		return {"ok": false, "reason": "empty"}
+
+	if event in ["player_chat", "session_start", "companion_casual", "companion_proactive"] and "信纸" in cleaned:
+		return {"ok": false, "reason": "letter_jargon"}
 
 	if event != "companion_feed" and _mentions_forbidden_crop(cleaned):
 		return {"ok": false, "reason": "wrong_crop"}
@@ -137,6 +229,18 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 
 	if event in CHAT_LIKE_EVENTS and _mentions_premature_promise(cleaned):
 		return {"ok": false, "reason": "premature_promise"}
+
+	if event in CHAT_LIKE_EVENTS and _recites_journal_digest(cleaned):
+		return {"ok": false, "reason": "journal_digest"}
+
+	if event in NO_NOTEBOOK_RECITE_EVENTS and _recites_notebook_aloud(cleaned, payload):
+		return {"ok": false, "reason": "notebook_recite"}
+
+	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_farm_hard_sell(cleaned):
+		return {"ok": false, "reason": "farm_hard_sell"}
+
+	if event in CHAT_LIKE_EVENTS and _addresses_place_as_name(cleaned, payload):
+		return {"ok": false, "reason": "place_as_name"}
 
 	if event in CHAT_LIKE_EVENTS and _leaks_director_meta(cleaned):
 		return {"ok": false, "reason": "director_meta"}
@@ -310,6 +414,8 @@ func _validate_story_mode_reply(text: String, payload: Dictionary) -> Dictionary
 		var stored_name := _stored_player_name(payload)
 		if stored_name != "" and stored_name in text:
 			return {"ok": false, "reason": "stranger_name"}
+		if _stranger_recites_promise(text):
+			return {"ok": false, "reason": "stranger_ooc"}
 		for phrase in RelationshipDirector.get_stranger_ooc_phrases():
 			if phrase in text:
 				return {"ok": false, "reason": "stranger_ooc"}
@@ -331,7 +437,28 @@ func _stored_player_name(payload: Dictionary) -> String:
 	var stored := str(ctx.get("stored_name", "")).strip_edges()
 	if stored != "":
 		return stored
-	return GameState.player_name.strip_edges()
+	var live := GameState.player_name.strip_edges() if GameState.has_player_name_set() else ""
+	if live != "":
+		return live
+	var display := GameState.get_player_display_name().strip_edges()
+	if display != "" and display != "你":
+		return display
+	return ""
+
+
+func _stranger_recites_promise(text: String) -> bool:
+	if not GameState.has_story_promise():
+		return false
+	var promise: Variant = GameState.long_term_memory.get("promise", {})
+	if not promise is Dictionary:
+		return false
+	var summary := str(promise.get("summary", "")).strip_edges()
+	if summary.length() >= 6 and summary in text:
+		return true
+	for probe in ["萝卜长好", "一起看看", "一起看"]:
+		if probe in summary and probe in text:
+			return true
+	return false
 
 
 func _mentions_forbidden_crop(text: String) -> bool:
@@ -423,6 +550,9 @@ func _is_awkward_waiting_reply(text: String) -> bool:
 	for phrase in RelationshipDirector.get_awkward_waiting_phrases():
 		if phrase in text:
 			return true
+	for phrase in ["还有要说的吗", "没有也行，我坐着", "没有也行我坐着"]:
+		if phrase in text:
+			return true
 	return false
 
 
@@ -431,13 +561,59 @@ func _mentions_premature_promise(text: String) -> bool:
 		return false
 	for phrase in [
 		"等萝卜长好", "长好了，我们一起", "长好了我们一起", "一起看看吧",
-		"我们约", "你说过等", "你说的等", "有个约定", "本子上写着",
+		"萝卜长好了", "我们约", "你说过等", "你说的等", "有个约定", "本子上写着",
 		"你说等",
 	]:
 		if phrase in text:
 			return true
 	if "约定" in text and ("萝卜" in text or "看看" in text):
 		return true
+	return false
+
+
+func _recites_journal_digest(text: String) -> bool:
+	if MemoryService.looks_like_journal_digest(text):
+		return true
+	for cue in ["你们聊了", "你们聊到", "你问小狸", "她主动提出", "你告诉小狸", "你们初次见面", "小狸认真记下"]:
+		if cue in text:
+			return true
+	return false
+
+
+func _recites_notebook_aloud(text: String, payload: Dictionary = {}) -> bool:
+	for cue in [
+		"本子上写着", "本子上记着", "翻到那页", "我翻给你看", "写着「", "写着『",
+		"我记得是——", "我记得是——『", "今天：你提到",
+	]:
+		if cue in text:
+			return true
+	var leak_raw: Variant = payload.get("leak_context", {})
+	if leak_raw is Dictionary:
+		var summary := str(leak_raw.get("anchor_summary", "")).strip_edges()
+		if summary.length() >= 10 and summary in text:
+			return true
+	return false
+
+
+func _is_farm_hard_sell(text: String) -> bool:
+	for cue in [
+		"要不要我去买点种子", "买点种子回来", "买点种子种上", "十八块都空",
+		"要不要种点什么", "要不要我顺手浇",
+	]:
+		if cue in text:
+			return true
+	return false
+
+
+func _addresses_place_as_name(text: String, payload: Dictionary) -> bool:
+	var player := _stored_player_name(payload)
+	for place in ["田埂", "廊下", "树洞", "空土垄", "河边", "小径"]:
+		if player != "" and player == place:
+			continue
+		if text.begins_with(place + "，") or text.begins_with(place + ","):
+			return true
+		if ("。" + place + "，") in text or ("！" + place + "，") in text:
+			return true
 	return false
 
 
@@ -469,6 +645,72 @@ func _violates_harvest_capability(text: String, payload: Dictionary) -> bool:
 	return true
 
 
+func _place_group(place: String) -> String:
+	match place:
+		"萝卜田", "农田":
+			return "萝卜田"
+		"廊下":
+			return "廊下"
+		"树洞":
+			return "树洞"
+		"旧屋门口", "门口":
+			return "旧屋门口"
+		"田埂":
+			return "田埂"
+		"空土垄":
+			return "空土垄"
+		"河边":
+			return "河边"
+		"小径":
+			return "小径"
+		"商店":
+			return "商店"
+		_:
+			return place
+
+
+func _nearby_places_ok(loc_group: String, place_group: String) -> bool:
+	if loc_group == place_group:
+		return true
+	if loc_group == "旧屋门口" and place_group == "小径":
+		return true
+	if loc_group == "廊下" and place_group in ["旧屋门口", "小径"]:
+		return true
+	if loc_group == "萝卜田" and place_group in ["田埂", "空土垄"]:
+		return true
+	return false
+
+
+func _denies_being_at(text: String, place: String) -> bool:
+	if ("不在" + place) in text or ("没在" + place) in text:
+		return true
+	if place in text and ("说岔" in text or "说错" in text or "看错" in text or "记岔" in text):
+		return true
+	return false
+
+
+func _claims_being_at(text: String, place: String) -> bool:
+	if _denies_being_at(text, place):
+		return false
+	for needle in [
+		"我在" + place,
+		"就在" + place,
+		"人在" + place,
+		"在" + place + "看",
+		"在" + place + "呢",
+		"在" + place + "上",
+		"在" + place + "边",
+		"在" + place + "里",
+		"在" + place + "躲",
+		place + "看雨",
+		place + "躲雨",
+		place + "打盹",
+	]:
+		if needle in text:
+			return true
+	return false
+
+
 func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:
 	for phrase in ["包种子", "手头有", "要种几", "种几块", "第二片叶", "第几片叶"]:
 		if phrase in text:
@@ -477,19 +719,14 @@ func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:
 	var companion: Dictionary = snap.get("companion", {}) if snap is Dictionary else {}
 	var loc := str(companion.get("location_name", "")).strip_edges()
 	var activity := str(companion.get("activity", "")).strip_edges()
-	var player_msg := str(payload.get("player_message", "")).strip_edges()
-	var places := ["商店", "萝卜田", "廊下", "旧屋门口", "树洞", "田埂", "空土垄", "河边", "小径"]
-	for place in places:
-		if loc != "" and place == loc:
-			continue
-		if player_msg != "" and place in player_msg:
-			continue
-		if loc == "旧屋门口" and place == "小径":
-			continue
-		if loc == "廊下" and place in ["旧屋门口", "小径"]:
-			continue
-		if ("我在" + place) in text or ("在" + place + "上") in text or ("在" + place + "边") in text:
-			return true
+	var loc_group := _place_group(loc)
+	var places := ["商店", "萝卜田", "农田", "廊下", "旧屋门口", "树洞", "田埂", "空土垄", "河边", "小径"]
+	if loc != "":
+		for place in places:
+			if _nearby_places_ok(loc_group, _place_group(place)):
+				continue
+			if _claims_being_at(text, place):
+				return true
 	if activity in ["闲逛", "发呆", "待命"] and ("我去浇" in text or "我去种" in text or "我去收" in text):
 		return true
 	return false

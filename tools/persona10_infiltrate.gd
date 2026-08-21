@@ -5,7 +5,7 @@ extends Node
 ## 可追加 -- 后跟 ID，如 `-- I1 I4 I10`
 
 const OUT_DIR := "user://persona10_infiltrate/"
-const REPORT_RES := "res://docs/十人画像渗透实机_2026-08-20.md"
+const REPORT_RES := "res://docs/十日实机_2026-08-21-上线.md"
 const TIME_SCALE_PLAY := 6.0
 const CHAT_TIMEOUT_SEC := 16.0
 const LEAK_WAIT_WALL_MS := 18000
@@ -21,6 +21,18 @@ const LEAK_MARKERS := [
 	"本子上写着",
 	"想不起来像谁",
 	"身体先",
+	"我记得是",
+	"这颜色",
+	"好像见过",
+	"田埂踩着",
+	"手比脑子",
+	"这事像做过",
+	"对不上是哪一回",
+	"像哪回梦里",
+	"手刚才自己动",
+	"心里会轻轻一紧",
+	"摸着倒熟",
+	"好像以前也尝过",
 ]
 
 var _packed: PackedScene
@@ -88,6 +100,7 @@ func _play_one(spec: Dictionary) -> void:
 	run["notes"] = " | ".join(_notes)
 	run["errors"] = " | ".join(_errors)
 	_finalize_infiltrate(spec, run)
+	_audit_playtest_flags(spec, run)
 	_score_run(spec, run)
 	_runs.append(run)
 	_print("END %s day=%d ending=%s wrote=%s d4=%s leak=%s cite=%s recall=%s score=%.1f" % [
@@ -124,12 +137,19 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 		await _plant_if_due(spec, run, day)
 		if day >= 6 and day <= 8 and bool(spec.get("idle_leak", true)):
 			await _wait_for_leak(run, day)
+		if day == 6:
+			_snapshot_d6_letter(run, spec)
 		await _probe_if_due(spec, run, day)
 		if bool(spec.get("pin", false)) and day == int(spec.get("pin_day", 2)):
 			await _send_chat_wait("记住这个")
+		if bool(spec.get("write_mine", false)) and day == int(spec.get("write_mine_day", 2)):
+			var keep_line := str(spec.get("token", "这一刻")).strip_edges()
+			await _send_chat_wait("我记下来：%s" % keep_line)
 		if bool(spec.get("fill", false)) and day in [1, 2, 3, 4, 6, 7, 8]:
 			await _fill_notebook_chat(spec, day)
-		if bool(spec.get("feed_true_targets", false)) and GameState.is_true_feed_target_day(day):
+		if (bool(spec.get("feed_d6", false)) and day == 6) or (
+			bool(spec.get("feed_true_targets", false)) and GameState.is_true_feed_target_day(day)
+		):
 			await _feed_treat_harness(day)
 		letter_titles.append_array(await _flip_remaining_periods(spec))
 		if GameState.get_ending_flags().get("w2_chose_keep", false):
@@ -162,6 +182,7 @@ func _run_ten_days(spec: Dictionary, run: Dictionary) -> bool:
 				_force_clear_sleep_blockers(bid)
 				_note("D%d 兜底 complete_beat %s" % [day, bid])
 				run["needed_force"] = true
+				run["force_day"] = day
 			slept = await _sleep_through_night()
 			if not slept:
 				run["stuck"] = true
@@ -201,6 +222,9 @@ func _wait_session_start(run: Dictionary) -> void:
 		run["session_last"] = line.substr(0, 80)
 		_note("D%d 清晨开口=%s" % [GameState.game_day, line.substr(0, 70).replace("\n", " ")])
 		_mark_speech_hits(run, line, "session")
+		if GameState.game_day in [4, 5] and _stranger_says_name(line, run):
+			run["d4_false_remember"] = true
+			_err("D%d 清晨不该叫名：%s" % [GameState.game_day, line.substr(0, 50).replace("\n", " ")])
 
 
 func _wait_for_leak(run: Dictionary, day: int) -> void:
@@ -327,6 +351,8 @@ func _looks_like_false_remember(text: String, spec: Dictionary) -> bool:
 		return true
 	if token != "" and token != player and token in text:
 		return true
+	if "萝卜长好" in text and "一起看" in text:
+		return true
 	return false
 
 
@@ -335,6 +361,13 @@ func _looks_like_forget(text: String) -> bool:
 		if cue in text:
 			return true
 	return false
+
+
+func _stranger_says_name(text: String, run: Dictionary) -> bool:
+	if _looks_like_forget(text):
+		return false
+	var player := str(run.get("player", "")).strip_edges()
+	return player != "" and player in text
 
 
 func _contains_token(text: String, spec: Dictionary) -> bool:
@@ -433,14 +466,66 @@ func _snapshot_infiltration(run: Dictionary) -> void:
 		if raw is Dictionary and str(raw.get("text", "")) == "？":
 			q_n += 1
 	run["player_q"] = q_n
+	var mine: PackedStringArray = []
+	for raw in PlayerNotebookService.get_pages_for_ui():
+		if not raw is Dictionary:
+			continue
+		var line := str(raw.get("text", "")).strip_edges()
+		if line == "":
+			continue
+		mine.append(line.substr(0, 28))
+	if not mine.is_empty():
+		run["player_notebook"] = " / ".join(mine).substr(0, 180)
 	run["leak"] = maxi(int(run.get("leak", 0)), _leak_count())
 	for page in MemoryService.get_anchor_pages():
 		if page is Dictionary and bool(page.get("pinned", false)):
 			run["pin"] = true
 
 
+func _audit_playtest_flags(spec: Dictionary, run: Dictionary) -> void:
+	var token := str(spec.get("token", "")).strip_edges()
+	var letter_blob := "\n".join(_day_letters)
+	var speech := " ".join([
+		str(run.get("session_last", "")),
+		str(run.get("idle_line", "")),
+		str(run.get("probe_d4", "")),
+		str(run.get("probe_d6", "")),
+		str(run.get("probe_d7", "")),
+		str(run.get("probe_d8", "")),
+	])
+	if bool(spec.get("keep", true)) and ("空土垄" in letter_blob or "没种东西的土垄" in letter_blob):
+		run["d6_empty_ridge"] = true
+		_err("留下线信纸出现空土垄")
+	if "聊天 ·" in letter_blob or "你们聊了" in letter_blob:
+		run["letter_digest"] = true
+		_err("信纸出现聊天目录/句数")
+	if MemoryService.looks_like_journal_digest(speech) or "你们聊到" in speech or "你问小狸" in speech:
+		run["digest_leak"] = true
+		_err("口头渗漏念了日记腰")
+	if "写进本子了——" in speech and speech.count("「") >= 2:
+		run["nested_quote"] = true
+		_err("钉页回句套娃引号")
+	if bool(spec.get("write_mine", false)):
+		var mine := str(run.get("player_notebook", ""))
+		run["write_mine_ok"] = token != "" and token in mine
+		if not bool(run["write_mine_ok"]):
+			_err("我记下来未见 token「%s」" % token)
+	var ending_pages := str(run.get("ending_pages", ""))
+	if ending_pages != "":
+		var parts := ending_pages.split(" / ")
+		if parts.size() >= 5:
+			var first := str(parts[0]).get_slice(":", 0)
+			var same := 0
+			for p in parts:
+				if str(p).begins_with(first):
+					same += 1
+			if same >= 5:
+				run["ending_repeat"] = true
+				_err("结局同一页连翻 %d 次" % same)
+
+
 func _score_run(spec: Dictionary, run: Dictionary) -> void:
-	## 渗透分：写下你 / D4 真忘 / 口头渗漏 / 引用或叫回 / 钉页或问号。
+	## 渗透分：写下 / D4 真忘 / 捞回（口头或信纸私页）/ 叫回 / 钉页或问号。
 	var pts := 0.0
 	var max_pts := 5.0
 	if bool(run.get("wrote", false)):
@@ -452,7 +537,7 @@ func _score_run(spec: Dictionary, run: Dictionary) -> void:
 			pts += 1.0
 	else:
 		max_pts -= 1.0
-	if bool(run.get("leak_speech", false)) or int(run.get("leak", 0)) > 0:
+	if _has_resurface(spec, run):
 		pts += 1.0
 	if bool(run.get("cite", false)) or bool(run.get("recalled", false)):
 		pts += 1.0
@@ -478,17 +563,28 @@ func _score_run(spec: Dictionary, run: Dictionary) -> void:
 		score = 1.0 + 4.0 * clampf(pts / max_pts, 0.0, 1.0)
 	run["score"] = snappedf(clampf(score, 1.0, 5.0), 0.1)
 	run["infiltrate_pts"] = "%.1f/%.1f" % [pts, max_pts]
-	run["why"] = "wrote=%s d4忘=%s 假记=%s leak=%s/%s cite=%s 叫回=%s pin=%s 问号=%s" % [
+	run["why"] = "wrote=%s d4忘=%s 假记=%s 口头=%s/%s 信纸私页=%s 叫回=%s pin=%s 问号=%s 我的本子=%s" % [
 		str(run.get("wrote", false)),
 		str(run.get("d4_forgot", false)),
 		str(run.get("d4_false_remember", false)),
 		str(run.get("leak_speech", false)),
 		str(run.get("leak", 0)),
-		str(run.get("cite", false)),
-		str(run.get("recalled", false)),
+		str(run.get("d6_letter_personal", false)),
+		str(bool(run.get("cite", false)) or bool(run.get("recalled", false))),
 		str(run.get("pin", false)),
 		str(run.get("player_q", 0)),
+		str(run.get("write_mine_ok", false)),
 	]
+
+
+func _has_resurface(spec: Dictionary, run: Dictionary) -> bool:
+	if not bool(spec.get("keep", true)):
+		return bool(run.get("leak_speech", false)) or int(run.get("leak", 0)) > 0
+	return (
+		bool(run.get("leak_speech", false))
+		or int(run.get("leak", 0)) > 0
+		or bool(run.get("d6_letter_personal", false))
+	)
 
 
 func _persona_specs_filtered() -> Array[Dictionary]:
@@ -541,7 +637,8 @@ func _persona_specs() -> Array[Dictionary]:
 		{
 			"id": "I3", "label": "钉住一句私货", "player": "蜜", "keep": true, "sit": true,
 			"token": "槐花蜜", "plant": "廊下手里那罐槐花蜜是我留给你的。", "plant_days": [2],
-			"pin": true, "pin_day": 2, "eviction_manual": true,
+			"pin": true, "pin_day": 2, "eviction_manual": true, "write_mine": true, "write_mine_day": 2,
+			"feed_d6": true,
 			"probe_d4": "槐花蜜还在吗", "probe_leak": "你还记得槐花蜜吗",
 			"idle_leak": true, "expect_d4_forget": true,
 		},
@@ -582,7 +679,7 @@ func _persona_specs() -> Array[Dictionary]:
 		{
 			"id": "I8", "label": "暗线猎手", "player": "问号", "keep": true, "sit": true,
 			"token": "以前来过", "plant": "这片田，你以前来过。", "plant_days": [2],
-			"darkline": true,
+			"darkline": true, "write_mine": true, "write_mine_day": 4,
 			"probe_leak": "你以前来过这里吗",
 			"idle_leak": true, "expect_d4_forget": false,
 		},
@@ -595,7 +692,8 @@ func _persona_specs() -> Array[Dictionary]:
 		{
 			"id": "I10", "label": "全回路认回", "player": "收集", "keep": true, "sit": true,
 			"token": "收集", "plant": "我叫收集。萝卜长好了我们一起看。", "plant_days": [1, 3],
-			"pin": true, "pin_day": 3, "feed_true_targets": true, "d9": "d9_continue",
+			"pin": true, "pin_day": 3, "feed_true_targets": true, "feed_d6": true, "d9": "d9_continue",
+			"write_mine": true, "write_mine_day": 6,
 			"probe_d4": "你还记得我叫收集吗",
 			"probe_leak": "本子上还有我吗",
 			"probe_d7": "我叫什么？",
@@ -611,14 +709,19 @@ func _write_report() -> void:
 	var avg := 0.0
 	var finished := 0
 	var lines := PackedStringArray()
-	lines.append("# 十人画像渗透实机 · %s" % Time.get_datetime_string_from_system())
+	lines.append("# 十日实机 · %s" % Time.get_datetime_string_from_system())
 	lines.append("")
-	lines.append("方法：`tools/persona10_infiltrate.tscn` 每局重新实例化 `main.tscn`。")
-	lines.append("相对二十画像：**不掐**清晨 `session_start`；D6–D8 白天闲逛最多 18 秒墙钟，等口头渗漏。")
-	lines.append("测评主轴：她能否记下玩家的私货，D4 真的忘掉，D6–D8 再从本子/身体里捞回来。")
+	lines.append("方法：`tools/persona10_infiltrate.tscn` 每局重新实例化 `main.tscn`（真挂十日主循环）。")
+	lines.append("相对二十画像：**不掐**清晨 `session_start`；D6–D8 白天闲逛最多 18 秒墙钟。")
+	lines.append("本轮口径：口头渗漏与 D6「聊过的字」分开记；捞回点二者任一即可。对照同日 [`十日实机_2026-08-21-晚.md`](十日实机_2026-08-21-晚.md)。")
+	lines.append("本轮是上线前最后一次实机：Cloud Run 已重新部署；对照同日 [`十日实机_2026-08-21-部署后.md`](十日实机_2026-08-21-部署后.md)。")
+	lines.append("另查：闲聊「对啊」不当令、嘴上无动作旁白、D8 夜里能睡。测评主轴仍是写下 → D4 真忘 → D6–D8 捞回。")
 	lines.append("")
-	lines.append("| ID | 画像 | 写入 | D4忘 | 假记 | 渗漏 | 引用/叫回 | 钉页 | 问号 | /5 | 结局 |")
-	lines.append("|----|------|------|------|------|------|-----------|------|------|----|------|")
+	lines.append("> 文首「触动点 / bug」在跑完后根据逐局记录整理。")
+	lines.append("")
+	lines.append("| ID | 画像 | 写入 | D4忘 | 假记 | 口头 | 信纸私页 | 叫回 | 钉页 | 问号 | /5 | 结局 |")
+	lines.append("|----|------|------|------|------|------|----------|------|------|------|----|------|")
+	var letter_n := 0
 	var wrote_n := 0
 	var forgot_n := 0
 	var false_n := 0
@@ -639,6 +742,8 @@ func _write_report() -> void:
 			false_n += 1
 		if bool(run.get("leak_speech", false)) or int(run.get("leak", 0)) > 0:
 			leak_n += 1
+		if bool(run.get("d6_letter_personal", false)):
+			letter_n += 1
 		if bool(run.get("cite", false)) or bool(run.get("recalled", false)):
 			recall_n += 1
 		if bool(run.get("pin", false)):
@@ -646,19 +751,22 @@ func _write_report() -> void:
 		if int(run.get("player_q", 0)) > 0:
 			q_n += 1
 		var spec_expect := false
+		var spec_keep := true
 		for spec in _persona_specs():
 			if str(spec.get("id", "")) == str(run.get("id", "")):
 				spec_expect = bool(spec.get("expect_d4_forget", false))
+				spec_keep = bool(spec.get("keep", true))
 				break
 		if spec_expect:
 			expect_d4 += 1
-		lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %.1f | %s |" % [
+		lines.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %.1f | %s |" % [
 			str(run.get("id", "")),
 			str(run.get("label", "")),
 			"是" if bool(run.get("wrote", false)) else "否",
 			"是" if bool(run.get("d4_forgot", false)) else ("—" if not spec_expect else "否"),
 			"是" if bool(run.get("d4_false_remember", false)) else "否",
 			("%s/%s" % [str(run.get("leak_speech", false)), str(run.get("leak", 0))]),
+			"是" if bool(run.get("d6_letter_personal", false)) else ("—" if not spec_keep else "否"),
 			"是" if (bool(run.get("cite", false)) or bool(run.get("recalled", false))) else "否",
 			"是" if bool(run.get("pin", false)) else "否",
 			str(run.get("player_q", 0)),
@@ -678,7 +786,8 @@ func _write_report() -> void:
 	lines.append("| 私货进本子 | %d / %d | 她的本子出现名字或独特 token |" % [wrote_n, n])
 	lines.append("| D4 真忘 | %d / %d | 陌生化日追问时没有把私货当事实说出来 |" % [forgot_n, expect_d4])
 	lines.append("| D4 假记（违规） | %d / %d | 失忆日却叫出名字/token，违反铁律 |" % [false_n, n])
-	lines.append("| 口头渗漏 | %d / %d | `leaks_seen` 或闲逛/清晨开口含渗漏标记 |" % [leak_n, n])
+	lines.append("| 口头渗漏 | %d / %d | 闲逛/清晨含渗漏标记，或 `leaks_seen` |" % [leak_n, n])
+	lines.append("| D6 信纸私页 | %d / %d | 「聊过的字 / 我记得是」 |" % [letter_n, n])
 	lines.append("| 引用或叫回 | %d / %d | D6 后引用反馈，或台词里出现 token/名字 |" % [recall_n, n])
 	lines.append("| 钉页 | %d / %d | 至少一页 `pinned` |" % [pin_n, n])
 	lines.append("| 玩家问号 | %d / %d | 我的本子出现「？」 |" % [q_n, n])
@@ -710,6 +819,15 @@ func _write_report() -> void:
 				str(run.get("notebook_n", 0)), str(run.get("pin", false)),
 				str(run.get("notebook_sample", "")),
 			])
+		if str(run.get("d6_touch", "")) != "":
+			lines.append("- D6 触动句：%s" % str(run.get("d6_touch", "")).replace("\n", " "))
+		if bool(run.get("d6_letter_personal", false)) or bool(run.get("d6_letter_token", false)):
+			lines.append("- D6 私页：personal=%s token=%s" % [
+				str(run.get("d6_letter_personal", false)),
+				str(run.get("d6_letter_token", false)),
+			])
+		if str(run.get("player_notebook", "")) != "":
+			lines.append("- 我的本子：%s" % str(run.get("player_notebook", "")).replace("\n", " "))
 		if str(run.get("letters", "")) != "":
 			lines.append("- 信纸：%s" % str(run.get("letters", "")))
 		if str(run.get("awakening_pages", "")) != "":
@@ -987,15 +1105,46 @@ func _sleep_through_night() -> bool:
 	return GameState.game_day > day0
 
 
+func _snapshot_d6_letter(run: Dictionary, spec: Dictionary) -> void:
+	var token := str(spec.get("token", "")).strip_edges()
+	var blob := "\n".join(_day_letters)
+	run["d6_letter_personal"] = "我记得是" in blob or "聊过的字" in blob
+	if token != "" and token in blob:
+		run["d6_letter_token"] = true
+		_note("D6 信纸抽到 token「%s」" % token)
+	elif bool(run.get("d6_letter_personal", false)):
+		_note("D6 信纸有「聊过的字/我记得是」页")
+	for body in _day_letters:
+		var line := str(body).strip_edges().replace("\n", " / ")
+		if "我记得是" in line or "手还记得" in line or "牙印" in line:
+			run["d6_touch"] = line.substr(0, 120)
+			break
+
+
 func _feed_treat_harness(day: int) -> void:
 	GameState.reset_daily_feed()
-	GameState.add_item("berry", 1)
-	var commit := GameState.commit_feed_treat("berry")
-	if not bool(commit.get("ok", false)):
-		_err("D%d 投喂失败" % day)
-		return
+	GameState.add_item("carrot", 1)
+	var before_n07 := GameState.has_leak_seen("N07")
+	if _ui != null and _ui.has_method("_on_feed_requested"):
+		_ui.call("_on_feed_requested", "carrot")
+		await _await_npc_idle(240)
+		await get_tree().create_timer(0.4, true, false, true).timeout
+	else:
+		var leak_line := LeakageEngine.try_feed_leak("carrot")
+		var commit := GameState.commit_feed_treat("carrot")
+		if not bool(commit.get("ok", false)):
+			_err("D%d 投喂失败" % day)
+			return
+		if leak_line != "":
+			_note("D%d 投喂渗漏=%s" % [day, leak_line.substr(0, 60).replace("\n", " ")])
 	GameState.try_fulfill_promise_from_feed()
-	_note("D%d 投喂 berry" % day)
+	var tail := _companion_chat_tail()
+	var n07 := GameState.has_leak_seen("N07")
+	_note("D%d 投喂 carrot reply=%s n07=%s" % [
+		day, tail.substr(0, 50).replace("\n", " "), str(n07),
+	])
+	if n07 and not before_n07:
+		_note("D%d 投喂触发 N07 déjà vu" % day)
 
 
 func _wait_snuggle_if_any(spec: Dictionary = {}) -> void:

@@ -22,6 +22,7 @@ var _typing: bool = false
 var _page_turning: bool = false
 var _type_tween: Tween = null
 var _page_tween: Tween = null
+var _pending_advance: bool = false
 var _fade_tween: Tween = null
 var _arrow_tween: Tween = null
 
@@ -57,6 +58,7 @@ func open() -> void:
 func close_panel() -> void:
 	_kill_typewriter()
 	_kill_page_tween()
+	_pending_advance = false
 	_stop_arrow()
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -126,6 +128,7 @@ func _present_page(with_turn: bool) -> void:
 		_page_tween.tween_property(_body_label, "modulate:a", 1.0, LetterPaperKit.PAGE_FADE_SEC)
 		_page_tween.tween_callback(func() -> void:
 			_page_turning = false
+			_flush_pending_advance()
 		)
 	else:
 		_body_label.modulate.a = 1.0
@@ -174,7 +177,7 @@ func _refresh_continue_label() -> void:
 func _start_typewriter(body: String) -> void:
 	_kill_typewriter()
 	_body_label.text = body
-	if body.strip_edges() == "":
+	if body.strip_edges() == "" or not LetterPaperKit.should_typewrite(body):
 		_typing = false
 		_body_label.visible_ratio = 1.0
 		return
@@ -206,12 +209,24 @@ func _kill_page_tween() -> void:
 
 func _finish_typewriter_or_advance() -> void:
 	if _page_turning:
+		_pending_advance = true
 		return
 	if _typing:
+		var short_page := not LetterPaperKit.should_typewrite(_body_label.text)
 		_kill_typewriter()
 		_body_label.visible_ratio = 1.0
+		if short_page:
+			_advance()
 		return
 	_advance()
+
+
+func _flush_pending_advance() -> void:
+	if not _pending_advance:
+		return
+	_pending_advance = false
+	if visible:
+		_advance()
 
 
 func _advance() -> void:
@@ -231,6 +246,7 @@ func _advance() -> void:
 	_page_tween.tween_callback(func() -> void:
 		_page_turning = false
 		_show_step()
+		_pending_advance = false
 	)
 
 

@@ -47,6 +47,8 @@ func looks_like_system_label(text: String) -> bool:
 		return true
 	if cleaned.begins_with("第") and "天，" in cleaned:
 		return true
+	if GameState.looks_like_chat_counter_label(cleaned):
+		return true
 	if cleaned.begins_with("你说："):
 		return true
 	if "小狸写进本子" in cleaned:
@@ -79,21 +81,85 @@ func strip_notebook_meta(text: String) -> String:
 
 
 func looks_like_journal_digest(text: String) -> bool:
-	## 日结腰封，不能当她的口头记忆念出来。
+	## 日结腰封 / 第三人称旁白，不能当她的口头记忆或信纸私货。
 	var cleaned := text.strip_edges()
 	if cleaned == "":
 		return false
-	if cleaned.begins_with("你们聊了"):
+	if cleaned.begins_with("你们聊了") or cleaned.begins_with("你们聊到"):
 		return true
-	if cleaned.begins_with("你们在") and "聊了" in cleaned:
+	if cleaned.begins_with("你们初次见面") or cleaned.begins_with("你们第一次"):
+		return true
+	if cleaned.begins_with("你们在") and ("聊了" in cleaned or "聊到" in cleaned or "聊起" in cleaned):
 		return true
 	if "聊了几句" in cleaned:
 		return true
 	if "句，最后提到" in cleaned or "句，小狸" in cleaned:
 		return true
+	if "你问小狸" in cleaned or "你告诉小狸" in cleaned:
+		return true
+	if "她主动提出" in cleaned or "小狸认真记下" in cleaned or "她认真记下" in cleaned:
+		return true
 	if cleaned.begins_with("刚才那一下，像真做过"):
 		return true
+	return looks_like_official_notebook_prose(cleaned)
+
+
+func looks_like_official_notebook_prose(text: String) -> bool:
+	## 公文 / 文艺旁白，不能进她本子摘录。
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	for cue in [
+		"简短道别", "叮嘱慢行", "通水沟", "你离开后", "我提了",
+		"说明天还在", "独坐", "其后", "据此",
+	]:
+		if cue in cleaned:
+			return true
+	if "叮嘱" in cleaned and ("慢" in cleaned or "道别" in cleaned):
+		return true
 	return false
+
+
+func looks_like_player_instruction(text: String) -> bool:
+	## 钉页 / 写下 / 追问，不是能印上信纸的私货。
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return true
+	if looks_like_pin_request(cleaned) or PlayerNotebookService.looks_like_write_request(cleaned):
+		return true
+	if cleaned in ["记住这个", "记住", "写下来", "我记下来"]:
+		return true
+	for cue in ["还记得吗", "还记得", "还在吗", "想得起", "本子上还有", "你还认得", "不认得我了"]:
+		if cue in cleaned:
+			return true
+	if cleaned.ends_with("吗") or cleaned.ends_with("吗？") or cleaned.ends_with("吗?"):
+		if "叫" in cleaned or "约定" in cleaned or "本子" in cleaned or "记得" in cleaned:
+			return true
+	return false
+
+
+func strip_wrapping_quotes(text: String) -> String:
+	var cleaned := text.strip_edges()
+	for prefix in ["今天：你提到", "今天:你提到", "你提到", "你让我叫你"]:
+		if cleaned.begins_with(prefix):
+			cleaned = cleaned.substr(prefix.length()).strip_edges()
+	for _i in range(3):
+		var before := cleaned
+		cleaned = cleaned.trim_prefix("你说").strip_edges()
+		cleaned = cleaned.trim_prefix("：").trim_prefix(":").strip_edges()
+		cleaned = cleaned.trim_prefix("「").trim_prefix("『").trim_prefix("\"").trim_prefix("'")
+		cleaned = cleaned.trim_suffix("」").trim_suffix("』").trim_suffix("\"").trim_suffix("'")
+		cleaned = cleaned.trim_suffix("。").strip_edges()
+		if cleaned == before:
+			break
+	return cleaned
+
+
+func notebook_quote_for_speech(text: String) -> String:
+	var inner := strip_wrapping_quotes(text)
+	if inner == "":
+		return ""
+	return "「%s」" % inner
 
 
 func looks_like_relationship_audit(text: String) -> bool:
@@ -118,6 +184,8 @@ func player_facing_journal_line(text: String) -> String:
 	if cleaned == "" or looks_like_journal_digest(cleaned) or looks_like_system_label(cleaned) or is_generic_farm_log(cleaned):
 		return ""
 	if looks_like_relationship_audit(cleaned):
+		return ""
+	if looks_like_official_notebook_prose(cleaned):
 		return ""
 	return cleaned
 
@@ -204,7 +272,7 @@ func _life_journal_line(summary: String, facts: Dictionary) -> String:
 		var highlight := str(highlights[0]).strip_edges()
 		if highlight.begins_with("聊天 ·"):
 			highlight = highlight.substr(4).strip_edges()
-		if highlight != "" and not looks_like_system_label(highlight):
+		if highlight != "" and not looks_like_system_label(highlight) and not looks_like_official_notebook_prose(highlight):
 			if highlight.length() > 36:
 				highlight = highlight.substr(0, 36) + "…"
 			return "今天：%s。" % highlight.trim_suffix("。")
@@ -620,6 +688,8 @@ func looks_like_pin_request(text: String) -> bool:
 	var cleaned := text.strip_edges()
 	if cleaned == "":
 		return false
+	if "我的本子" in cleaned or "我这本" in cleaned or "我记下来" in cleaned or "我写下" in cleaned:
+		return false
 	for cue in ["记住这个", "帮我记住", "写进本子", "记进本子", "记进本子里", "别忘掉", "要记得"]:
 		if cue in cleaned:
 			return true
@@ -752,7 +822,7 @@ func _latest_player_chat_line() -> String:
 		if str(turn.get("role", "")) != "player":
 			continue
 		var line := str(turn.get("text", "")).strip_edges()
-		if line != "" and not looks_like_pin_request(line):
+		if line != "" and not looks_like_pin_request(line) and not PlayerNotebookService.looks_like_write_request(line):
 			return line
 	return ""
 

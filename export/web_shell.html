@@ -34,8 +34,9 @@ body {
 	height: 100%;
 	outline: none;
 	touch-action: none;
+	image-rendering: -moz-crisp-edges;
+	image-rendering: -webkit-optimize-contrast;
 	image-rendering: pixelated;
-	image-rendering: crisp-edges;
 }
 
 #canvas:focus {
@@ -172,14 +173,17 @@ body {
 		<script src="$GODOT_URL"></script>
 		<script>
 (function capWebPixelRatio() {
-	const raw = window.devicePixelRatio || 1;
-	if (raw <= 1) {
+	const raw = Number(window.devicePixelRatio) || 1;
+	const narrow = Math.min(window.innerWidth, window.innerHeight) < 900;
+	const maxRatio = narrow ? 1.5 : 2;
+	const capped = Math.min(Math.max(raw, 1), maxRatio);
+	if (capped === raw) {
 		return;
 	}
 	try {
 		Object.defineProperty(window, 'devicePixelRatio', {
 			configurable: true,
-			get: function () { return 1; },
+			get: function () { return capped; },
 		});
 	} catch (e) {}
 })();

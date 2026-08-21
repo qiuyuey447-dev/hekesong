@@ -1,5 +1,6 @@
 extends Node
 ## 剧情节点文案库（config/story_nodes.json）。编辑 JSON 后重启 Godot。
+## `_archive` 是十日版不上屏的旧文，get_* 不会读。
 
 const PATH := "res://config/story_nodes.json"
 

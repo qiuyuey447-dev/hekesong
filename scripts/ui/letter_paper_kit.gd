@@ -15,6 +15,7 @@ const DIM_MOODY := Color(0.06, 0.05, 0.04, 0.48)
 const TYPEWRITER_SEC_PER_CHAR := 0.07
 const PAGE_FADE_SEC := 0.22
 const MAX_CHARS_PER_PAGE := 78
+const SHORT_PAGE_CHARS := 52
 const CARD_RATIO := 0.62
 
 
@@ -124,15 +125,36 @@ static func paginate_body(text: String, max_chars: int = MAX_CHARS_PER_PAGE) -> 
 	if paragraphs.is_empty():
 		return PackedStringArray([cleaned])
 	var pages: PackedStringArray = []
+	var current := ""
 	for para in paragraphs:
-		if para.length() <= max_chars:
-			pages.append(para)
+		if current == "":
+			current = para
 			continue
-		for chunk in _split_long(para, max_chars):
-			pages.append(chunk)
+		if current.length() + 2 + para.length() <= max_chars:
+			current += "\n\n" + para
+			continue
+		if current.length() <= 80 and para.length() <= 80 and current.length() + 2 + para.length() <= 140:
+			current += "\n\n" + para
+			continue
+		if current.length() <= max_chars:
+			pages.append(current)
+		else:
+			for chunk in _split_long(current, max_chars):
+				pages.append(chunk)
+		current = para
+	if current != "":
+		if current.length() <= 140:
+			pages.append(current)
+		else:
+			for chunk in _split_long(current, max_chars):
+				pages.append(chunk)
 	if pages.is_empty():
 		pages.append(cleaned)
 	return pages
+
+
+static func should_typewrite(body: String) -> bool:
+	return body.strip_edges().length() > SHORT_PAGE_CHARS
 
 
 static func _split_long(para: String, max_chars: int) -> PackedStringArray:

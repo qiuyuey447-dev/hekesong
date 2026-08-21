@@ -36,11 +36,15 @@ func peek_leak_context() -> Dictionary:
 	if not _can_leak():
 		return {}
 	if GameState.IS_TEN_DAY_EDITION:
+		## 先抽玩家真说过的话 / 日记原句，再落到约定或节点锚。
+		var spoken := _pick_spoken_anchor()
+		if not spoken.is_empty():
+			return _pack_leak_context(spoken, "")
 		for nid in [NODE_N11, NODE_N14, NODE_N07]:
 			if GameState.has_leak_seen(nid):
 				continue
 			var node_anchor := _pick_anchor_for_node(nid)
-			if not node_anchor.is_empty():
+			if not node_anchor.is_empty() and not _was_leaked(node_anchor):
 				return _pack_leak_context(node_anchor, nid)
 		var general := _pick_anchor()
 		if not general.is_empty():
@@ -69,6 +73,7 @@ func commit_leak_from_context(ctx: Dictionary) -> void:
 	var node_id := str(ctx.get("node_id", "")).strip_edges()
 	if node_id != "" and not GameState.has_leak_seen(node_id):
 		GameState.mark_leak_seen(node_id)
+	remember_used_memory(str(ctx.get("anchor_id", "")), str(ctx.get("anchor_summary", "")))
 	if GameState.IS_TEN_DAY_EDITION:
 		PlayerNotebookService.on_live_slip("player_knows_detail_d6")
 
@@ -128,30 +133,70 @@ func try_session_leak() -> String:
 	return try_leak_line("session")
 
 
-func try_feed_leak(item_id: String) -> String:
+func peek_feed_leak_context(item_id: String) -> Dictionary:
 	if StoryDirector.is_stranger_mode() or GameState.has_revealed_memory():
-		return ""
-	if GameState.get_week_index() < FEED_LEAK_MIN_WEEK:
-		return ""
+		return {}
+	if not _feed_leak_unlocked():
+		return {}
 	if GameState.has_leak_seen(NODE_N07):
-		return ""
+		return {}
 	if not _treat_triggers_fav_leak(item_id):
-		return ""
-
-	var anchor := _pick_anchor_for_node(NODE_N07)
+		return {}
+	var item := ShopCatalog.get_treat_item(item_id)
+	if item.is_empty():
+		return {}
+	var item_name := str(item.get("name", "零食")).strip_edges()
+	var anchor := _pick_gift_anchor(item_id)
 	var line := ""
 	if not anchor.is_empty():
 		line = _format_anchor_leak(anchor, NODE_N07, "react")
+	if line == "":
+		line = _format_gift_deja_vu(item_name)
 	if line == "" and not GameState.IS_TEN_DAY_EDITION:
 		line = _demo_leak_fallback(NODE_N07)
 		if line == "":
 			line = "这颜色……好像在哪里见过。等过很久，又像是昨天。"
 	if line == "":
-		return ""
+		return {}
+	var ctx := _pack_leak_context(anchor, NODE_N07)
+	if ctx.is_empty():
+		ctx = {
+			"available": true,
+			"node_id": NODE_N07,
+			"anchor_id": "",
+			"anchor_summary": item_name,
+			"anchor_kind": "gift",
+			"fallback_line": line,
+		}
+	else:
+		ctx["fallback_line"] = line
+	ctx["item_id"] = item_id
+	ctx["item_name"] = item_name
+	return ctx
 
-	GameState.mark_leak_seen(NODE_N07)
-	GameState.record_initiation("leak_feed", {"node": NODE_N07, "item_id": item_id}, line)
-	return line
+
+func commit_feed_leak(ctx: Dictionary) -> void:
+	if ctx.is_empty():
+		return
+	if not GameState.has_leak_seen(NODE_N07):
+		GameState.mark_leak_seen(NODE_N07)
+	remember_used_memory(str(ctx.get("anchor_id", "")), str(ctx.get("anchor_summary", "")))
+	var line := str(ctx.get("fallback_line", "")).strip_edges()
+	if line != "":
+		GameState.record_initiation("leak_feed", {
+			"node": NODE_N07,
+			"item_id": str(ctx.get("item_id", "")),
+		}, line)
+	if GameState.IS_TEN_DAY_EDITION:
+		PlayerNotebookService.on_live_slip("player_knows_detail_d6")
+
+
+func try_feed_leak(item_id: String) -> String:
+	var ctx := peek_feed_leak_context(item_id)
+	if ctx.is_empty():
+		return ""
+	commit_feed_leak(ctx)
+	return str(ctx.get("fallback_line", "")).strip_edges()
 
 
 func try_node_leak(node_id: String, context: String = "session") -> String:
@@ -223,7 +268,15 @@ func _can_leak() -> bool:
 	return true
 
 
+func _feed_leak_unlocked() -> bool:
+	if GameState.IS_TEN_DAY_EDITION:
+		return GameState.game_day >= 6 and GameState.game_day <= 8
+	return GameState.get_week_index() >= FEED_LEAK_MIN_WEEK
+
+
 func _treat_triggers_fav_leak(item_id: String) -> bool:
+	if GameState.IS_TEN_DAY_EDITION:
+		return not ShopCatalog.get_treat_item(item_id).is_empty()
 	if not bool(FAV_LEAK_TREATS.get(item_id, false)):
 		return false
 	var fav := str(GameState.long_term_memory.get("prefs", {}).get("fav_crop", ""))
@@ -238,6 +291,8 @@ func _pick_anchor_for_node(node_id: String) -> Dictionary:
 			continue
 		var item: Dictionary = entry
 		if str(item.get("kind", "")) == "promise_done":
+			continue
+		if _was_leaked(item):
 			continue
 		var score := _node_match_score(item, node_id)
 		if score > best_score:
@@ -266,6 +321,17 @@ func _journal_memory_entries() -> Array[Dictionary]:
 	for entry in GameState.day_journal:
 		if not entry is Dictionary:
 			continue
+		var day_n := int(entry.get("day", 0))
+		var salience := float(entry.get("chat_salience", 0.0))
+		var chat_summary := str(entry.get("chat_summary", "")).strip_edges()
+		if chat_summary != "" and not MemoryService.looks_like_journal_digest(chat_summary) and not MemoryService.looks_like_system_label(chat_summary):
+			entries.append({
+				"id": "journal_chat_%d" % day_n,
+				"kind": "journal_chat",
+				"summary": chat_summary,
+				"importance": maxf(0.78, salience),
+				"facts": {"source": "day_journal", "chat_salience": salience},
+			})
 		var highlights: Variant = entry.get("highlights", [])
 		if highlights is Array:
 			for highlight in highlights:
@@ -273,7 +339,7 @@ func _journal_memory_entries() -> Array[Dictionary]:
 				if summary == "" or MemoryService.looks_like_journal_digest(summary) or MemoryService.looks_like_system_label(summary):
 					continue
 				entries.append({
-					"id": "journal_%d_%d" % [int(entry.get("day", 0)), entries.size()],
+					"id": "journal_%d_%d" % [day_n, entries.size()],
 					"kind": "journal_chat",
 					"summary": summary,
 					"importance": 0.72,
@@ -282,7 +348,7 @@ func _journal_memory_entries() -> Array[Dictionary]:
 		var summary := str(entry.get("summary", "")).strip_edges()
 		if summary != "" and not MemoryService.looks_like_journal_digest(summary) and not MemoryService.looks_like_system_label(summary):
 			entries.append({
-				"id": "journal_summary_%d" % int(entry.get("day", 0)),
+				"id": "journal_summary_%d" % day_n,
 				"kind": "day_end",
 				"summary": summary,
 				"importance": 0.68,
@@ -343,6 +409,9 @@ func _format_anchor_leak(anchor: Dictionary, node_id: String, context: String) -
 
 
 func _anchor_notebook_line(anchor: Dictionary) -> String:
+	var words := _player_words_of(anchor)
+	if words != "":
+		return words
 	return MemoryService.notebook_line_of(anchor)
 
 
@@ -379,7 +448,11 @@ func _pick_anchor() -> Dictionary:
 		var item: Dictionary = entry
 		if str(item.get("kind", "")) == "promise_done":
 			continue
-		var summary := MemoryService.notebook_line_of(item)
+		if _was_leaked(item):
+			continue
+		var summary := _player_words_of(item)
+		if summary == "":
+			summary = MemoryService.notebook_line_of(item)
 		if summary == "":
 			continue
 		var score := float(item.get("importance", 0.5))
@@ -417,3 +490,167 @@ func _demo_leak_fallback(node_id: String) -> String:
 			return "你把萝卜递给我的那个下午，好像发生过不止一次。"
 		_:
 			return ""
+
+
+func pick_personal_snippet() -> String:
+	var from_chat := _pick_recent_player_line()
+	if from_chat != "":
+		return from_chat
+	var spoken := _pick_spoken_anchor()
+	if not spoken.is_empty():
+		return _anchor_notebook_line(spoken)
+	var promise := _promise_memory_entry()
+	if not promise.is_empty() and not _was_leaked(promise):
+		return _anchor_notebook_line(promise)
+	var general := _pick_anchor()
+	if not general.is_empty():
+		return _anchor_notebook_line(general)
+	return ""
+
+
+func _pick_recent_player_line() -> String:
+	for turn in GameState.get_recent_chat_turns(12):
+		if not turn is Dictionary:
+			continue
+		if str(turn.get("role", "")) != "player":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "":
+			continue
+		if MemoryService.looks_like_player_instruction(line):
+			continue
+		if MemoryService.looks_like_journal_digest(line) or MemoryService.looks_like_system_label(line):
+			continue
+		return StoryRouteData.normalize_personal_snippet(line)
+	return ""
+
+
+func remember_d6_letter_snippet() -> void:
+	## 信纸「聊过的字」不消耗口头渗漏锚。纸上印那句，嘴里另走身体/约定。
+	return
+
+
+func remember_used_memory(anchor_id: String, summary: String) -> void:
+	var ids: Array = GameState.long_term_memory.get("leaked_anchor_ids", [])
+	var aid := anchor_id.strip_edges()
+	if aid != "" and aid not in ids:
+		ids.append(aid)
+	GameState.long_term_memory["leaked_anchor_ids"] = ids
+	var sums: Array = GameState.long_term_memory.get("leaked_summaries", [])
+	var line := summary.strip_edges()
+	if line != "" and line not in sums:
+		sums.append(line)
+		while sums.size() > 12:
+			sums.remove_at(0)
+	GameState.long_term_memory["leaked_summaries"] = sums
+
+
+func _was_leaked(entry: Dictionary) -> bool:
+	var aid := str(entry.get("id", "")).strip_edges()
+	var ids: Array = GameState.long_term_memory.get("leaked_anchor_ids", [])
+	if aid != "" and aid in ids:
+		return true
+	var summary := _player_words_of(entry)
+	if summary == "":
+		summary = MemoryService.notebook_line_of(entry)
+	var sums: Array = GameState.long_term_memory.get("leaked_summaries", [])
+	return summary != "" and summary in sums
+
+
+func _pick_spoken_anchor() -> Dictionary:
+	var best: Dictionary = {}
+	var best_score := -1.0
+	for entry in _all_memory_entries():
+		if not entry is Dictionary:
+			continue
+		var item: Dictionary = entry
+		var kind := str(item.get("kind", ""))
+		if kind not in ["chat", "journal_chat"]:
+			continue
+		if _was_leaked(item):
+			continue
+		var summary := _player_words_of(item)
+		if summary == "":
+			continue
+		if MemoryService.looks_like_journal_digest(summary):
+			continue
+		if MemoryService.looks_like_player_instruction(summary):
+			continue
+		var score := float(item.get("importance", 0.5))
+		var facts: Dictionary = item.get("facts", {}) if item.get("facts", {}) is Dictionary else {}
+		if facts.has("chat_salience"):
+			score = maxf(score, float(facts.get("chat_salience", 0.0)))
+		if MemoryService.is_anchor_pinned(item):
+			score += 1.0
+		if kind == "chat":
+			score += 0.2
+		if score > best_score:
+			best_score = score
+			best = item
+	if best_score <= 0.0:
+		return {}
+	return best
+
+
+func _pick_gift_anchor(item_id: String) -> Dictionary:
+	var best: Dictionary = {}
+	var best_score := -1.0
+	for entry in _all_memory_entries():
+		if not entry is Dictionary:
+			continue
+		var item: Dictionary = entry
+		if str(item.get("kind", "")) != "gift":
+			continue
+		if _was_leaked(item):
+			continue
+		var score := float(item.get("importance", 0.5))
+		var facts: Dictionary = item.get("facts", {}) if item.get("facts", {}) is Dictionary else {}
+		if str(facts.get("item_id", "")) == item_id:
+			score += 0.35
+		if score > best_score:
+			best_score = score
+			best = item
+	if best_score <= 0.0:
+		return {}
+	return best
+
+
+func _player_words_of(entry: Dictionary) -> String:
+	var facts: Dictionary = entry.get("facts", {}) if entry.get("facts", {}) is Dictionary else {}
+	if str(facts.get("source", "")) != "day_journal":
+		var said := str(facts.get("text", "")).strip_edges()
+		if said != "":
+			said = StoryRouteData.normalize_personal_snippet(said)
+			if said != "" and not MemoryService.looks_like_journal_digest(said) and not MemoryService.looks_like_player_instruction(said):
+				return said
+	var line := MemoryService.notebook_line_of(entry).strip_edges()
+	if line == "":
+		line = str(entry.get("summary", "")).strip_edges()
+	line = StoryRouteData.normalize_personal_snippet(line)
+	if line == "" or MemoryService.looks_like_journal_digest(line) or MemoryService.looks_like_player_instruction(line):
+		return ""
+	if MemoryService.looks_like_system_label(line) and not line.begins_with("你说"):
+		return ""
+	for prefix in ["你说「", "你说“", "你说：", "你说:"]:
+		if line.begins_with(prefix):
+			line = line.substr(prefix.length()).strip_edges()
+			line = line.trim_suffix("」。").trim_suffix("」").trim_suffix("。”").trim_suffix("”").strip_edges()
+			break
+	return line
+
+
+func _format_gift_deja_vu(item_name: String) -> String:
+	var tone := "default"
+	match GameState.get_story_route():
+		StoryRouteData.ROUTE_TRUE:
+			tone = "true"
+		StoryRouteData.ROUTE_HAPPY:
+			tone = "happy"
+		StoryRouteData.ROUTE_BAD, StoryRouteData.ROUTE_BAD_EARLY:
+			tone = "bad"
+	var text := StoryNodeCopy.get_render("gift_deja_vu", tone)
+	if text == "":
+		text = StoryNodeCopy.get_render("gift_deja_vu", "default")
+	if text == "":
+		return "%s 接过%s，怔了怔：「这颜色……好像见过。」" % [GameState.companion_name, item_name]
+	return text % [GameState.companion_name, item_name]

@@ -129,7 +129,7 @@ func _load_fallback_font() -> Font:
 	if not (fb is FontFile):
 		return null
 	var copy := (fb as FontFile).duplicate(true) as FontFile
-	copy.oversampling = 1.0
+	_tune_dynamic_font(copy)
 	_using_fallback = true
 	return copy
 
@@ -166,12 +166,17 @@ func _looks_like_real_font_file(path: String) -> bool:
 
 func _tune_dynamic_font(f: FontFile) -> void:
 	f.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
-	f.hinting = TextServer.HINTING_LIGHT
+	f.hinting = TextServer.HINTING_NONE if OS.has_feature("web") else TextServer.HINTING_LIGHT
 	f.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_DISABLED if OS.has_feature("web") else TextServer.SUBPIXEL_POSITIONING_AUTO
-	f.oversampling = 0.0
-	f.generate_mipmaps = not OS.has_feature("web")
+	f.generate_mipmaps = false
 	# Web 无系统字体；桌面 CJK 靠打包字体，不依赖系统回退。
 	f.allow_system_fallback = false
+	if OS.has_feature("web"):
+		## 画布常被拉到 1.25–2×；字形按 2× 栅格，避免 1× 字再被放大发糊。
+		f.oversampling = 2.0
+	else:
+		f.oversampling = 0.0
+	f.clear_cache()
 
 
 func _warm_web_font_cache() -> void:
@@ -181,7 +186,7 @@ func _warm_web_font_cache() -> void:
 	probe.visible = false
 	probe.add_theme_font_override("font", _font)
 	add_child(probe)
-	for size in [18, 28, 42, 78]:
+	for size in [14, 16, 18, 19, 22, 24, 28, 42, 78]:
 		probe.add_theme_font_size_override("font_size", size)
 		probe.text = WEB_GLYPH_WARMUP
 		probe.get_minimum_size()

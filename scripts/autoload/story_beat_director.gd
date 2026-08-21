@@ -290,7 +290,8 @@ func _invite_time_ok(beat_id: String) -> bool:
 	if _is_night_beat(beat_id):
 		return tod in [GameState.TIME_EVENING, GameState.TIME_NIGHT]
 	if tod == GameState.TIME_NIGHT:
-		return false
+		## D8 树洞本子：夜里仍须能开口，否则读完/漏看都睡不着。
+		return beat_id.ends_with("_N15")
 	## D3 约定：傍晚才开口。
 	if beat_id == "P_N11" or beat_id == "BE_N11":
 		return tod == GameState.TIME_EVENING
@@ -594,6 +595,8 @@ func complete_beat(beat_id: String) -> void:
 		if not promise.is_empty() and not bool(promise.get("fulfilled", false)):
 			GameState.fulfill_promise("萝卜快熟了。她按约定照看着这片田。")
 	PlayerNotebookService.on_beat_completed(beat_id)
+	if beat_id.ends_with("_N02p"):
+		LeakageEngine.remember_d6_letter_snippet()
 
 
 func refresh_story_route() -> void:
@@ -608,6 +611,15 @@ func refresh_story_route() -> void:
 	var old_route := GameState.get_story_route()
 	var projected := EndingDirector.resolve_ending(false)
 	var route := StoryRouteData.get_route_for_ending(projected)
+	## 留下后、夜坐前：不要把 D6 信纸锁进 Bad「空土垄」。那是赶走/雾中的图，不是「手还记得」。
+	if (
+		GameState.IS_TEN_DAY_EDITION
+		and GameState.game_day <= 6
+		and route == StoryRouteData.ROUTE_BAD
+		and bool(GameState.get_ending_flags().get("w2_chose_keep", false))
+		and not bool(GameState.get_ending_flags().get("w2_chose_expel", false))
+	):
+		route = StoryRouteData.ROUTE_NORMAL
 	GameState.lock_story_route(route)
 	if old_route != "" and old_route != route:
 		story_route_changed.emit(old_route, route)
@@ -1016,7 +1028,7 @@ const BEAT_VARIANT_GATES := {
 		"variants": ["warm", "mid", "cold"],
 		"l1": "affection_tier",
 		"l2": ["relationship_signals.chat_days", "day_journal.length", "get_affection_tier"],
-		"l3_periods": [GameState.TIME_MORNING, GameState.TIME_EVENING],
+		"l3_periods": [GameState.TIME_MORNING, GameState.TIME_EVENING, GameState.TIME_NIGHT],
 		"templates": ["_N15", "_N15_warm", "_N15_cold", "_N15_journal"],
 	},
 }
@@ -1183,18 +1195,21 @@ func _apply_variant_steps(beat_id: String, variant: Dictionary, raw_steps: Array
 					step["template"] = "%s_nochat" % tpl
 				elif tpl.ends_with("_b"):
 					step["template"] = "%s_nochat" % tpl
-		elif _d6_has_chat_track() and not GameState.IS_TEN_DAY_EDITION:
+		var personal := StoryRouteData.extract_chat_snippet_for_beat(beat_id)
+		if personal != "":
 			var insert_idx := -1
 			for i in range(steps.size()):
-				if str(steps[i].get("template", "")).ends_with("_b"):
+				if str(steps[i].get("template", "")).ends_with("_b") or str(steps[i].get("template", "")).ends_with("_b_nochat"):
 					insert_idx = i + 1
 					break
 			if insert_idx >= 0:
-				steps.insert(insert_idx, {
+				var chat_step := {
 					"title": "聊过的字",
 					"template": "%s_chat" % beat_id,
-					"llm_render": "chat_digest",
-				})
+				}
+				if not GameState.IS_TEN_DAY_EDITION:
+					chat_step["llm_render"] = "chat_digest"
+				steps.insert(insert_idx, chat_step)
 	elif beat_id.ends_with("_N16"):
 		var profile := str(variant.get("profile", "mid"))
 		var night_hint := _n16_night_choice_hint(profile)

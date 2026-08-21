@@ -18,6 +18,7 @@ const CAMERA_COVER_OVERSCAN := 1.012
 const FOX_BASE_SCALE := 2.6
 const FOX_VIEW_OFFSET := Vector2(0.26, 0.20)
 const TITLE_FONT_SIZE := 78
+const SUBTITLE_FONT_SIZE := 28
 const MENU_BUTTON_SIZE := Vector2(372, 93)
 const MENU_FONT_SIZE := 42
 
@@ -26,6 +27,7 @@ var _title_root: Control
 var _title_sign: Control
 var _continue_button: Button
 var _new_game_button: Button
+var _about_button: Button
 var _exit_button: Button
 var _world_viewport_container: SubViewportContainer
 var _world_viewport: SubViewport
@@ -63,6 +65,13 @@ func _ready() -> void:
 
 func _ensure_bgm() -> void:
 	BgmDirector.ensure_playing()
+
+
+func _web_title_should_half_res() -> bool:
+	if DisplayServer.is_touchscreen_available():
+		return true
+	var size := DisplayServer.window_get_size()
+	return mini(size.x, size.y) < 900
 
 
 func _process(delta: float) -> void:
@@ -105,7 +114,8 @@ func _build_world_background() -> void:
 	_world_viewport_container = SubViewportContainer.new()
 	_world_viewport_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_world_viewport_container.stretch = true
-	if OS.has_feature("web"):
+	_world_viewport_container.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	if OS.has_feature("web") and _web_title_should_half_res():
 		_world_viewport_container.stretch_shrink = 2
 	_world_viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_world_viewport_container)
@@ -412,8 +422,8 @@ func _build_menu() -> void:
 	_title_sign.anchor_right = 0.5
 	_title_sign.offset_left = -420
 	_title_sign.offset_right = 420
-	_title_sign.offset_top = 20
-	_title_sign.offset_bottom = 156
+	_title_sign.offset_top = 16
+	_title_sign.offset_bottom = 188
 	_title_sign.pivot_offset = Vector2(420, 20)
 	_menu_root.add_child(_title_sign)
 
@@ -430,19 +440,22 @@ func _build_menu() -> void:
 
 	_continue_button = _make_menu_button("继续")
 	_new_game_button = _make_menu_button("新游戏")
+	_about_button = _make_menu_button("关于")
 	_exit_button = _make_menu_button("退出")
 	menu_stack.add_child(_continue_button)
 	menu_stack.add_child(_new_game_button)
+	menu_stack.add_child(_about_button)
 	menu_stack.add_child(_exit_button)
 
 	_continue_button.pressed.connect(_on_continue_pressed)
 	_new_game_button.pressed.connect(_on_new_game_pressed)
+	_about_button.pressed.connect(_on_about_pressed)
 	_exit_button.pressed.connect(_on_exit_pressed)
 
 
 func _build_title_sign() -> Control:
 	_title_root = Control.new()
-	_title_root.custom_minimum_size = Vector2(840, 136)
+	_title_root.custom_minimum_size = Vector2(840, 172)
 	_title_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var title_holder := Control.new()
@@ -498,6 +511,20 @@ func _make_title_text_block() -> Control:
 			)
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		block.add_child(label)
+
+	var subtitle := Label.new()
+	subtitle.text = GameState.GAME_SUBTITLE
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	subtitle.set_anchors_preset(Control.PRESET_FULL_RECT)
+	subtitle.offset_bottom = -4
+	subtitle.add_theme_font_override("font", _title_font())
+	subtitle.add_theme_font_size_override("font_size", SUBTITLE_FONT_SIZE)
+	subtitle.add_theme_color_override("font_color", Color(0.28, 0.2, 0.14, 0.92))
+	subtitle.add_theme_constant_override("outline_size", 6)
+	subtitle.add_theme_color_override("font_outline_color", Color(0.98, 0.95, 0.88, 0.9))
+	subtitle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	block.add_child(subtitle)
 
 	return block
 
@@ -610,6 +637,18 @@ func _start_new_game_confirmed() -> void:
 	GameState.start_new_game_fresh()
 	GameState.pop_time_pause()
 	get_tree().change_scene_to_file(MAIN_SCENE)
+
+
+func _on_about_pressed() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = GameState.GAME_DISPLAY_NAME
+	dialog.dialog_text = GameState.get_about_dialog_text()
+	dialog.ok_button_text = "好"
+	add_child(dialog)
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.close_requested.connect(dialog.queue_free)
+	_style_system_dialog(dialog)
+	dialog.popup_centered()
 
 
 func _on_exit_pressed() -> void:

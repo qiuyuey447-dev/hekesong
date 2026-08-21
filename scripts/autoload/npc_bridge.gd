@@ -11,7 +11,6 @@ const PERSONA_PATH := "res://config/xiaoli_persona.json"
 const LLM_FAILURE_REPLY := "……我刚才没听清，你再说一遍好吗？"
 const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "story_beat", "story_step_render"]
 
-var _http: HTTPRequest
 var _persona: Dictionary = {}
 var _config: Dictionary = {}
 var _next_request_id: int = 1
@@ -26,9 +25,6 @@ var _in_flight_request_id: int = -1
 
 
 func _ready() -> void:
-	_http = HTTPRequest.new()
-	add_child(_http)
-	_http.request_completed.connect(_on_http_completed)
 	_load_persona()
 	_load_config()
 
@@ -143,11 +139,20 @@ func _pump_api_queue() -> void:
 	var headers := _build_headers()
 	var body := JSON.stringify(payload)
 	var timeout_sec := float(_config.get("timeout_sec", 15.0))
-	_http.timeout = timeout_sec
+	var http := HTTPRequest.new()
+	http.timeout = timeout_sec
+	add_child(http)
+	pending_entry["http_node"] = http
+	var rid := request_id
+	http.request_completed.connect(func(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
+		_on_http_completed(rid, http, result, response_code, headers, body)
+	, CONNECT_ONE_SHOT)
 
-	var err := _http.request(url, headers, HTTPClient.METHOD_POST, body)
+	var err := http.request(url, headers, HTTPClient.METHOD_POST, body)
 	if err != OK:
 		_api_queue.remove_at(0)
+		http.queue_free()
+		pending_entry.erase("http_node")
 		var event_name := str(pending_entry.get("event", ""))
 		var start_extra: Dictionary = pending_entry.get("extra", {})
 		if is_api_enabled():
@@ -185,7 +190,7 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 	var payload_beat_id := str(extra.get("beat_id", beat_ctx.get("beat_id", ""))).strip_edges()
 	var payload_invite_goal := str(extra.get("proactive_goal", beat_ctx.get("invite_goal", ""))).strip_edges()
 
-	return {
+	var payload := {
 		"event": event,
 		"companion_id": str(_config.get("npc_id", "xiaoli")),
 		"player_name": GameState.get_player_name_for_llm(),
@@ -244,6 +249,7 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"sprout_tier": int(extra.get("sprout_tier", 0)),
 		"sprout_word": str(extra.get("sprout_word", "")),
 		"proactive_intent": str(extra.get("proactive_intent", "")),
+		"also_leak": bool(extra.get("also_leak", false)),
 		"proactive_goal": str(extra.get("proactive_goal", "")),
 		"invite_remind": bool(extra.get("invite_remind", false)),
 		"beat_id": payload_beat_id,
@@ -258,6 +264,14 @@ func _build_payload(event: String, extra: Dictionary) -> Dictionary:
 		"previous_proactive": extra.get("previous_proactive", extra.get("previous_lines", [])),
 		"player_memories": extra.get("player_memories", []),
 	}
+	if StoryDirector.is_stranger_mode():
+		payload["yesterday_journal"] = {}
+		payload["last_day_summary"] = ""
+		payload["recent_chat_turns"] = []
+		payload["today_chat_log"] = []
+		payload["player_memories"] = []
+		payload["include_yesterday_echo"] = false
+	return payload
 
 
 func _allowed_intent_names() -> Array[String]:
@@ -456,7 +470,8 @@ func _fallback_for_event(event: String, extra: Dictionary) -> String:
 				feed_item,
 				extra.get("previous_replies", []),
 				bool(extra.get("refused", false)),
-				int(extra.get("pester_count", 0))
+				int(extra.get("pester_count", 0)),
+				extra.get("leak_context", {})
 			)
 		"story_step_render":
 			return NpcFallback.story_step_render(extra)
@@ -506,13 +521,17 @@ func _rule_chat_digest_fallback(chat_log: Array) -> String:
 
 
 func _on_http_completed(
+	request_id: int,
+	http: HTTPRequest,
 	result: int,
 	response_code: int,
 	_headers: PackedStringArray,
 	body: PackedByteArray
 ) -> void:
-	var request_id := _in_flight_request_id
-	_in_flight_request_id = -1
+	if is_instance_valid(http):
+		http.queue_free()
+	if _in_flight_request_id == request_id:
+		_in_flight_request_id = -1
 
 	if not _api_queue.is_empty() and int(_api_queue[0].get("request_id", -1)) == request_id:
 		_api_queue.remove_at(0)
@@ -598,7 +617,7 @@ func _on_http_completed(
 			call_deferred("_pump_api_queue")
 			return
 		var reason := str(validation.get("reason", ""))
-		if reason in ["literary", "action_mismatch", "l3_episodic", "awkward_waiting", "weather_mismatch", "chat_timing", "repetitive"]:
+		if reason in ["literary", "action_mismatch", "l3_episodic", "awkward_waiting", "weather_mismatch", "chat_timing", "repetitive", "letter_jargon"]:
 			var literary_fallback := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, literary_fallback, true)
 			call_deferred("_pump_api_queue")
@@ -628,6 +647,19 @@ func _on_http_completed(
 
 func is_request_in_flight() -> bool:
 	return _in_flight_request_id >= 0 or not _api_queue.is_empty()
+
+
+func cancel_in_flight() -> void:
+	## 丢掉进行中的闲聊/问候，让投喂等优先口能立刻发出。
+	var inflight := _in_flight_request_id
+	_in_flight_request_id = -1
+	if inflight >= 0 and _pending.has(inflight):
+		var node: Variant = _pending[inflight].get("http_node")
+		if node is HTTPRequest and is_instance_valid(node):
+			(node as HTTPRequest).cancel_request()
+			(node as HTTPRequest).queue_free()
+	_pending.clear()
+	_api_queue.clear()
 
 
 func _requires_relationship_delta(event: String) -> bool:

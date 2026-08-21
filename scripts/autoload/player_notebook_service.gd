@@ -131,9 +131,118 @@ func on_day_advanced(new_day: int) -> void:
 		apply_d9_missing_pages()
 
 
+const WRITE_CUES := [
+	"写进我的本子里",
+	"写进我的本子",
+	"记进我的本子里",
+	"记进我的本子",
+	"写进我这本",
+	"记在我这本",
+	"我写下这个",
+	"我记下来",
+]
+
+
+func looks_like_write_request(text: String) -> bool:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return false
+	for cue in WRITE_CUES:
+		if cue in cleaned:
+			return true
+	return false
+
+
+func has_visible_text(text: String) -> bool:
+	var probe := text.strip_edges()
+	if probe == "":
+		return false
+	for raw in _ensure_notebook().get("pages", []):
+		if not raw is Dictionary:
+			continue
+		var page: Dictionary = raw
+		if str(page.get("status", "visible")) != "visible":
+			continue
+		if str(page.get("text", "")).strip_edges() == probe:
+			return true
+	return false
+
+
+func write_from_player_chat(text: String) -> Dictionary:
+	var summary := _extract_write_summary(text)
+	if summary == "":
+		summary = _latest_line_to_keep()
+	if summary == "":
+		return {"ok": false, "reason": "empty"}
+	if has_visible_text(summary):
+		return {"ok": false, "reason": "dup", "summary": summary}
+	add_visible_page(summary, GameState.game_day, "player_choice")
+	return {"ok": true, "summary": summary}
+
+
+func write_from_anchor_id(mem_id: String) -> Dictionary:
+	var aid := mem_id.strip_edges()
+	if aid == "":
+		return {"ok": false, "reason": "empty"}
+	for page in MemoryService.get_anchor_pages():
+		if not page is Dictionary:
+			continue
+		if str(page.get("id", "")) != aid:
+			continue
+		var line := str(page.get("summary", "")).strip_edges()
+		if line == "":
+			line = MemoryService.notebook_line_of(page)
+		if line == "":
+			return {"ok": false, "reason": "empty"}
+		if has_visible_text(line):
+			return {"ok": false, "reason": "dup", "summary": line}
+		add_visible_page(line, GameState.game_day, "player_choice")
+		return {"ok": true, "summary": line}
+	return {"ok": false, "reason": "missing"}
+
+
+func _extract_write_summary(text: String) -> String:
+	var cleaned := text.strip_edges()
+	if cleaned == "":
+		return ""
+	for cue in WRITE_CUES:
+		var idx := cleaned.find(cue)
+		if idx >= 0:
+			cleaned = cleaned.substr(idx + cue.length()).strip_edges()
+			break
+	cleaned = cleaned.trim_prefix("：").trim_prefix(":").trim_prefix("，").trim_prefix(",").strip_edges()
+	cleaned = cleaned.trim_suffix("。").trim_suffix("！").trim_suffix("!").trim_suffix("？").trim_suffix("?").strip_edges()
+	if cleaned.length() > 44:
+		cleaned = cleaned.substr(0, 44).strip_edges() + "…"
+	return cleaned
+
+
+func _latest_line_to_keep() -> String:
+	var turns := GameState.get_recent_chat_turns(8)
+	for i in range(turns.size() - 1, -1, -1):
+		var turn: Dictionary = turns[i]
+		if str(turn.get("role", "")) != "player":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or looks_like_write_request(line) or MemoryService.looks_like_player_instruction(line):
+			continue
+		return StoryRouteData.normalize_personal_snippet(line)
+	for i in range(turns.size() - 1, -1, -1):
+		var turn: Dictionary = turns[i]
+		if str(turn.get("role", "")) != "companion":
+			continue
+		var line := str(turn.get("text", "")).strip_edges()
+		if line == "" or MemoryService.looks_like_journal_digest(line) or MemoryService.looks_like_system_label(line):
+			continue
+		return StoryRouteData.normalize_personal_snippet(line)
+	return ""
+
+
 func add_visible_page(text: String, game_day: int = -1, dark_line_id: String = "") -> void:
 	text = text.strip_edges()
 	if text == "":
+		return
+	if has_visible_text(text):
 		return
 	if game_day < 0:
 		game_day = GameState.game_day
@@ -163,6 +272,8 @@ func apply_d9_missing_pages() -> void:
 		if str(page.get("status", "visible")) != "visible":
 			continue
 		if str(page.get("dark_line_id", "")) == "first_write_d7":
+			continue
+		if str(page.get("dark_line_id", "")) == "player_choice":
 			continue
 		candidates.append(page)
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:

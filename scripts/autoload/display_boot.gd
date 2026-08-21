@@ -19,13 +19,13 @@ func _apply_web_gpu_budget() -> void:
 	var win := get_tree().root as Window
 	if win == null:
 		return
+	## 关掉会把像素画抹糊的抗锯齿；画布倍率由 web_shell 的 DPR（桌面最高 2×）决定。
 	win.msaa_2d = Viewport.MSAA_DISABLED
 	win.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	win.use_taa = false
 	win.use_debanding = false
 	win.use_hdr_2d = false
 	win.oversampling = false
-	win.oversampling_override = 1.0
 	win.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_NEAREST
 
 

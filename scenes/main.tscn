@@ -59,32 +59,39 @@ theme_override_constants/separation = 4
 layout_mode = 2
 
 [node name="DayLabel" type="Label" parent="UI/HUD/Margin/VBox/Row1" unique_id=551537752]
+visible = false
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_font_sizes/font_size = 18
 text = "第 1 天"
 
 [node name="NextDayButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894362]
+visible = false
 layout_mode = 2
 text = "下一天"
 
 [node name="MarketButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894363]
+visible = false
 layout_mode = 2
 text = "大盘"
 
 [node name="MemoryButton" type="Button" parent="UI/HUD/Margin/VBox/Row1" unique_id=1071894364]
+visible = false
 layout_mode = 2
 text = "记忆"
 
 [node name="StatsLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=403256661]
+visible = false
 layout_mode = 2
 text = "亲密度 0 | 默契 0 | 心情 80"
 
 [node name="StageLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=1713784274]
+visible = false
 layout_mode = 2
 text = "关系阶段：初识"
 
 [node name="HintLabel" type="Label" parent="UI/HUD/Margin/VBox" unique_id=1564883683]
+visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.45, 0.38, 0.32, 1)
 theme_override_font_sizes/font_size = 13

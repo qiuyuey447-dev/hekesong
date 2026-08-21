@@ -114,6 +114,8 @@ var recent_chat_turns: Array[Dictionary] = []
 const MAX_CHAT_TURNS := 48
 const MAX_TODAY_CHAT := 32
 const MAX_ARCHIVED_CHAT_DAYS := 9
+## 自动化测试默认关掉，避免把「第N句 / 回N」之类夹具写进玩家存档。
+var persist_saves: bool = true
 var today_chat_log: Array[Dictionary] = []
 var feeds_today: int = 0
 var feed_pester_count: int = 0
@@ -2024,7 +2026,7 @@ func commit_feed_treat(item_id: String) -> Dictionary:
 	RelationshipDirector.record_gift(item_id)
 	record_memory_event(
 		"gift",
-		"你给小狸喂了 %s。" % str(item.get("name", item_id)),
+		"你喂她%s。" % str(item.get("name", item_id)),
 		0.65,
 		{"item_id": item_id}
 	)
@@ -2853,6 +2855,51 @@ func _sanitize_player_name_legacy() -> void:
 
 
 func _sanitize_story_progress() -> void:
+	_remap_legacy_n06p_node_id()
+	if IS_TEN_DAY_EDITION:
+		_sanitize_ten_day_story_progress()
+		return
+	_sanitize_legacy_week_story_progress()
+
+
+func _remap_legacy_n06p_node_id() -> void:
+	var seen: Variant = long_term_memory.get("story_nodes_seen", [])
+	if not seen is Array:
+		return
+	var seen_dirty := false
+	for i in seen.size():
+		if str(seen[i]) == "N06p":
+			seen[i] = "P_N06p"
+			seen_dirty = true
+	if seen_dirty:
+		long_term_memory["story_nodes_seen"] = seen
+
+
+func _has_w2_choice_node() -> bool:
+	return is_story_node_seen("P_N06p") or is_story_node_seen("N06p")
+
+
+func _sanitize_ten_day_story_progress() -> void:
+	var flags := get_ending_flags()
+	var dirty := false
+	## 十日版 D5 才做去留。D1–D4 上的 W2 标记是脏存档。
+	if game_day < 5 and bool(flags.get("w2_choice_made", false)) and not _has_w2_choice_node():
+		flags["w2_choice_made"] = false
+		flags["w2_chose_expel"] = false
+		flags["w2_chose_keep"] = true
+		if get_story_route() != "":
+			long_term_memory["story_route"] = ""
+		dirty = true
+	if dirty:
+		long_term_memory["ending_flags"] = flags
+	## 赶走线在 D6 就会 mark_story_ended；有结局 id 的通关不要清掉。
+	if bool(long_term_memory.get("story_complete", false)):
+		var ending_id := str(long_term_memory.get("final_ending_id", "")).strip_edges()
+		if ending_id == "" and not is_bad_early_path():
+			long_term_memory["story_complete"] = false
+
+
+func _sanitize_legacy_week_story_progress() -> void:
 	var flags := get_ending_flags()
 	var dirty := false
 
@@ -2867,21 +2914,10 @@ func _sanitize_story_progress() -> void:
 
 	# D10：未过 P_N06p 节点则 W2 抉择无效
 	if game_day == 10 and bool(flags.get("w2_choice_made", false)):
-		if not is_story_node_seen("P_N06p") and not is_story_node_seen("N06p"):
+		if not _has_w2_choice_node():
 			flags["w2_choice_made"] = false
 			if get_story_route() != "":
 				long_term_memory["story_route"] = ""
-			dirty = true
-
-	var seen: Variant = long_term_memory.get("story_nodes_seen", [])
-	if seen is Array:
-		var seen_dirty := false
-		for i in seen.size():
-			if str(seen[i]) == "N06p":
-				seen[i] = "P_N06p"
-				seen_dirty = true
-		if seen_dirty:
-			long_term_memory["story_nodes_seen"] = seen
 			dirty = true
 
 	if dirty:
@@ -2889,6 +2925,63 @@ func _sanitize_story_progress() -> void:
 
 	if game_day < FINAL_GAME_DAY and bool(long_term_memory.get("story_complete", false)):
 		long_term_memory["story_complete"] = false
+
+
+func looks_like_chat_counter_label(text: String) -> bool:
+	## 测试夹具 / 后台句数腔：`第9句`、`回11`。玩家正常说话不会是这种整句。
+	var cleaned := text.strip_edges()
+	if cleaned.begins_with("第") and cleaned.ends_with("句"):
+		var mid := cleaned.substr(1, cleaned.length() - 2)
+		if mid.is_valid_int():
+			return true
+	if cleaned.begins_with("回"):
+		var mid := cleaned.substr(1)
+		if mid.is_valid_int():
+			return true
+	return false
+
+
+func _filter_chat_turn_array(source: Array[Dictionary]) -> Array[Dictionary]:
+	var kept: Array[Dictionary] = []
+	for turn in source:
+		if not turn is Dictionary:
+			continue
+		if looks_like_chat_counter_label(str(turn.get("text", ""))):
+			continue
+		kept.append(turn)
+	return kept
+
+
+func purge_chat_counter_labels() -> bool:
+	var before_recent := recent_chat_turns.size()
+	var before_today := today_chat_log.size()
+	recent_chat_turns = _filter_chat_turn_array(recent_chat_turns)
+	today_chat_log = _filter_chat_turn_array(today_chat_log)
+	var archive_dirty := false
+	var archive: Variant = long_term_memory.get("chat_archive", [])
+	if archive is Array:
+		var cleaned_archive: Array = []
+		for raw_day in archive:
+			if not raw_day is Dictionary:
+				continue
+			var day_entry: Dictionary = raw_day.duplicate(true)
+			var turns: Variant = day_entry.get("turns", [])
+			if turns is Array:
+				var kept_turns: Array = []
+				for turn in turns:
+					if turn is Dictionary and looks_like_chat_counter_label(str(turn.get("text", ""))):
+						archive_dirty = true
+						continue
+					kept_turns.append(turn)
+				day_entry["turns"] = kept_turns
+			cleaned_archive.append(day_entry)
+		if archive_dirty:
+			long_term_memory["chat_archive"] = cleaned_archive
+	return (
+		recent_chat_turns.size() != before_recent
+		or today_chat_log.size() != before_today
+		or archive_dirty
+	)
 
 
 func _ensure_runtime_defaults() -> void:
@@ -3046,6 +3139,8 @@ func set_ambient_volume_linear(value: float) -> void:
 
 
 func save_game() -> void:
+	if not persist_saves:
+		return
 	var data := {
 		"save_version": SAVE_VERSION,
 		"player_name": player_name,
@@ -3177,4 +3272,6 @@ func load_game() -> void:
 			watered_plots.append(int(plot_id))
 
 	_ensure_runtime_defaults()
+	if persist_saves and purge_chat_counter_labels():
+		save_game()
 	stats_changed.emit()

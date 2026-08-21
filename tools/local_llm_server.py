@@ -72,6 +72,17 @@ ALLOWED_INTENTS = {
     "refuse",
 }
 
+FARM_CHORE_INTENTS = {
+    "water",
+    "water_all",
+    "open_market",
+    "open_shop",
+    "harvest",
+    "harvest_all",
+    "plant",
+    "plant_all",
+}
+
 ALLOWED_BODY_ACTIONS = frozenset({"follow_player", "walk_poi", "open_notebook", "stay"})
 ALLOWED_POIS = frozenset({"porch", "field", "hollow", "shop", "home", "river"})
 POI_ALIASES = {"plots": "field", "door": "home", "yard": "home", "house": "home"}
@@ -146,6 +157,7 @@ def load_relationship_rules() -> dict[str, Any]:
                 "我在这儿等", "你忙你的", "我就在旁边看着", "我站这儿就行", "我在旁边看着",
                 "你忙，我就守着", "我看着就好", "不吵你", "你忙的话，我就在这儿", "我就在这儿",
                 "我就守着", "陪着你就好", "你忙你的，我", "我就在旁边", "我在这儿。你忙",
+                "还有要说的吗", "没有也行，我坐着", "没有也行我坐着",
             ],
             "action_intent_affection_cap": 1,
         }
@@ -548,7 +560,64 @@ def looks_like_stop_farm_chore(message: str) -> bool:
     return any(p in text for p in phrases)
 
 
+def looks_like_shop_inquiry(message: str) -> bool:
+    text = message.strip().replace(" ", "").replace("　", "")
+    if not text or "商店" not in text:
+        return False
+    if any(p in text for p in ("咋", "怎么", "为什么", "为啥", "干嘛", "为何", "怎么会", "去哪", "去哪儿")):
+        return True
+    if any(p in text for p in ("买", "帮", "进货", "采购")):
+        return False
+    if text.endswith("了") or text.endswith("了？") or text.endswith("了?"):
+        return True
+    if text.startswith("你去") or text.startswith("她去"):
+        return True
+    return False
+
+
+def looks_like_chore_question(message: str) -> bool:
+    text = message.strip().replace(" ", "").replace("　", "")
+    if not text:
+        return False
+    if looks_like_shop_inquiry(message):
+        return True
+    farm = (
+        "收萝卜" in text or "浇水" in text or "浇田" in text or "种萝卜" in text
+        or "商店" in text or "种子" in text or "收田" in text or "浇" in text
+        or (("收" in text or "摘" in text or "拔" in text) and ("萝卜" in text or "田" in text))
+        or ("种" in text and ("田" in text or "萝卜" in text or "空田" in text))
+        or ("买" in text and ("种子" in text or "商店" in text or "包" in text))
+    )
+    why_help = ("不认识", "不认得", "咋还帮", "怎么还帮", "为什么帮", "为啥帮", "干嘛帮", "为何帮", "咋还", "怎么还")
+    if farm and any(p in text for p in why_help) and any(k in text for k in ("帮", "不认识", "不认得")):
+        return True
+    attr = (
+        "是不是帮我收", "帮我收的萝卜", "是你收的萝卜", "你帮我收的", "是不是你收",
+    )
+    if any(p in text for p in attr):
+        return True
+    if "我是问" in text and ("收萝卜" in text or "帮我收" in text or "你收的" in text):
+        return True
+    missed_exact = text in ("你咋没买", "咋没买", "怎么没买")
+    missed = ("咋没买", "怎么没买", "为什么没买", "为啥没买", "咋不买", "怎么不买", "没去买", "为啥不买")
+    if missed_exact or (
+        "买" in text and any(p in text for p in missed) and any(k in text for k in ("种", "包", "商店", "萝卜"))
+    ):
+        return True
+    if not farm:
+        return False
+    if any(p in text for p in ("我是问", "我问你", "是不是", "咋还", "怎么还", "为什么还", "为啥还")):
+        return True
+    if any(p in text for p in ("咋", "怎么", "为什么", "为啥", "干嘛", "为何")):
+        return True
+    if any(p in text for p in ("收的", "种的", "浇的", "买的")) and any(p in text for p in ("是不是", "我是问")):
+        return True
+    return False
+
+
 def looks_like_shop_request(message: str) -> bool:
+    if looks_like_shop_inquiry(message):
+        return False
     text = message.strip().replace(" ", "").replace("　", "")
     if not text:
         return False
@@ -581,6 +650,10 @@ def guess_intent(message: str) -> tuple[str, float]:
     if not text:
         return "chat", 0.5
     if looks_like_stop_farm_chore(message):
+        return "chat", 0.95
+    if looks_like_shop_inquiry(message):
+        return "chat", 0.95
+    if looks_like_chore_question(message):
         return "chat", 0.95
     if looks_like_status_inquiry(message):
         return "check_status", 0.92
@@ -903,10 +976,11 @@ def _prompt_farm_chore_tone(payload: dict[str, Any]) -> str:
     tone = _farm_plot_tone(payload)
     examples = str((cfg.get("llm_prompt_examples") or {}).get(tone, "")).strip()
     lines = [
-        "[田务口吻（与客户端点田 aside 同口径）]",
-        "没种、浇过、未熟、雨天、太远等：1～2 句随口短评，腹黑可爱（D1–D3）；陌生化（D4–D5）收起玩笑。",
+        "[田务口吻]",
+        "看见玩家动手或自己干完，用 1～2 句真正说出来的话回应眼前这件事：土、苗、手、天气。",
+        "禁止电报短句：浇了。种下了。收了。埋好了。润了。进筐。",
         "禁止客服腔：要不要我帮、说个数字、背包里没有萝卜种子、有什么可以帮你、小狸：前缀。",
-        "不要报田块数、不要菜单式「要不要现在去收」。",
+        "不要报系统田块编号当菜单。可以说「这几垄」。",
     ]
     if examples:
         lines.append(examples)
@@ -929,6 +1003,34 @@ def looks_like_save_bug_worry(message: str) -> bool:
 
 
 def mock_companion_react_reply(payload: dict[str, Any]) -> str:
+    react_type = str(payload.get("react_type", "")).strip()
+    react_facts = payload.get("react_facts") or {}
+    if not isinstance(react_facts, dict):
+        react_facts = {}
+    if react_type == "player_farm" or str(react_facts.get("reason", "")).strip():
+        reason = str(react_facts.get("reason", "")).strip()
+        count = int(react_facts.get("plot_count") or 1)
+        if reason == "water_ok":
+            if count > 1:
+                return "这几垄你浇过了。土沉下去，苗才喝得着。"
+            return "这垄你浇过了。土沉下去，苗才喝得着。"
+        if reason == "plant_ok":
+            return "种上了。空着的那截现在有苗了。"
+        if reason == "harvest_ok":
+            return "收回来了。筐里又沉一截。"
+        if reason == "no_seeds":
+            return "种子袋空的。要买的话跟我说一声。"
+        if reason == "already_watered":
+            return "这块浇过了。再浇苗要倒。"
+        if reason == "rain":
+            return "下雨了，别浇。廊下见。"
+        if reason == "not_mature":
+            return "还没熟。急什么，萝卜跑不了。"
+        if reason == "harvest_failed":
+            return "还收不了。再等等。"
+        line = farm_plot_reaction(reason, payload) if reason else ""
+        if line:
+            return line
     snap = payload.get("world_snapshot") or {}
     if not isinstance(snap, dict):
         snap = {}
@@ -985,6 +1087,9 @@ def is_stranger_ooc_reply(text: str, payload: dict[str, Any]) -> bool:
     player_name = _stored_player_name(payload)
     if player_name and player_name in cleaned:
         return True
+    for probe in ("萝卜长好", "一起看看"):
+        if probe in cleaned:
+            return True
     rules = load_relationship_rules()
     for key in ("stranger_ooc_phrases", "stranger_intimate_phrases"):
         for phrase in rules.get(key, []) or []:
@@ -998,9 +1103,17 @@ def _looks_like_journal_digest(text: str) -> bool:
     cleaned = (text or "").strip()
     if not cleaned:
         return False
-    if cleaned.startswith("你们聊了"):
+    if cleaned.startswith("你们聊了") or cleaned.startswith("你们聊到"):
+        return True
+    if cleaned.startswith("你们初次见面") or cleaned.startswith("你们第一次"):
+        return True
+    if cleaned.startswith("你们在") and ("聊了" in cleaned or "聊到" in cleaned or "聊起" in cleaned):
         return True
     if "句，最后提到" in cleaned or "句，小狸" in cleaned:
+        return True
+    if "你问小狸" in cleaned or "你告诉小狸" in cleaned:
+        return True
+    if "她主动提出" in cleaned or "小狸认真记下" in cleaned or "她认真记下" in cleaned:
         return True
     if cleaned.startswith("刚才那一下，像真做过"):
         return True
@@ -1017,6 +1130,9 @@ def is_awkward_waiting_reply(text: str) -> bool:
     for phrase in rules.get("awkward_waiting_phrases", []) or []:
         p = str(phrase).strip()
         if p and p in cleaned:
+            return True
+    for extra in ("还有要说的吗", "没有也行，我坐着", "没有也行我坐着"):
+        if extra in cleaned:
             return True
     return False
 
@@ -1088,13 +1204,16 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
     player_name = str(payload.get("player_name", "")).strip()
     you = player_name if player_name and story_mode != "stranger" else "你"
 
+    also_leak = bool(payload.get("also_leak"))
     if _looks_like_journal_digest(leak_summary):
         leak_summary = ""
-    if intent == "leak" and leak_summary and story_mode != "stranger":
+    if (intent == "leak" or also_leak) and story_mode != "stranger":
         return random.choice([
-            f"不知道为什么，{leak_summary} 这个画面突然冒了出来。",
-            f"手比脑子先动了一下。……{leak_summary}。",
-            f"……{leak_summary}。想不起来是哪一回。",
+            "手刚才自己动了一下。像是……做过这件事。",
+            "早。风从河边过来的时候，心里会轻轻一紧。",
+            "这事像做过。不是刚才。",
+            "树洞里头那只壶，摸着倒熟。想不起来是哪一回。",
+            "傍晚这点凉意，好像以前也尝过。",
         ])
     if intent == "invite":
         if story_mode == "stranger":
@@ -1102,23 +1221,11 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
                 "……你是？这里是哪儿？我怎么会站在这儿。",
                 "有件事……我想听你说。我不太确定自己是谁。",
             ])
-        if leak_summary:
-            return f"刚才……{leak_summary}。{you}过来一下。"
         if weather == "rain":
             return f"雨还在下。{you}方便的话，过来坐一会儿？"
         if time_of_day == "evening":
             return f"傍晚了。我有句话，想先跟{you}说。"
-        if mem_line:
-            return f"我想起{mem_line[:18]}……你方便的话，过来听我说一句。"
         return f"……{you}过来一下。我有句话想说。"
-    if story_mode != "stranger" and mem_line and affection >= 20:
-        clipped = mem_line[:22]
-        return random.choice([
-            f"刚才忽然想到：{clipped}。你还在就好。",
-            f"{clipped}……我记着。今天也一起过吧。",
-        ])
-    if leak_summary and story_mode == "leak":
-        return f"看着田，忽然觉得……{leak_summary}。"
 
     tier = int(payload.get("sprout_tier", 0) or 0)
     if affection >= 60:
@@ -1134,9 +1241,9 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
             "evening": ["天要暗了。我今晚能睡树洞吗？", "……廊下那块我占了。你要用，我挪。"],
         },
         "leak": {
-            "morning": ["手刚才自己动了一下。像是……做过这件事。", "早。风从河边过来的时候，心里会轻轻一紧。"],
-            "noon": ["看着田，忽然觉得脚步比脑子先认得路。", "有些事说不清。你要是不嫌，我就再待一会儿。"],
-            "evening": ["傍晚这点凉意，好像以前也尝过。", "我不太敢问。问了，又怕答案从手指缝里漏走。"],
+            "morning": ["手刚才自己动了一下。像是……做过这件事。", "早。风从河边过来的时候，心里会轻轻一紧。", "树洞口那只壶还温着。我想坐一会儿。"],
+            "noon": ["日头有点懒。尾巴扫到土，倒也不想挪。", "有些事说不清。你要是不嫌，我就再待一会儿。"],
+            "evening": ["傍晚这点凉意，好像以前也尝过。", "灯还没点。廊下风倒是轻。"],
         },
         "awaken": {
             "morning": ["你在就好。别的，慢慢说。", "醒来第一眼想找你。找到了。"],
@@ -1145,14 +1252,14 @@ def mock_casual_line(payload: dict[str, Any]) -> str:
         },
         "normal": [
             {
-                "morning": ["……你还在。今天也在田边。", "早。我还不太会找话说，但我想待在田边。"],
-                "noon": ["垄有点歪。我顺手扶一扶，不算帮你吧。", "田里风轻轻的。我去看看苗有没有缺水。"],
+                "morning": ["……你还在。树洞口风轻轻的。", "早。我还不太会找话说。灶上有红薯的话，就好找了。"],
+                "noon": ["日头有点懒。你要是不嫌，我就挨着歇。", "水壶还温着。倒也不急着做什么。"],
                 "evening": ["傍晚风有点凉。你要是累了，就先歇歇。", "今天过得怎么样……不说也行。我在。"],
             },
             {
-                "morning": ["早。看到你，心里会先松一口气。", "今天也一起过吧。我先去田边转转。"],
-                "noon": ["你做事的样子我看过好几回了。还是想挑刺两句。", "正午了。我去浇那几垄，你歇你的。"],
-                "evening": ["天色渐晚。今天有你在，田也安静些。", "傍晚了。有句话想说，又觉得……闲聊也挺好。"],
+                "morning": ["早。看到你，心里会先松一口气。", "尾巴尖还沾着露。今天也一起过吧。"],
+                "noon": ["你做事的样子我看过好几回了。还是想挑刺两句。", "正午了。河那边有点响，我听着就行。"],
+                "evening": ["天色渐晚。灯还没点，倒也不赶。", "傍晚了。有句话想说，又觉得……闲聊也挺好。"],
             },
             {
                 "morning": ["醒来第一件事是找你。找到了。", "早。你在，我就知道今天该怎么过。"],
@@ -1251,10 +1358,20 @@ def _mock_reply_raw(payload: dict[str, Any]) -> dict[str, Any]:
                 f"这份 {item_name} 来得正好，嚼着嚼着尾巴都想晃一晃。",
                 f"咬下去的第一口就记住了，{item_name} 这份心意比味道还甜。",
             ]
+        leak = payload.get("leak_context") or {}
+        leak_line = ""
+        if isinstance(leak, dict) and leak.get("available"):
+            leak_line = str(leak.get("fallback_line") or leak.get("anchor_summary") or "").strip()
         for candidate in replies:
             if candidate not in previous:
-                return {"reply": candidate, "intent": "chat", "plot_id": -1, "confidence": 0.9}
-        return {"reply": replies[0], "intent": "chat", "plot_id": -1, "confidence": 0.9}
+                reply = candidate
+                if leak_line and not refused:
+                    reply = candidate.rstrip("。") + "……" + leak_line
+                return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
+        reply = replies[0]
+        if leak_line and not refused:
+            reply = replies[0].rstrip("。") + "……" + leak_line
+        return {"reply": reply, "intent": "chat", "plot_id": -1, "confidence": 0.9}
 
     if event == "companion_react":
         return {
@@ -1488,6 +1605,13 @@ def _player_chat_priority_rules(message: str, topic: str) -> str:
         "- 你必须先回应这句话本身（回答、共情、接话、反问都可以）。",
         "- 不要无视玩家原话，转而汇报天气、行情、田况或剧情背景。",
     ]
+    if any(k in message for k in ("去哪", "哪里", "哪儿", "你在", "人在")):
+        lines.append("- 玩家在问或纠正你的位置：必须用当前真实位置回答；若与你上一句矛盾，承认说岔了，禁止顾左右而言他。")
+    if looks_like_chore_question(message):
+        lines.append("- 玩家在问、质疑或确认，不是在下浇种收买指令。先回答这句话，禁止回「好，我这就去收/买」。")
+    compact = str(message or "").strip().replace(" ", "").replace("　", "")
+    if compact in ("对", "对啊", "对呀", "是啊", "是的", "嗯", "嗯嗯", "哦", "哦哦"):
+        lines.append("- 玩家在接你上一句闲聊。intent 必须是 chat。禁止去买种、种田或报田况。")
     if looks_like_sleep_request(message) or topic == "sleep":
         lines.append("- 【睡觉指令】必须 intent=sleep；reply 先答应休息/晚安，禁止转去浇田、报田况或推销种子。")
     if topic in ("general", "emotion", "empty", "sleep"):
@@ -1631,16 +1755,23 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
     lines = [
         "对话规则：",
         "- 先接玩家上一句在说什么，再决定是否提田/天气；不要答非所问。",
+        "- 玩家用「咋/怎么/是不是/我是问」提到收萝卜或买种子时，是在问，不是命令；禁止立刻回「好，我这就去收」。",
+        "- 玩家只回「对啊/对呀/是啊/嗯/哦」在接你上一句闲聊时，intent 必须是 chat；禁止改口去买种子或种田。",
+        "- 玩家问「你咋没买」：承认还没买或记下了忙完就去，禁止改口报田况或说「还没有能收的」。",
+        "- 玩家纠正你刚说的位置或事实：先认、改口到当前真实位置，禁止改成「还有要说的吗」「我坐着」。",
         "- 可以反问、关心或接话，不要复读玩家原话，也不要只报游戏状态。",
         "- 禁止：「收到」「我在，你说」「有什么可以帮你」「作为 AI」「请多关照」「欢迎回来」「小管家」等客服腔。",
         "- 禁止陪聊式守候：「我在这儿等」「你忙你的我在旁边」「我站这儿就行」「不吵你」「我就守着」——想帮忙就说具体事（浇水、扶苗、看哪垄干了）。",
         "- 田务/没种/浇过/未熟：随口 1～2 句，腹黑可爱；禁止「要不要我帮」「说个数字」菜单腔；与客户端点田 aside 同口径。",
-        "- 不要 JSON、markdown、括号旁白、角色名前缀（不要写「小狸：」）。",
+        "- 不要 JSON、markdown、括号旁白、角色名前缀（不要写「小狸：」）。聊天框里不要给自己的话加引号「」或“”。",
+        "- 禁止写玩家视角旁白：我抬眼、我看了看天、暮色里的旧屋。只说你自己嘴上的话。",
+        "- 禁止动作旁白：我抖了下尾巴、我晃了晃尾巴、我竖起耳朵、我眨了眨眼。身体动作走 actions，嘴里只说话。",
+        "- 禁止对玩家说「信纸」这个词；当晚那几页用「今晚这段 / 刚才那页」。",
         "- 禁止输出 intent:/plot_id:/confidence: 等内部字段名或调试信息。",
         "- 禁止输出「主线节点」「导演·勿复述」「变体」「锚点」等系统/导演字段。",
         "- 1～3 句口语。前期可轻微诙谐（泥、红薯、拨苗），不油、不讲主题；陌生化时立刻收起玩笑。",
         "- 记性不好就直说记不清、对不上。禁止比喻和文艺腔：雨帘、隔着雾、心里发紧、模模糊糊、毛玻璃、像隔着什么看。",
-        "- 禁止主动报售价、行情、大盘、手头几包种子。说话必须符合你现在的位置和正在做的事。",
+        "- 说话必须符合你现在的位置（world_snapshot.companion.location_name）。禁止声称自己在别处看雨、打盹或躲雨。",
         "- 亲密度不足（world_snapshot.can_harvest=false）时，禁止主动问「要不要我收/帮你收/去收萝卜」；可说「你来收，我馋规矩不让」。",
         "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收或说明为何不能代收。",
         "- 未完成 D3 约定节点（P_N11）前，禁止提「等萝卜长好一起看」或任何约定；禁止说「你说过/我们约过」。",
@@ -1648,12 +1779,16 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",
         "- persona_vector、long_term_prefs、behavior_inferred 仅影响语气；禁止当作已发生的共同经历、具体日期或统计习惯引用。具体往事只能来自「可引用记忆」。",
+        "- 喂食只说嘴里还甜或刚喂过，禁止编廊下啃、昨天地点。",
     ]
     if chat_mode:
-        lines.append("- 闲聊时像在场的人；不必每句都提田、天气或行情。")
+        lines.append("- 闲聊时像在场的人；不必每句都提田、天气或行情。河声、水壶、灯、尾巴、发呆都可以。只有你现在真的在廊下或树洞，才能说自己在那儿。")
         lines.append("- 仍须遵守上方「必达剧情背景」，不可因闲聊而 OOC 或矛盾。")
+        lines.append("- 禁止宣读本子或整句复述日记；往事只许化成感觉、动作或半句口误。")
     if story_mode == "stranger":
         lines.append("- 陌生化：礼貌疏远，拘谨，不开玩笑，不提红薯或共同经历。")
+        lines.append("- 禁止叫玩家曾用过的称呼；问起名字只说想不起来。")
+        lines.append("- 问起约定/本子：只说想不起来、认不得字；禁止复述约定原文（例如「等萝卜长好一起看」）。")
         lines.append("- 玩家问存档坏了/bug/数据丢了：答「不是坏了，是我这边又空了一截」；可提示本子字还在，禁止「数据没问题」「欢迎回来」。")
     elif can_say_name and player_name.strip() not in ("", "你"):
         lines.append(f"- 可自然称呼「{player_name}」，亲密度高时语气更暖但仍克制。")
@@ -1677,6 +1812,20 @@ def _dialogue_rules_from_payload(payload: dict[str, Any], *, chat_mode: bool = F
     )
 
 
+def _prompt_memory_weave(payload: dict[str, Any], *, has_leak: bool = False, intent: str = "") -> str:
+    lines = [
+        "记忆用法：锚点与可引用记忆是事实，不是台词。",
+        "禁止宣读本子：不要说「本子上写着」「我翻到那页」「写着『…』」，不要整句复述日记或「你们初次见面／你告诉小狸」。",
+        "要把往事带进对话，须改写成此刻的感觉、动作、气味或半句口误，嵌进正在说的闲聊里。",
+    ]
+    if has_leak or intent == "leak" or bool(payload.get("also_leak")):
+        lines.append(
+            "本轮可渗漏：先像正常人聊天，再在同一口气里滑出半句身体记得、脑子对不上。"
+            "禁止单独开一场「读记忆」。禁止编造锚点没有的情节。"
+        )
+    return "\n".join(lines)
+
+
 METADATA_LINE = re.compile(
     r"^\s*(intent|plot_id|confidence|affection_delta|bond_delta|memory_recovery_delta|"
     r"refuse_kind|cited_memory_ids|relationship_reason)\s*:",
@@ -1698,6 +1847,52 @@ def looks_like_metadata_leak(text: str) -> bool:
     return False
 
 
+def _unwrap_spoken_quotes(line: str) -> str:
+    cleaned = (line or "").strip()
+    pairs = (("「", "」"), ("『", "』"), ("“", "”"), ("‘", "’"), ('"', '"'), ("'", "'"))
+    for _ in range(2):
+        changed = False
+        for left, right in pairs:
+            if len(cleaned) >= 2 and cleaned.startswith(left) and cleaned.endswith(right):
+                cleaned = cleaned[len(left) : -len(right)].strip()
+                changed = True
+                break
+        if not changed:
+            break
+    return cleaned
+
+
+_SELF_ACTION_CUES = (
+    "我抖了", "抖了下尾巴", "抖了抖尾巴", "晃了晃尾巴", "摇了摇尾巴",
+    "甩了甩尾巴", "竖起耳朵", "耳朵动了", "打了个哈欠", "眨了眨眼",
+    "我抬爪", "我把尾巴", "尾巴尖轻轻", "我蹲下", "我趴下",
+    "我凑过去闻", "我闻了闻", "我晃了晃",
+)
+
+
+def _is_self_action_narration(sentence: str) -> bool:
+    compact = (sentence or "").strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    return any(cue in compact for cue in _SELF_ACTION_CUES)
+
+
+def _strip_self_action_narration(line: str) -> str:
+    kept: list[str] = []
+    buf = ""
+    for ch in line or "":
+        buf += ch
+        if ch in "。！？.!?":
+            piece = buf.strip()
+            buf = ""
+            if piece and not _is_self_action_narration(piece):
+                kept.append(piece)
+    tail = buf.strip()
+    if tail and not _is_self_action_narration(tail):
+        kept.append(tail)
+    return "".join(kept).strip()
+
+
 def polish_llm_reply(text: str) -> str:
     cleaned = (text or "").strip()
     if not cleaned:
@@ -1708,14 +1903,23 @@ def polish_llm_reply(text: str) -> str:
     for prefix in ("小狸：", "小狸:", "回复：", "reply:", "Reply:"):
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
-    if len(cleaned) >= 2:
-        if (cleaned[0] == cleaned[-1]) and cleaned[0] in "\"'「」":
-            cleaned = cleaned[1:-1].strip()
+    kept: list[str] = []
+    for raw in cleaned.replace("\r", "").split("\n"):
+        line = _unwrap_spoken_quotes(raw.strip())
+        if not line:
+            continue
+        if any(cue in line for cue in ("我抬眼", "我看了看天", "我看着天", "暮色里显得", "显得安静")):
+            continue
+        line = _strip_self_action_narration(line)
+        if not line:
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
     cleaned = re.sub(r"^[（(【\[].*?[）)】\]]\s*", "", cleaned)
     bad_starts = ("收到：", "收到:", "好的，收到")
     for bad in bad_starts:
         if cleaned.startswith(bad):
-            cleaned = cleaned[len(bad) :].strip("「」\"' ")
+            cleaned = cleaned[len(bad) :].strip("「」\"'“” ")
             break
     if len(cleaned) > 280:
         cut = cleaned[:280]
@@ -1948,6 +2152,11 @@ def _scene_brief(payload: dict[str, Any], *, chat_mode: bool = False, topic: str
         f"关系：{rel.get('stage', '')}（亲密度 {rel.get('affection', 0)}）",
     ]
     if chat_mode and topic in ("general", "emotion", "empty", "sleep"):
+        companion_snap = snap.get("companion") or {} if isinstance(snap, dict) else {}
+        companion_brief = _companion_brief(companion_snap if isinstance(companion_snap, dict) else {})
+        if companion_brief:
+            lines.append(companion_brief)
+        lines.append("位置是事实：只能说自己在上面这一处，禁止说在别处看雨、打盹或躲雨。")
         return "\n".join(lines)
 
     if not chat_mode or topic in ("farm", "story"):
@@ -2212,21 +2421,28 @@ def reply_contract_for_history(turn: dict[str, Any]) -> dict[str, Any]:
 def _history_messages(payload: dict[str, Any]) -> list[dict[str, str]]:
     turns = payload.get("recent_chat_turns") or []
     messages: list[dict[str, str]] = []
-    stored_name = _stored_player_name(payload) if _story_mode(payload) == "stranger" else ""
+    story_mode = _story_mode(payload)
+    stored_name = _stored_player_name(payload)
+    if not isinstance(turns, list):
+        turns = []
+    if story_mode == "stranger":
+        turns = turns[-6:]
     for turn in turns:
         if not isinstance(turn, dict):
             continue
         text = str(turn.get("text", "")).strip()
         if not text:
             continue
-        if stored_name and stored_name in text:
-            continue
+        if story_mode == "stranger" and stored_name and stored_name not in ("", "你") and stored_name in text:
+            text = text.replace(stored_name, "你")
         role_key = str(turn.get("role", "player"))
         api_role = "assistant" if role_key in ("companion", "assistant", "xiaoli") else "user"
         if api_role == "user":
             content = text
         else:
             content = json.dumps(reply_contract_for_history(turn), ensure_ascii=False, separators=(",", ":"))
+            if story_mode == "stranger" and stored_name and stored_name not in ("", "你"):
+                content = content.replace(stored_name, "你")
         messages.append({"role": api_role, "content": content})
     return messages
 
@@ -2284,6 +2500,18 @@ def apply_local_intent(data: dict[str, Any], payload: dict[str, Any]) -> dict[st
         data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
         data.pop("refuse_kind", None)
         return data
+    if looks_like_shop_inquiry(player_message):
+        data["intent"] = "chat"
+        data["plot_id"] = -1
+        data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
+        return data
+    if looks_like_chore_question(player_message):
+        data["intent"] = "chat"
+        data["plot_id"] = -1
+        data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
+        return data
     if looks_like_status_inquiry(player_message):
         data["intent"] = "check_status"
         data["plot_id"] = -1
@@ -2323,6 +2551,14 @@ def apply_local_intent(data: dict[str, Any], payload: dict[str, Any]) -> dict[st
         data["intent"] = "plant"
         data.pop("refuse_kind", None)
         data["confidence"] = max(0.85, float(data.get("confidence", 0.0)))
+        return data
+    guessed, _ = guess_intent(player_message)
+    if guessed == "chat" and str(data.get("intent", "")).strip() in FARM_CHORE_INTENTS:
+        data["intent"] = "chat"
+        data["plot_id"] = -1
+        data.pop("plan", None)
+        data["confidence"] = max(0.95, float(data.get("confidence", 0.0)))
+        data.pop("refuse_kind", None)
         return data
     intent = str(local.get("intent", "")).strip()
     if intent not in ALLOWED_INTENTS or intent == "chat":
@@ -2373,6 +2609,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "收到委托后会先走到目标地点再执行。",
             "仅帮卖 sell 用 refuse；种萝卜用 plant，不要 refuse plant。",
             "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat。",
+            "「对啊/是啊/嗯」接闲聊必须是 chat，不是 plant 或 open_shop。",
             "明确让小狸去浇/种/收/买/睡觉才用对应 action。",
             "参考 world_snapshot.companion 的位置、状态与 capabilities。",
             "不要输出 reply 字段。",
@@ -2407,7 +2644,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _scene_brief(payload, chat_mode=True, topic=topic),
             _prompt_weather_facts(payload),
             _prompt_chat_timing(payload),
-            "[可引用记忆（本子上的第一人称句子；引用时把 id 写入 cited_memory_ids，无则 []。禁止念「白天 ·」这类标签）]",
+            "[可引用记忆（事实来源；化进对话，禁止宣读本子、禁止念「白天 ·」）]",
             _prompt_citable_memories(payload),
             "[禁止]",
             _prompt_forbidden(payload),
@@ -2415,7 +2652,9 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _companion_action_rules(payload),
             "陌生化模式：像不认识玩家，礼貌但疏远，不引用具体共同经历，不亲昵。" if story_mode == "stranger" else "",
             _dialogue_rules_from_payload(payload, chat_mode=True),
-            "好回复示例：玩家说「今天有点累」→「那就先歇会儿，我在这。」",
+            _prompt_memory_weave(payload, has_leak=str(payload.get("story_mode", "")) == "leak"),
+            "好回复示例：玩家说「可是你在农田呀」→「对，我就在田这边。刚才那句说岔了。」",
+            "坏回复示例：玩家说「可是你在农田呀」→「嗯。还有要说的吗。没有也行，我坐着。」",
             "坏回复示例：玩家说「今天有点累」→「今天晴天，萝卜售价 13 金，要不要浇田？」",
             "坏回复示例：W2 陌生化时说「又见面了，还记得我们约定吗？」",
             "好回复示例：玩家说「我们以前认识吗」→「记不清。你的名字我记住了。以前的事对不上，我不敢乱说。」",
@@ -2513,20 +2752,25 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
 
     if event == "task_complete":
         facts = payload.get("game_facts") or {}
+        next_chore = "若 has_next_chore 为真，可以顺口提下一件，但必须先把刚做完的这件事说清楚。" if facts.get("has_next_chore") else "这是这趟活的收工，不要立刻改口去推销下一件。"
         system = "\n".join([
             _prompt_story_progress(payload),
             persona,
             _prompt_player_name_rules(payload),
             _dialogue_rules_from_payload(payload),
             _worldview_line(payload),
-            "任务刚完成，用 1～2 句口语反馈，必须贴合下方任务事实，不要编造。",
+            _prompt_farm_chore_tone(payload),
+            "你刚自己把这件事做完了，现在回头对玩家说话。",
+            "用 1～2 句口语汇报收工，像人说完活，不要「浇完了。」这种电报。",
+            "必须扣住下方任务事实，不要编造没干过的事。",
+            next_chore,
             *_story_speech_context_lines(payload),
             f"任务事实：{json.dumps(facts, ensure_ascii=False)}",
             _scene_brief(payload),
         ])
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": "（任务完成了，请简短反馈）"},
+            {"role": "user", "content": "（你刚把这件事做完了，请对玩家说收工的话）"},
         ], 0.82
 
     if event == "companion_feed":
@@ -2563,11 +2807,22 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             if item_desc:
                 rules.append(f"零食特点：{item_desc}")
             rules.extend([
-                "只写对这份零食的反应：口感、味道、气味或心情。",
-                "1～2 句口语，必须紧扣「正在吃这份零食」这一瞬间。",
+                "只写对这份零食的反应：味道或心情，一两句口语。",
+                "必须紧扣「正在吃这份零食」这一瞬间。",
+                "禁止拟声（咔嚓、咯吱），禁止广告腔、夸张汁水描写。",
                 "禁止：自我介绍、打招呼、开场白、提田/浇水/任务/天气/行情。",
                 "禁止：「可以」「好的」「好好吃」「谢谢你」等敷衍句。",
             ])
+            leak = payload.get("leak_context") or {}
+            if isinstance(leak, dict) and leak.get("available"):
+                leak_summary = str(leak.get("anchor_summary") or "").strip()
+                leak_line = str(leak.get("fallback_line") or "").strip()
+                if leak_summary or leak_line:
+                    rules.append("渗漏：尝味道的同时用半句带出身体记得、脑子还对不上。只准用下面锚点里的事实，改写成口感或动作，禁止念本子原文，禁止编造，禁止提田/浇水/任务。")
+                    if leak_summary:
+                        rules.append(f"渗漏锚点：{leak_summary}")
+                    if leak_line:
+                        rules.append(f"语气参考（不要整句照抄）：{leak_line}")
         rules.append(f"禁止重复：{json.dumps(previous[-6:], ensure_ascii=False)}")
         system = "\n".join(rules)
         return [
@@ -2582,6 +2837,8 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
         intent = str(payload.get("proactive_intent", "casual")).strip() or "casual"
         goal = str(payload.get("proactive_goal", "")).strip()
         leak = payload.get("leak_context") or {}
+        has_leak = isinstance(leak, dict) and bool(leak.get("available"))
+        also_leak = bool(payload.get("also_leak"))
         prev = payload.get("previous_proactive") or []
         memories = payload.get("player_memories") or []
         story_ctx_raw = payload.get("story_context") or {}
@@ -2592,18 +2849,32 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             or story_ctx.get("affection_tier")
             or "?"
         )
+        casual_rule = (
+            "任务=闲聊：像在场的人随口 1～2 句。话题从眼前生活里挑，不要只会种田："
+            "廊下、树洞、河声、水壶、手套、灯、尾巴、发呆、你站那儿的样子都可以。"
+            "位置只当背景，不必汇报正在种/浇/收。禁止报背包数字。禁止主动问要不要种/浇/收/买种子。"
+        )
+        leak_rule = (
+            "任务=渗漏：先是一句自然闲聊，再在同一口气里滑出半句身体记得的细节。"
+            "只用「渗漏锚点」里的事实，改写成感觉/动作/气味/口误，禁止念本子原文，禁止「本子上写着／我翻到那页」。禁止编造。"
+        )
         intent_rule = {
             "invite": "任务=邀请：用你自己的话把玩家轻轻带到今天的节点。不要念信纸正文，不要剧透选项，不要点名点击界面。语气须符合 beat_context 里的亲密度档与 profile。",
-            "leak": "任务=渗漏：只用「渗漏锚点」里真实发生过的事，写一句身体先记得、脑子还对不上的话。禁止编造锚点没有的情节。",
-            "casual": "任务=闲聊：只说你此刻所在的位置和正在做的事。可以碰到天气或心情。禁止报背包、种子包数、叶片、田块数字。禁止主动问要不要种/浇/收。",
+            "leak": leak_rule,
+            "casual": casual_rule,
         }.get(intent, "任务=主动开口：1～2 句口语。")
+        if intent == "casual" and (has_leak or also_leak):
+            intent_rule = casual_rule + " " + leak_rule
         loc_line = ""
         companion_snap = (payload.get("world_snapshot") or {}).get("companion") or {}
         if isinstance(companion_snap, dict):
             loc_name = str(companion_snap.get("location_name", "")).strip()
             activity = str(companion_snap.get("activity", "")).strip()
             if loc_name or activity:
-                loc_line = f"你现在在「{loc_name or '田边'}」，正在「{activity or '发呆'}」。说话必须与此一致，不要说自己在别处，不要说正在做没做的事。"
+                loc_line = (
+                    f"你现在在「{loc_name or '田边'}」，正在「{activity or '发呆'}」。"
+                    "位置只作背景：不要说自己在别处。不必汇报农活，更不要问要不要种/浇/收/买种子。"
+                )
         system = "\n".join([
             _prompt_story_progress(payload),
             persona,
@@ -2614,6 +2885,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_player_name_rules(payload),
             _prompt_player_quiet(payload),
             _dialogue_rules_from_payload(payload),
+            _prompt_memory_weave(payload, has_leak=has_leak or also_leak, intent=intent),
             "这是小狸主动找玩家说话，不是回复玩家，也不是系统通知。",
             "措辞必须现写。禁止套用万能句，禁止与「禁止重复」里的句子雷同。",
             intent_rule,
@@ -2622,9 +2894,9 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             *_story_speech_context_lines(payload),
             f"节点：{payload.get('beat_id', '')} {payload.get('beat_label', '')} / {payload.get('beat_emotion', '')}".strip(),
             f"已看节点：{json.dumps(payload.get('seen_nodes') or [], ensure_ascii=False)}",
-            f"渗漏锚点（仅可用这里的事实）：{json.dumps(leak, ensure_ascii=False)}" if leak else "渗漏锚点：无",
+            f"渗漏锚点（仅可用这里的事实，禁止当台词念）：{json.dumps({k: v for k, v in leak.items() if k != 'fallback_line'}, ensure_ascii=False)}" if has_leak else "渗漏锚点：无",
             f"这个玩家的近期记忆：{json.dumps(memories, ensure_ascii=False)}" if memories else "",
-            "[可引用记忆（本子上的第一人称句子；引用时把 id 写入 cited_memory_ids，无则 []。禁止念「白天 ·」这类标签）]",
+            "[可引用记忆（事实来源；化进对话，禁止宣读本子、禁止念「白天 ·」）]",
             _prompt_citable_memories(payload),
             "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿、留一步；S2 贴=敢靠近、敢提约定。profile=mid 时取 S1 近、勿写满 S2。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
@@ -2651,6 +2923,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
         milestone_id = str(react_facts.get("milestone_id", "")).strip()
         react_type = str(payload.get("react_type", "")).strip()
         persona_shift_rule = ""
+        farm_rule = ""
         if react_type == "persona_shift":
             dim = str(react_facts.get("dimension", "")).strip()
             direction = str(react_facts.get("direction", "")).strip()
@@ -2658,6 +2931,14 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
                 "这是性格漂移的自觉察：她发现自己某一方面变了，"
                 "用一句短口语说出来，例如「我以前好像不这样」。"
                 f"漂移维度={dim}，方向={direction}。不要解释原因，不要数值，不要客服腔。"
+            )
+        if react_type == "player_farm":
+            farm_rule = (
+                "玩家刚在田里动手（不是派你去干）。根据 react_facts 用 1～2 句口语回应眼前这件事。"
+                "禁止电报短句如「浇了。」「种下了。」「收了。」"
+                "要像站在旁边说话：看见了、土、苗、手感或天气。"
+                "不要编造没发生的事；不要当成系统播报；不要因此去走去浇田。"
+                f"事实：{json.dumps(react_facts, ensure_ascii=False)}"
             )
         system = "\n".join([
             _prompt_story_progress(payload),
@@ -2667,18 +2948,21 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _dialogue_rules_from_payload(payload),
             _prompt_farm_chore_tone(payload),
             "这是小狸主动搭话，像顺口提醒，不要像系统通知。",
-            "须符合当日 beat_context 与 story_mode；玩家未问田时不要推销浇田。",
+            "须符合当日 beat_context 与 story_mode；玩家未问田时不要推销浇田。"
+            if react_type != "player_farm" else "这是对玩家刚动手的田务反应，不要改口推销别的活。",
             *_story_speech_context_lines(payload),
             f"触发类型：{react_type or payload.get('react_type', '')}",
             persona_shift_rule,
+            farm_rule,
             "世界事实：",
             _scene_brief(payload),
         ])
         if milestone_id:
             system += f"\n里程碑：{milestone_id}，自然庆祝或安慰，1～2 句。"
+        user_cue = "（玩家刚在田里动手，请用 1～2 句口语回应眼前这件事）" if react_type == "player_farm" else "（请主动和玩家说一句话）"
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": "（请主动和玩家说一句话）"},
+            {"role": "user", "content": user_cue},
         ], 0.84
 
     if event == "day_journal_summarize":

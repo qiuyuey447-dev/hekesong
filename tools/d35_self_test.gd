@@ -23,7 +23,7 @@ func _run() -> void:
 
 func _test_awakening_json_keys() -> void:
 	for key in [
-		"open", "act1_footer_true", "act2_intro", "act3_true", "f10_full",
+		"act1_footer_true", "act2_intro", "act3_true", "f10_full",
 	]:
 		var text := StoryNodeCopy.get_awakening(key)
 		_assert(text.strip_edges() != "", "awakening.%s present" % key)
