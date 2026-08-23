@@ -175,8 +175,13 @@ body {
 (function capWebPixelRatio() {
 	const raw = Number(window.devicePixelRatio) || 1;
 	const narrow = Math.min(window.innerWidth, window.innerHeight) < 900;
-	const maxRatio = narrow ? 1.5 : 2;
-	const capped = Math.min(Math.max(raw, 1), maxRatio);
+	/// 手机曾压到 1.5×，WebGL 画布再被系统拉到 2–3× 时矢量字发糊。
+	/// 与桌面对齐：最高 2×；窄屏若落在 1×～2× 之间，抬到 2×，避免 1.5 这种半档。
+	const maxRatio = 2;
+	let capped = Math.min(Math.max(raw, 1), maxRatio);
+	if (narrow && capped > 1 && capped < 2) {
+		capped = 2;
+	}
 	if (capped === raw) {
 		return;
 	}

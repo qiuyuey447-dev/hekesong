@@ -28,7 +28,7 @@ const POS_HOME := Vector2(272, 304)
 const POS_PORCH := Vector2(1040, 640)
 const POS_FOX := Vector2(1216, 568)
 const POS_HOLLOW := Vector2(1184, 552)
-const POS_SHOP := Vector2(1360, 384)
+const POS_SHOP := Vector2(1544, 405)
 const POS_RIDGE := Vector2(1520, 672)
 const POS_EMPTY := Vector2(1688, 780)
 const POS_RIVER := Vector2(700, 560)
@@ -86,12 +86,7 @@ static func apply(farm_map: Node2D, actors: Node2D = null) -> Node2D:
 	_add_yard_edge_props(actors)
 	_add_hollow_tree(actors, marker_position(farm_map, "树洞", POS_HOLLOW))
 	_nudge_spawned_actors(actors, farm_map)
-	if actors.get_node_or_null("Shop") == null:
-		var stall := Node2D.new()
-		stall.name = "ShopStall"
-		stall.position = marker_position(farm_map, "商店", POS_SHOP)
-		actors.add_child(stall)
-		build_shop_stall(stall)
+	## 商店外观用地图上的 INN 帐篷摊，不再叠 house_10 棚子。
 	return actors
 
 
@@ -100,7 +95,6 @@ static func sync_markers(farm_map: Node2D) -> void:
 	_set_marker(farm_map, "廊下", POS_PORCH)
 	_set_marker(farm_map, "小狸", POS_FOX)
 	_set_marker(farm_map, "树洞", POS_HOLLOW)
-	_set_marker(farm_map, "商店", POS_SHOP)
 	_set_marker(farm_map, "田埂", POS_RIDGE)
 	_set_marker(farm_map, "空土垄", POS_EMPTY)
 	_set_marker(farm_map, "河边", POS_RIVER)

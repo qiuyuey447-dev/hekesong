@@ -105,7 +105,7 @@ var last_day_summary: String = ""
 
 var market_state: Dictionary = {
 	"turnip_seed_price": 8,
-	"turnip_sell_price": 12,
+	"turnip_sell_price": 14,
 	"trend": "stable",
 }
 
@@ -619,7 +619,7 @@ func get_seed_buy_price() -> int:
 
 
 func get_turnip_sell_price() -> int:
-	return 12
+	return 14
 
 
 func get_market_snapshot() -> Dictionary:
@@ -1419,7 +1419,7 @@ func _apply_new_game_defaults(player: String, companion: String) -> void:
 	last_day_summary = ""
 	market_state = {
 		"turnip_seed_price": 8,
-		"turnip_sell_price": 12,
+		"turnip_sell_price": 14,
 		"trend": "stable",
 	}
 	short_term_memory.clear()
@@ -2649,7 +2649,7 @@ func advance_day() -> void:
 
 
 func roll_market_for_weather(weather: String) -> void:
-	market_state["turnip_sell_price"] = 12
+	market_state["turnip_sell_price"] = 14
 	market_state["trend"] = "stable"
 	match normalize_weather(weather):
 		WEATHER_SUN:

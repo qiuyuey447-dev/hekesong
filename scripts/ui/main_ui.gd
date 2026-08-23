@@ -2443,6 +2443,7 @@ func _send_chat_async(text: String) -> void:
 	_chat_input.clear()
 	GameState.record_player_chat(trimmed)
 	_append_player_message(trimmed)
+	_pending_chat_text = trimmed
 
 	if GameState.try_learn_player_name_from_chat(trimmed):
 		_append_companion_message("……%s。好。我先念三遍。" % GameState.player_name)
@@ -2519,6 +2520,9 @@ func _send_chat_async(text: String) -> void:
 		return
 
 	if _try_handle_harvest_offer_reply(trimmed):
+		return
+
+	if _try_answer_harvest_capability(trimmed):
 		return
 
 	if IntentParser.looks_like_player_harvest_request(trimmed):
@@ -3156,19 +3160,21 @@ func _try_execute_chat_intent(from_local_first: bool = false) -> void:
 		_skip_player_chat_reply = true
 		_pending_chat_intent = {}
 		var action := str(intent.get("intent", ""))
+		var extra := str(result.get("companion_extra", "")).strip_edges()
 		if action in [IntentParser.INTENT_WATER, IntentParser.INTENT_WATER_ALL]:
 			_pending_water_offer = false
 		if action in [IntentParser.INTENT_PLANT, IntentParser.INTENT_PLANT_ALL]:
 			_pending_plant_offer = false
 		if action in [IntentParser.INTENT_HARVEST, IntentParser.INTENT_HARVEST_ALL]:
 			_pending_harvest_offer = false
+			if extra == "":
+				extra = PersonaGuard.reply_when_accepting_harvest()
 		if action == IntentParser.INTENT_OPEN_SHOP:
 			_pending_shop_offer = false
 		if bool(result.get("auto_seed_flow", false)):
 			_begin_auto_seed_shop_flow(str(intent.get("raw_text", _pending_chat_text)))
 			_pending_shop_offer = false
 			_pending_plant_offer = false
-		var extra := str(result.get("companion_extra", "")).strip_edges()
 		if extra != "":
 			_append_companion_message(extra)
 		return
@@ -3238,6 +3244,22 @@ func _try_answer_name_recall(text: String) -> bool:
 	return true
 
 
+func _try_answer_harvest_capability(text: String) -> bool:
+	if not IntentParser.looks_like_harvest_capability_question(text):
+		return false
+	_pending_harvest_offer = false
+	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+	if harvestable <= 0:
+		if StoryDirector.is_stranger_mode():
+			_append_companion_message("虽然我们还不熟……但这会儿还没有能收的。")
+		else:
+			_append_companion_message("能帮。这会儿还没有能收的。")
+		_chat_action_handled = true
+		_skip_player_chat_reply = true
+		return true
+	return _start_requested_harvest(text)
+
+
 func _try_answer_why_not_harvesting(text: String) -> bool:
 	if not IntentParser.looks_like_why_not_harvesting(text):
 		return false
@@ -3283,7 +3305,7 @@ func _start_requested_harvest(raw: String) -> bool:
 		return true
 	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
 	if harvestable <= 0:
-		_append_companion_message("不是不帮。这会儿还没有能收的。")
+		_append_companion_message(PersonaGuard.reply_when_cannot_harvest())
 		_chat_action_handled = true
 		_skip_player_chat_reply = true
 		return true
@@ -3295,7 +3317,7 @@ func _start_requested_harvest(raw: String) -> bool:
 	}
 	var harvest_result := ActionExecutor.execute(harvest_intent)
 	if bool(harvest_result.get("executed", false)):
-		_append_companion_message("好，我这就去收。")
+		_append_companion_message(PersonaGuard.reply_when_accepting_harvest())
 		_chat_action_handled = true
 		_skip_player_chat_reply = true
 		return true
@@ -3358,9 +3380,6 @@ func _try_answer_missed_purchase(text: String) -> bool:
 func _try_answer_planting_rebuttal(text: String) -> bool:
 	if not IntentParser.looks_like_planting_rebuttal(text):
 		return false
-	if not PersonaGuard.can_delegate_harvest():
-		_append_companion_message("是，我帮过。种是帮手，收得你来——我馋，规矩不让。")
-		return true
 	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
 	if harvestable <= 0:
 		_append_companion_message("是，我帮过。可这会儿还没熟的呢。")
@@ -3374,7 +3393,10 @@ func _try_answer_planting_rebuttal(text: String) -> bool:
 		"raw_text": text,
 	})
 	if bool(harvest_result.get("executed", false)):
-		_append_companion_message("是，我帮过。那这次我来收。")
+		if StoryDirector.is_stranger_mode():
+			_append_companion_message(PersonaGuard.reply_when_accepting_harvest())
+		else:
+			_append_companion_message("是，我帮过。那这次我来收。")
 		_chat_action_handled = true
 		return true
 	_append_companion_message("是，我帮过。可这会儿还走不开，稍等。")
@@ -3736,7 +3758,7 @@ func _try_cancel_active_chore_from_chat() -> bool:
 
 func _sanitize_farm_hallucination(text: String) -> String:
 	## 田况与对话不一致时，把「我去浇/种/收/已买好」等幻觉换成实话，避免先胡说再纠正。
-	var cleaned := text.strip_edges()
+	var cleaned := PersonaGuard.rewrite_harvest_refuse_fallback(text.strip_edges(), _pending_chat_text)
 	if cleaned == "":
 		return cleaned
 
@@ -3763,9 +3785,9 @@ func _sanitize_farm_hallucination(text: String) -> String:
 			return PersonaGuard.reply_when_cannot_plant()
 
 	if ShopDelegate.looks_like_completed_harvest_claim(cleaned):
-		## 亲密度不够却声称代收 → 改口；玩家刚让她收则留给 followthrough 去收。
-		if not PersonaGuard.can_delegate_harvest() and not IntentParser.looks_like_player_harvest_request(_pending_chat_text):
-			return PersonaGuard.reply_when_cannot_harvest()
+		## D4/D5 玩家下令收：先说还不熟，再留给 followthrough 去收。
+		if StoryDirector.is_stranger_mode() and IntentParser.looks_like_player_harvest_request(_pending_chat_text):
+			return PersonaGuard.reply_when_accepting_harvest()
 
 	## 承诺类：空田却说去浇。
 	if ShopDelegate.looks_like_water_commitment(cleaned):
@@ -3783,12 +3805,12 @@ func _sanitize_farm_hallucination(text: String) -> String:
 		if GameState.get_empty_plot_ids().is_empty():
 			return PersonaGuard.reply_when_cannot_plant()
 
-	## 承诺去收但亲密度不够 / 无可收。玩家刚下令收时不要改口「你来收」。
+	## 承诺去收但无可收。玩家刚下令收时不要改口「你来收」。
 	if ShopDelegate.looks_like_harvest_commitment(cleaned):
 		if IntentParser.looks_like_player_harvest_request(_pending_chat_text):
+			if StoryDirector.is_stranger_mode():
+				return PersonaGuard.reply_when_accepting_harvest()
 			return cleaned
-		if not PersonaGuard.can_delegate_harvest():
-			return PersonaGuard.reply_when_cannot_harvest()
 		if int(GameState.get_plot_summary().get("harvestable", 0)) <= 0:
 			return PersonaGuard.reply_when_cannot_harvest()
 
@@ -3900,11 +3922,6 @@ func _try_execute_companion_followthrough(reply_text: String, api_intent: Dictio
 		)
 	):
 		var player_asked := IntentParser.looks_like_player_harvest_request(player_text)
-		if not PersonaGuard.can_delegate_harvest() and not player_asked:
-			_append_companion_message(PersonaGuard.reply_when_cannot_harvest())
-			_chat_action_handled = true
-			_skip_player_chat_reply = true
-			return
 		var harvest_intent := {
 			"intent": IntentParser.INTENT_HARVEST_ALL,
 			"plot_id": -1,
@@ -4149,7 +4166,9 @@ func _situational_repeat_fallback() -> String:
 
 
 func _append_companion_message(text: String, ephemeral: bool = false, reply_contract: Dictionary = {}) -> void:
-	var raw := text.strip_edges()
+	var raw := PersonaGuard.rewrite_harvest_refuse_fallback(text.strip_edges(), _pending_chat_text)
+	if raw == "":
+		return
 	var keep_line := _keep_spoken_line
 	_keep_spoken_line = false
 	if not _body_action_handled and not keep_line:
@@ -4162,6 +4181,7 @@ func _append_companion_message(text: String, ephemeral: bool = false, reply_cont
 		and "说个数字" not in cleaned
 		and "告诉过我" not in cleaned
 		and "叫不出口" not in cleaned
+		and "没有能收" not in cleaned
 		and ResponseValidator.looks_repetitive_companion_line(cleaned)
 	):
 		var situational := _situational_repeat_fallback()

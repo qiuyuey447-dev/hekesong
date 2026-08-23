@@ -1,7 +1,8 @@
 extends Node
 ## 人设与能力边界校验（XL-B4）：拦截越界指令，返回小狸语气的拒答。
 
-const BOND_HARVEST_MIN := 20
+const STRANGER_HARVEST_REPLY := "虽然我们还不熟……但我可以帮你。"
+const FAMILIAR_HARVEST_REPLY := "好，我这就去收。"
 
 var _farm_plot_config: Dictionary = {}
 var _farm_plot_config_loaded: bool = false
@@ -23,15 +24,7 @@ func check_intent(intent: Dictionary) -> Dictionary:
 			"reply": "……还在忙。等一下。",
 		}
 
-	var action := str(intent.get("intent", ""))
-	if action in [IntentParser.INTENT_HARVEST, IntentParser.INTENT_HARVEST_ALL]:
-		if not can_delegate_harvest() and not IntentParser.looks_like_player_harvest_request(str(intent.get("raw_text", ""))):
-			return {
-				"blocked": true,
-				"reply": "你来收吧，我馋，规矩不让。点田就能收。",
-			}
-
-	if action == IntentParser.INTENT_SLEEP and TaskSystem.is_busy():
+	if str(intent.get("intent", "")) == IntentParser.INTENT_SLEEP and TaskSystem.is_busy():
 		return {
 			"blocked": true,
 			"reply": "我还在外面。等我回来再睡。",
@@ -58,9 +51,9 @@ func check_execution_failure(intent: Dictionary, failure: Dictionary) -> String:
 		"bond_water":
 			return "田还干着。要浇你说一声。"
 		"bond_harvest":
-			return "你来收。我帮你看哪块熟了。"
+			return reply_when_cannot_harvest()
 		"no_harvestable":
-			return "还没有能收的。"
+			return reply_when_cannot_harvest()
 		"plot_not_harvestable":
 			return "那块还不行。"
 		"no_seeds":
@@ -104,12 +97,40 @@ func reply_when_cannot_plant() -> String:
 
 
 func reply_when_cannot_harvest() -> String:
-	if not can_delegate_harvest():
-		return "你来收。我望风——不对，我馋。"
 	var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
 	if harvestable <= 0:
-		return "还没有能收的。"
+		return "不是不帮。这会儿还没有能收的。"
 	return "稍等。我还走不开。"
+
+
+func reply_when_accepting_harvest() -> String:
+	if StoryDirector.is_stranger_mode():
+		return STRANGER_HARVEST_REPLY
+	return FAMILIAR_HARVEST_REPLY
+
+
+func is_harvest_refuse_fallback(line: String) -> bool:
+	var text := line.strip_edges()
+	if text == "":
+		return false
+	if "我望风" in text or "规矩不让" in text:
+		return true
+	if "你来收" in text:
+		return true
+	return "我馋" in text and ("收" in text or "望风" in text)
+
+
+func rewrite_harvest_refuse_fallback(line: String, player_text: String = "") -> String:
+	if not is_harvest_refuse_fallback(line):
+		return line
+	if (
+		IntentParser.looks_like_harvest_capability_question(player_text)
+		or IntentParser.looks_like_player_harvest_request(player_text)
+	):
+		if int(GameState.get_plot_summary().get("harvestable", 0)) > 0:
+			return reply_when_accepting_harvest()
+		return "能帮。这会儿还没有能收的。"
+	return "……那句我听岔了。你再说一遍？"
 
 
 func farm_reaction_banned_phrase(line: String) -> String:
@@ -135,8 +156,6 @@ func _ensure_farm_plot_config() -> void:
 
 func reply_for_plot_click(reason: String) -> String:
 	var key := reason
-	if reason == "harvest_failed" and not can_delegate_harvest():
-		key = "harvest_bond"
 	var pool: Array = _plot_click_pool(key)
 	if pool.is_empty():
 		return ""
@@ -257,7 +276,8 @@ func can_delegate_water() -> bool:
 
 
 func can_delegate_harvest() -> bool:
-	return GameState.affection >= BOND_HARVEST_MIN
+	## 代收不看亲密度。D4/D5 陌生化仍可收，只是先说还不熟。
+	return true
 
 
 func _can_delegate_water() -> bool:

@@ -370,6 +370,8 @@ func looks_like_chore_question(text: String) -> bool:
 	var compact := _compact(_normalize(text))
 	if compact == "" or not _mentions_farm_chore(compact):
 		return false
+	if looks_like_harvest_capability_question(text):
+		return true
 	if _match_any(compact, ["我是问", "我问你", "是不是", "咋还", "怎么还", "为什么还", "为啥还"]):
 		return true
 	if _match_any(compact, ["咋", "怎么", "为什么", "为啥", "干嘛", "为何"]):
@@ -397,9 +399,37 @@ func _mentions_farm_chore(compact: String) -> bool:
 	return false
 
 
+func looks_like_non_harvest_shou(text: String) -> bool:
+	## 「收留 / 收拾 / 收到」带「收」，但不是收萝卜。
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if _match_any(compact, ["收萝卜", "帮我收", "替我收", "去收萝卜", "摘萝卜", "拔萝卜"]):
+		return false
+	return _match_any(compact, [
+		"收留", "收拾", "收到", "收工", "收藏", "收入", "收据", "收费",
+		"收音机", "收缩", "收场", "收心", "收手",
+	])
+
+
+func looks_like_harvest_capability_question(text: String) -> bool:
+	## 「你不是不能帮我收吗」是在问能力，不是下令收。
+	var compact := _compact(_normalize(text))
+	if compact == "" or looks_like_non_harvest_shou(text):
+		return false
+	return _match_any(compact, [
+		"不是不能帮我收", "不是不能收", "你不是不能", "不是说不能帮",
+		"不是不能帮", "不是说你不能", "不是不能帮忙收",
+	])
+
+
 func looks_like_player_harvest_request(text: String) -> bool:
 	## 玩家明确让她收，或追问「为啥不帮我收」。不是「为啥你帮我收」。
 	if looks_like_why_helping(text):
+		return false
+	if looks_like_harvest_capability_question(text):
+		return false
+	if looks_like_non_harvest_shou(text):
 		return false
 	if looks_like_why_not_harvesting(text):
 		return true
@@ -1065,6 +1095,8 @@ func _looks_like_water_all(normalized: String) -> bool:
 
 
 func _score_harvest_all(normalized: String) -> Dictionary:
+	if looks_like_non_harvest_shou(normalized) or looks_like_harvest_capability_question(normalized):
+		return {"score": 0, "terms": []}
 	var keywords := {
 		"都收": 10, "全收": 10, "全部收": 10, "统统收": 10, "一并收": 9,
 		"所有萝卜": 10, "每块田": 8, "所有田": 9, "整块田": 9,
@@ -1082,6 +1114,8 @@ func _score_harvest_all(normalized: String) -> Dictionary:
 
 
 func _score_harvest(normalized: String) -> Dictionary:
+	if looks_like_non_harvest_shou(normalized) or looks_like_harvest_capability_question(normalized):
+		return {"score": 0, "terms": []}
 	var keywords := {
 		"收萝卜": 10, "收一下萝卜": 10, "帮忙收": 9, "帮我收": 10, "帮我摘": 10,
 		"帮我拔": 10, "去收萝卜": 10, "去收吧": 10, "去收": 8, "收萝卜田": 10, "收获": 8,

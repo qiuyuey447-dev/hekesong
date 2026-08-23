@@ -142,12 +142,8 @@ func _build_world_background() -> void:
 	var farm_map := FARM_MAP_SCENE.instantiate() as Node2D
 	_farm_map = farm_map
 	world.add_child(farm_map)
+	## 封面构图仍用 POS_* 兜底点；商店摊位已烤在场景里，sync 不再改商店坐标。
 	FarmSetdress.sync_markers(farm_map)
-	var stall := Node2D.new()
-	stall.name = "ShopStall"
-	stall.position = FarmSetdress.marker_position(farm_map, "商店", FarmSetdress.POS_SHOP)
-	FarmSetdress.ensure_actors(farm_map).add_child(stall)
-	FarmSetdress.build_shop_stall(stall)
 
 	_spawn_title_fox(world, farm_map)
 

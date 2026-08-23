@@ -7,7 +7,7 @@ func _ready() -> void:
 	add_to_group("interactable")
 	add_to_group("shop_interact")
 	_build_collision()
-	FarmSetdress.build_shop_stall(self)
+	_apply_shop_sign_font()
 	InteractHover.attach(
 		self,
 		Vector2(108, 96),
@@ -16,6 +16,18 @@ func _ready() -> void:
 		0.03,
 		1.5
 	)
+
+
+func _apply_shop_sign_font() -> void:
+	var actors := get_parent()
+	if actors == null:
+		return
+	var label := actors.get_node_or_null("ShopSign/ShopLabel") as Label
+	if label == null:
+		return
+	var theme_node := get_tree().root.get_node_or_null("UIFontTheme")
+	if theme_node != null and theme_node.has_method("apply_control"):
+		theme_node.apply_control(label)
 
 
 func activate() -> void:

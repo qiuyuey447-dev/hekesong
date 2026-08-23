@@ -133,18 +133,7 @@ func _execute_open_shop(intent: Dictionary) -> Dictionary:
 	}
 
 
-func _harvest_blocked_by_bond(intent: Dictionary) -> bool:
-	if PersonaGuard.can_delegate_harvest():
-		return false
-	if bool(intent.get("honor_request", false)):
-		return false
-	return not IntentParser.looks_like_player_harvest_request(str(intent.get("raw_text", "")))
-
-
 func _execute_harvest(intent: Dictionary) -> Dictionary:
-	if _harvest_blocked_by_bond(intent):
-		return {"executed": false, "reason": "bond_harvest"}
-
 	var plot_id := int(intent.get("plot_id", -1))
 	if plot_id > 0:
 		if not GameState.can_harvest(plot_id):
@@ -163,10 +152,7 @@ func _execute_harvest(intent: Dictionary) -> Dictionary:
 	return {"executed": false, "reason": "busy"}
 
 
-func _execute_harvest_all(intent: Dictionary = {}) -> Dictionary:
-	if _harvest_blocked_by_bond(intent):
-		return {"executed": false, "reason": "bond_harvest"}
-
+func _execute_harvest_all(_intent: Dictionary = {}) -> Dictionary:
 	var summary := GameState.get_plot_summary()
 	var plot_ids: Array = summary.get("harvestable_plot_ids", [])
 	if plot_ids.is_empty():

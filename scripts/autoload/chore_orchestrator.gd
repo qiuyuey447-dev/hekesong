@@ -207,8 +207,6 @@ func execute_step(step: Dictionary) -> Dictionary:
 
 	match step_key:
 		"harvest_all":
-			if not PersonaGuard.can_delegate_harvest():
-				return {"executed": false, "reply": PersonaGuard.reply_when_cannot_harvest()}
 			var result := ActionExecutor.execute({
 				"intent": IntentParser.INTENT_HARVEST_ALL,
 				"plot_id": -1,
@@ -216,6 +214,8 @@ func execute_step(step: Dictionary) -> Dictionary:
 			})
 			if bool(result.get("executed", false)):
 				_record_step("harvest_all")
+			elif str(result.get("reply", "")).strip_edges() == "":
+				result["reply"] = _cannot_start_reply("harvest_all", result)
 			return result
 		"sell_turnips":
 			var sold := ActionExecutor.execute({
@@ -478,6 +478,13 @@ func _try_chore_nudge(text: String) -> bool:
 func _cannot_start_reply(step_key: String, result: Dictionary) -> String:
 	if TaskSystem.is_busy() or str(result.get("reason", "")) == "busy":
 		return "这会儿还走不开，稍等我一下。"
+	if step_key == "harvest_all":
+		var harvest_fail := PersonaGuard.check_execution_failure({
+			"intent": IntentParser.INTENT_HARVEST_ALL,
+		}, result)
+		if harvest_fail.strip_edges() != "":
+			return harvest_fail
+		return PersonaGuard.reply_when_cannot_harvest()
 	if step_key == "water_all":
 		if GameState.weather_today == GameState.WEATHER_RAIN:
 			return "雨在浇，这会儿不用浇。"

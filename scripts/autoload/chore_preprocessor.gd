@@ -28,6 +28,10 @@ func parse_plan(text: String) -> Array:
 		return []
 	if IntentParser.looks_like_chore_question(trimmed):
 		return []
+	if IntentParser.looks_like_harvest_capability_question(trimmed):
+		return []
+	if IntentParser.looks_like_non_harvest_shou(trimmed):
+		return []
 	var segments := _split_segments(trimmed)
 	var steps: Array = []
 	for segment in segments:
@@ -63,7 +67,7 @@ func _segment_to_step_core(seg: String) -> Dictionary:
 		return {"step": "sell_turnips", "raw_text": seg}
 	if compact.contains("买") and compact.contains("种子"):
 		return {"step": "shop_buy_seeds", "raw_text": seg, "max_gold": max_gold}
-	if compact.contains("收") or compact.contains("摘"):
+	if _looks_like_harvest_step(compact, seg):
 		return {"step": "harvest_all", "raw_text": seg}
 	if compact.contains("浇") and (
 		IntentParser.looks_like_water_followthrough(seg)
@@ -77,6 +81,19 @@ func _segment_to_step_core(seg: String) -> Dictionary:
 	if compact.contains("浇"):
 		return {"step": "water_all", "raw_text": seg}
 	return {}
+
+
+func _looks_like_harvest_step(compact: String, raw: String) -> bool:
+	if IntentParser.looks_like_non_harvest_shou(raw) or IntentParser.looks_like_harvest_capability_question(raw):
+		return false
+	if compact in ["收", "去收", "收吧", "收了吧", "去收吧"]:
+		return true
+	for cue in ["收萝卜", "帮我收", "替我收", "去收萝卜", "摘萝卜", "拔萝卜", "帮忙收", "代收", "把萝卜收", "把熟的收", "都收", "全收"]:
+		if cue in compact:
+			return true
+	if ("摘" in compact or "拔" in compact) and ("萝卜" in compact or "田" in compact):
+		return true
+	return "收" in compact and ("萝卜" in compact or "熟" in compact) and "收留" not in compact
 
 
 func looks_like_max_gold_seed_buy(text: String) -> bool:

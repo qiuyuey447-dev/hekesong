@@ -11,15 +11,14 @@ const SHOP_ITEMS: Array[Dictionary] = [
 		"category": "seed",
 		"buy_price": 8,
 		"inventory_key": "turnip_seed",
-		"icon_col": 8,
-		"icon_row": 0,
+		"icon_path": "res://assets/ui/icon_seed.png",
 		"desc": "种在农田里，每天浇水成长。",
 	},
 	{
 		"id": "apple",
 		"name": "红苹果",
 		"category": "treat",
-		"buy_price": 15,
+		"buy_price": 35,
 		"inventory_key": "apple",
 		"icon_col": 2,
 		"icon_row": 0,
@@ -32,7 +31,7 @@ const SHOP_ITEMS: Array[Dictionary] = [
 		"id": "berry",
 		"name": "野蓝莓",
 		"category": "treat",
-		"buy_price": 10,
+		"buy_price": 30,
 		"inventory_key": "berry",
 		"icon_col": 1,
 		"icon_row": 0,
@@ -45,7 +44,7 @@ const SHOP_ITEMS: Array[Dictionary] = [
 		"id": "carrot",
 		"name": "胡萝卜",
 		"category": "treat",
-		"buy_price": 12,
+		"buy_price": 32,
 		"inventory_key": "carrot",
 		"icon_col": 4,
 		"icon_row": 0,
@@ -58,7 +57,7 @@ const SHOP_ITEMS: Array[Dictionary] = [
 		"id": "pumpkin_snack",
 		"name": "小南瓜",
 		"category": "treat",
-		"buy_price": 18,
+		"buy_price": 38,
 		"inventory_key": "pumpkin_snack",
 		"icon_col": 0,
 		"icon_row": 2,
@@ -73,7 +72,7 @@ const SELL_ITEMS: Array[Dictionary] = [
 	{
 		"id": "turnip",
 		"name": "萝卜",
-		"sell_price": 12,
+		"sell_price": 14,
 		"inventory_key": "turnip",
 		"icon_col": 9,
 		"icon_row": 0,
@@ -104,6 +103,11 @@ static func get_treat_item(item_id: String) -> Dictionary:
 
 
 static func get_item_icon(item: Dictionary) -> Texture2D:
+	var path := str(item.get("icon_path", "")).strip_edges()
+	if path != "" and ResourceLoader.exists(path):
+		var tex := load(path) as Texture2D
+		if tex != null:
+			return tex
 	return SpriteSheet.grid_frame(
 		FARM_ICONS,
 		ICON_SIZE,

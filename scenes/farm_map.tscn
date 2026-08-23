@@ -43,7 +43,7 @@ size = Vector2(44, 32)
 size = Vector2(300, 180)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_46lyr"]
-size = Vector2(919.75, 141)
+size = Vector2(1043, 141)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_xkyr1"]
 size = Vector2(1894, 185)
@@ -817,6 +817,23 @@ scale = Vector2(2, 2)
 texture = ExtResource("27_e3gqv")
 centered = false
 offset = Vector2(-7, -9)
+
+[node name="ShopSign" type="Node2D" parent="Entities" unique_id=1516050072]
+z_index = 8
+position = Vector2(1544, 292)
+
+[node name="ShopLabel" type="Label" parent="Entities/ShopSign" unique_id=1517497730]
+offset_left = -36.0
+offset_top = -16.0
+offset_right = 54.0
+offset_bottom = 20.0
+theme_override_colors/font_color = Color(0.98, 0.93, 0.72, 1)
+theme_override_colors/font_outline_color = Color(0.22, 0.12, 0.06, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 22
+text = "商店"
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="WorldCollision" type="StaticBody2D" parent="." unique_id=652207129]
 collision_mask = 0

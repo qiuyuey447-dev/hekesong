@@ -86,6 +86,8 @@ func should_skip_repetitive_fallback(player_text: String) -> bool:
 		return true
 	if IntentParser.looks_like_farm_directive(player_text):
 		return true
+	if IntentParser.looks_like_player_harvest_request(player_text):
+		return true
 	if ChorePreprocessor.looks_like_explicit_delegate(player_text):
 		return true
 	var compact := player_text.strip_edges().replace(" ", "")

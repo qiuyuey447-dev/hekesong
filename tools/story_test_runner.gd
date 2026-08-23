@@ -89,6 +89,7 @@ func _run_ten_day_tests() -> void:
 	_test_sleep_request_explicit()
 	_test_p11_night_period_gate()
 	_test_harvest_offer_flow()
+	_test_harvest_not_gated_by_affection()
 	_test_planting_rebuttal()
 	_test_chore_completion_not_inquiry()
 	_test_promise_not_fulfilled_on_harvest()
@@ -2000,6 +2001,54 @@ func _test_harvest_offer_flow() -> void:
 	_assert(ShopDelegate.is_affirmative_reply("好"), "好 is affirmative")
 
 
+func _test_harvest_not_gated_by_affection() -> void:
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.affection = 0
+	GameState.game_day = 2
+	_assert(PersonaGuard.can_delegate_harvest(), "D2 harvest is not affection-gated")
+	var harvest_intent := {
+		"intent": IntentParser.INTENT_HARVEST_ALL,
+		"plot_id": -1,
+		"raw_text": "帮我收萝卜",
+	}
+	var guard := PersonaGuard.check_intent(harvest_intent)
+	_assert(not bool(guard.get("blocked", false)), "low affection does not block harvest intent")
+	_assert("还不熟" not in PersonaGuard.reply_when_accepting_harvest(), "D2 harvest accept is familiar")
+	var result := ActionExecutor.execute(harvest_intent)
+	_assert(str(result.get("reason", "")) != "bond_harvest", "executor never bond-blocks harvest")
+
+	GameState.game_day = 4
+	_assert(StoryDirector.is_stranger_mode(), "D4 is stranger")
+	_assert(PersonaGuard.can_delegate_harvest(), "D4 still allows harvest")
+	var d4_line := PersonaGuard.reply_when_accepting_harvest()
+	_assert("还不熟" in d4_line and "帮你" in d4_line, "D4 harvest first says stranger help")
+	_assert(not bool(PersonaGuard.check_intent(harvest_intent).get("blocked", false)), "D4 harvest command is not blocked")
+
+	GameState.game_day = 5
+	_assert(StoryDirector.is_stranger_mode(), "D5 is stranger")
+	_assert("还不熟" in PersonaGuard.reply_when_accepting_harvest(), "D5 harvest uses stranger help")
+
+	GameState.game_day = 6
+	_assert(not StoryDirector.is_stranger_mode(), "D6 is not stranger")
+	_assert("还不熟" not in PersonaGuard.reply_when_accepting_harvest(), "D6 harvest is familiar")
+
+	var keep_line := "你让我收留你的你忘记了吗"
+	_assert(IntentParser.looks_like_non_harvest_shou(keep_line), "收留 is not harvest shou")
+	_assert(str(IntentParser.parse(keep_line).get("intent", "")) == IntentParser.INTENT_CHAT, "收留 stays chat")
+	_assert(ChorePreprocessor.parse_plan(keep_line).is_empty(), "收留 is not a harvest plan")
+	_assert(not ChorePreprocessor.should_auto_start_single_plan(keep_line, ChorePreprocessor.parse_plan(keep_line)), "收留 does not auto-harvest")
+	_assert(not IntentParser.looks_like_farm_directive(keep_line), "收留 is not a farm directive")
+
+	var cap_q := "你不是不能帮我收萝卜吗"
+	_assert(IntentParser.looks_like_harvest_capability_question(cap_q), "不能帮我收 is capability question")
+	_assert(not IntentParser.looks_like_player_harvest_request(cap_q), "capability question is not a harvest command")
+	_assert(ChorePreprocessor.parse_plan(cap_q).is_empty(), "capability question has no harvest plan")
+	_assert(PersonaGuard.is_harvest_refuse_fallback("你来收。我望风——不对，我馋。"), "old harvest refuse is flagged")
+	_assert("望风" not in PersonaGuard.rewrite_harvest_refuse_fallback("你来收。我望风——不对，我馋。", keep_line), "收留 does not keep harvest refuse")
+	_assert("能帮" in PersonaGuard.rewrite_harvest_refuse_fallback("你来收。我望风——不对，我馋。", cap_q), "capability refuse rewrites to can-help")
+
+
 func _test_planting_rebuttal() -> void:
 	_assert(IntentParser.looks_like_planting_rebuttal("萝卜不是你帮我种的吗"), "planting rebuttal detected")
 	_assert(not IntentParser.looks_like_planting_rebuttal("帮我种萝卜"), "plant command is not rebuttal")
@@ -2983,6 +3032,21 @@ func _test_companion_offer_affirmative() -> void:
 	_assert(bool(pour.get("handled", false)), "浇 auto-starts watering")
 	_assert("不用喊两遍" not in str(pour.get("reply", "")), "浇 is not a water-hint fallback")
 	_assert("收、浇、种" not in str(pour.get("reply", "")), "浇 does not open chore menu")
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	if GameState.get_all_plot_ids().is_empty():
+		GameState.register_farm_plots(3)
+	for plot_id in GameState.get_all_plot_ids():
+		var empty_plot := GameState.ensure_plot(plot_id)
+		empty_plot["stage"] = 0
+		empty_plot["crop"] = ""
+		empty_plot["watered"] = false
+	var no_crop := ChoreOrchestrator.handle_player_message("帮我收萝卜")
+	_assert(bool(no_crop.get("handled", false)), "empty-field harvest is handled locally")
+	_assert(not bool(no_crop.get("executed", false)), "empty-field harvest does not start a task")
+	_assert("没有能收" in str(no_crop.get("reply", "")), "empty-field harvest says nothing ripe")
+	_assert("还走不开" not in str(no_crop.get("reply", "")), "empty-field harvest is not a busy fallback")
+	_assert("有事你说" not in str(no_crop.get("reply", "")), "empty-field harvest is not empty-talk")
 	_assert(
 		ShopDelegate.looks_like_plant_offer("要不要帮你种点萝卜？"),
 		"plant offer accepts 种点 phrasing"

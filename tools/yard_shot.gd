@@ -1,7 +1,7 @@
 extends Node2D
 ## 看图工具：把 farm_map.tscn 整张摊在日光下，拉远到能一眼看全院子。
 ## 配合 MCP take_screenshot 用来自查布局，不参与游戏。
-## 商店台子跟标题界面一样补上（游戏里那位置由 Shop 实体接管）。
+## 商店摊位已烤在 farm_map Entities/ShopStall，这里不再现场拼。
 
 const FARM_MAP_PATH := "res://scenes/farm_map.tscn"
 # 改这两个常量换镜头。常用预设：
@@ -17,12 +17,6 @@ func _ready() -> void:
 	var packed: PackedScene = load(FARM_MAP_PATH)
 	var farm_map := packed.instantiate() as Node2D
 	add_child(farm_map)
-
-	var stall := Node2D.new()
-	stall.name = "ShopStall"
-	stall.position = FarmSetdress.marker_position(farm_map, "商店", FarmSetdress.POS_SHOP)
-	FarmSetdress.ensure_actors(farm_map).add_child(stall)
-	FarmSetdress.build_shop_stall(stall)
 
 	var camera := Camera2D.new()
 	camera.position = MAP_CENTER

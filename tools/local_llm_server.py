@@ -634,11 +634,56 @@ def looks_like_shop_inquiry(message: str) -> bool:
     return False
 
 
+_NON_HARVEST_SHOU = (
+    "收留", "收拾", "收到", "收工", "收藏", "收入", "收据", "收费",
+    "收音机", "收缩", "收场", "收心", "收手",
+)
+_HARVEST_PLAN_CUES = (
+    "收萝卜", "帮我收", "替我收", "去收萝卜", "摘萝卜", "拔萝卜",
+    "帮忙收", "代收", "把萝卜收", "把熟的收", "都收", "全收",
+)
+_HARVEST_CAPABILITY_CUES = (
+    "不是不能帮我收", "不是不能收", "你不是不能", "不是说不能帮",
+    "不是不能帮", "不是说你不能", "不是不能帮忙收",
+)
+
+
+def looks_like_non_harvest_shou(message: str) -> bool:
+    compact = (message or "").strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    if any(p in compact for p in ("收萝卜", "帮我收", "替我收", "去收萝卜", "摘萝卜", "拔萝卜")):
+        return False
+    return any(p in compact for p in _NON_HARVEST_SHOU)
+
+
+def looks_like_harvest_capability_question(message: str) -> bool:
+    compact = (message or "").strip().replace(" ", "").replace("　", "")
+    if not compact or looks_like_non_harvest_shou(message):
+        return False
+    return any(p in compact for p in _HARVEST_CAPABILITY_CUES)
+
+
+def looks_like_harvest_plan_text(message: str) -> bool:
+    compact = (message or "").strip().replace(" ", "").replace("　", "")
+    if not compact or looks_like_non_harvest_shou(message) or looks_like_harvest_capability_question(message):
+        return False
+    if compact in ("收", "去收", "收吧", "收了吧", "去收吧"):
+        return True
+    if any(p in compact for p in _HARVEST_PLAN_CUES):
+        return True
+    if ("摘" in compact or "拔" in compact) and ("萝卜" in compact or "田" in compact):
+        return True
+    return "收" in compact and ("萝卜" in compact or "熟" in compact) and "收留" not in compact
+
+
 def looks_like_chore_question(message: str) -> bool:
     text = message.strip().replace(" ", "").replace("　", "")
     if not text:
         return False
     if looks_like_shop_inquiry(message):
+        return True
+    if looks_like_harvest_capability_question(message):
         return True
     farm = (
         "收萝卜" in text or "浇水" in text or "浇田" in text or "种萝卜" in text
@@ -799,7 +844,7 @@ def _segment_to_plan_step(segment: str) -> dict[str, Any]:
         step = "sell_turnips"
     if not step and "买" in compact and "种子" in compact:
         step = "shop_buy_seeds"
-    if not step and ("收" in compact or "摘" in compact):
+    if not step and looks_like_harvest_plan_text(seg):
         step = "harvest_all"
     if not step and "浇" in compact:
         step = "water_all"
@@ -1014,7 +1059,7 @@ def farm_plot_reaction(
     bond_harvest: bool = True,
 ) -> str:
     payload = payload or {}
-    key = "harvest_bond" if reason == "harvest_failed" and not bond_harvest else reason
+    key = reason
     cfg = _load_farm_plot_config()
     tone = _farm_plot_tone(payload)
     table = cfg.get(tone) or cfg.get("default") or {}
@@ -1548,10 +1593,13 @@ def _mock_reply_raw(payload: dict[str, Any]) -> dict[str, Any]:
         reply = "好，我去看看哪块田需要浇水。"
     elif intent == "water_all":
         reply = "好，我把能浇的田都浇一遍。"
-    elif intent == "harvest":
-        reply = "好，我去萝卜田帮你收。"
-    elif intent == "harvest_all":
-        reply = "好，我把能收的萝卜都收回来。"
+    elif intent in ("harvest", "harvest_all"):
+        if _story_mode(payload) == "stranger":
+            reply = "虽然我们还不熟……但我可以帮你。"
+        elif intent == "harvest":
+            reply = "好，我去萝卜田帮你收。"
+        else:
+            reply = "好，我把能收的萝卜都收回来。"
     elif intent == "plant":
         reply = "好，我去空田种萝卜。"
     elif intent == "plant_all":
@@ -1634,7 +1682,7 @@ def _companion_brief(companion_snap: dict[str, Any]) -> str:
     if companion_snap.get("can_water") is False:
         lines.append("亲密度不足：暂不能代浇水")
     if companion_snap.get("can_harvest") is False:
-        lines.append("亲密度不足：暂不能代收萝卜")
+        lines.append("田里暂无可收；玩家下令收时仍须据实说还没有能收的，不要改口「你来收」「我馋」。")
     if bool(companion_snap.get("walks_to_target", False)):
         lines.append("接到指令后会先走到目标地点再执行")
     return "\n".join(lines)
@@ -1653,7 +1701,8 @@ def _companion_action_rules(payload: dict[str, Any]) -> str:
         "world_snapshot 含 shop/inventory/plot_details/crops，请据此回答商店、背包与田况，勿编造。",
         "禁止在 reply 中声称已帮玩家购买/花费金币/种下种子/浇完/收完，除非 game_facts 明确记录该交易。",
         "口头答应去浇/种/收/买种子/出售/睡觉时，必须同时返回对应 action intent，不要只嘴上答应。",
-        "玩家说「帮我收萝卜/帮我去商店/帮我把田浇了」等应返回对应 action intent，并配合自然 reply。",
+        "代收萝卜不受亲密度限制。玩家说「帮我收萝卜/帮我去商店/帮我把田浇了」等应返回对应 action intent，并配合自然 reply。",
+        "遗忘日 D4/D5（story_mode=stranger）玩家下令收萝卜：先说「虽然我们还不熟……但我可以帮你」，intent 仍是 harvest/harvest_all。禁止拒绝、禁止「你来收」「我馋」。",
         "玩家说来/过来/跟我走：intent 仍为 chat，并返回 actions=[{\"id\":\"follow_player\"}]。",
         "玩家说去廊下/树洞/田边/门口：intent 仍为 chat，并返回 actions=[{\"id\":\"walk_poi\",\"poi\":\"porch|hollow|field|home\"}]。",
         "玩家要看本子：intent=open_memory，或 actions=[{\"id\":\"open_notebook\"}]。",
@@ -1862,12 +1911,12 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 1～3 句口语。前期可轻微诙谐（泥、红薯、拨苗），不油、不讲主题；陌生化时立刻收起玩笑。",
         "- 记性不好就直说记不清、对不上（已告知且此刻仍可称呼的名字除外）。禁止文艺腔：雨帘、心里发紧、行情、售价。渗漏/觉醒可以说对不上、隔着一层；前三日不要用雾/毛玻璃比喻。",
         "- 说话必须符合你现在的位置（world_snapshot.companion.location_name）。禁止声称自己在别处看雨、打盹或躲雨。请玩家去廊下可以说「你去廊下躲会儿」，那不是自称你人在廊下。",
-        "- 亲密度不足（world_snapshot.can_harvest=false）时，禁止主动问「要不要我收/帮你收/去收萝卜」；可说「你来收，我馋规矩不让」。",
-        "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收或说明为何不能代收。",
+        "- 代收萝卜不受亲密度限制。不要说「你来收」「我馋」「规矩不让」。",
+        "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收。",
         "- 未完成 D3 约定节点（P_N11）前，禁止主动提「等萝卜长好一起看」或声称「我们约过」。玩家问「是不是已经约好了」时，反问「约什么了」或说不记得，不要说已经写进本子。",
         "- 约定须按 game_state.promise：正式写入后只说本子里的那句，不要改口，也不要把玩家刚报的名字写成约定。",
         "- 玩家问还剩多少钱/金币：必须报 chore_facts.gold 或 inventory.coins 的数字。intent=chat。禁止改口报天气或田里水够不够。",
-        "- 玩家说收了吧/帮我收/为啥不帮我收：必须去收熟萝卜，intent=harvest_all。禁止改口「你来收」「我馋」。",
+        "- 玩家说收了吧/帮我收/为啥不帮我收：必须去收熟萝卜，intent=harvest_all。禁止改口「你来收」「我馋」。陌生化日先说「虽然我们还不熟……但我可以帮你」，再去收。",
         "- 玩家说田已熟透、还浇什么水：承认熟了不用浇。禁止改口田是空的，禁止去买种子。",
         "- 玩家说留下/别走/住下：先答留下或住下。禁止改口「我这就去浇/去买种子」。",
         "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
@@ -1884,6 +1933,7 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         lines.append("- 禁止叫玩家曾用过的称呼；问起名字或玩家自报名字时，禁止把名字念出口，只说想不起来、对不上。")
         lines.append("- 问起约定/本子：只说想不起来、认不得字；禁止复述约定原文（例如「等萝卜长好一起看」）。")
         lines.append("- 玩家问存档坏了/bug/数据丢了：答「不是坏了，是我这边又空了一截」；可提示本子字还在，禁止「数据没问题」「欢迎回来」。")
+        lines.append("- 玩家下令收萝卜：先说「虽然我们还不熟……但我可以帮你」，intent=harvest_all，然后去收。禁止拒绝。")
     elif can_say_name and player_name.strip() not in ("", "你"):
         lines.append(f"- 可自然称呼「{player_name}」，亲密度高时语气更暖但仍克制。")
     else:
@@ -2706,6 +2756,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "讨论浇田、商店、熟没熟，只要还没明确委托，必须是 chat。",
             "「对啊/是啊/嗯」接闲聊必须是 chat，不是 plant 或 open_shop。",
             "明确让小狸去浇/种/收/买/睡觉才用对应 action。",
+            "陌生化日玩家说帮我收萝卜：intent 仍是 harvest/harvest_all，不要改成 chat。",
             "参考 world_snapshot.companion 的位置、状态与 capabilities。",
             "不要输出 reply 字段。",
             '示例：{"intent":"harvest","plot_id":-1,"confidence":0.9}',
@@ -3001,7 +3052,7 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             _prompt_citable_memories(payload),
             "按亲密度档说话：S0 远=短句客气；S1 近=日常会停顿、留一步；S2 贴=敢靠近、敢提约定。profile=mid 时取 S1 近、勿写满 S2。须与 beat_context 的 profile 一致。",
             "禁止：报价、报金币、报种子包数、报叶片、报田块数量、催收菜、点名点击界面、整段背信纸。",
-            "若 world_snapshot.can_harvest 为 false，禁止主动邀约代收萝卜。",
+            "代收萝卜不受亲密度限制。陌生化日不要主动邀约代收；玩家下令收时先说还不熟但可以帮，再返回 harvest_all。",
             "若 memory/promise 为空或 D3 约定节点未发生，禁止提「等萝卜长好一起看」；禁止说「你说过/我们约过」。",
             f"关系阶段：{rel.get('stage', '?')}，亲密度 {rel.get('affection', '?')}，档 {affection_tier}，段 {sprout_tier}"
             + (f"，状态词「{sprout_word}」可极轻点一下" if sprout_word and sprout_tier >= 2 else "")
