@@ -23,7 +23,7 @@ func execute(intent: Dictionary) -> Dictionary:
 		IntentParser.INTENT_HARVEST:
 			result = _execute_harvest(intent)
 		IntentParser.INTENT_HARVEST_ALL:
-			result = _execute_harvest_all()
+			result = _execute_harvest_all(intent)
 		IntentParser.INTENT_PLANT:
 			result = _execute_plant(intent)
 		IntentParser.INTENT_PLANT_ALL:
@@ -35,7 +35,7 @@ func execute(intent: Dictionary) -> Dictionary:
 		IntentParser.INTENT_OPEN_MEMORY:
 			result = _execute_open_memory()
 		IntentParser.INTENT_CHECK_STATUS:
-			result = _execute_check_status()
+			result = _execute_check_status(intent)
 		IntentParser.INTENT_HELP:
 			result = _execute_help()
 		IntentParser.INTENT_SLEEP:
@@ -133,8 +133,16 @@ func _execute_open_shop(intent: Dictionary) -> Dictionary:
 	}
 
 
+func _harvest_blocked_by_bond(intent: Dictionary) -> bool:
+	if PersonaGuard.can_delegate_harvest():
+		return false
+	if bool(intent.get("honor_request", false)):
+		return false
+	return not IntentParser.looks_like_player_harvest_request(str(intent.get("raw_text", "")))
+
+
 func _execute_harvest(intent: Dictionary) -> Dictionary:
-	if not PersonaGuard.can_delegate_harvest():
+	if _harvest_blocked_by_bond(intent):
 		return {"executed": false, "reason": "bond_harvest"}
 
 	var plot_id := int(intent.get("plot_id", -1))
@@ -155,8 +163,8 @@ func _execute_harvest(intent: Dictionary) -> Dictionary:
 	return {"executed": false, "reason": "busy"}
 
 
-func _execute_harvest_all() -> Dictionary:
-	if not PersonaGuard.can_delegate_harvest():
+func _execute_harvest_all(intent: Dictionary = {}) -> Dictionary:
+	if _harvest_blocked_by_bond(intent):
 		return {"executed": false, "reason": "bond_harvest"}
 
 	var summary := GameState.get_plot_summary()
@@ -176,7 +184,14 @@ func _execute_open_memory() -> Dictionary:
 	return {"executed": true, "task_started": false, "opened_memory": true}
 
 
-func _execute_check_status() -> Dictionary:
+func _execute_check_status(intent: Dictionary = {}) -> Dictionary:
+	var raw := str(intent.get("raw_text", "")).strip_edges()
+	if IntentParser.looks_like_money_inquiry(raw):
+		return {
+			"executed": true,
+			"task_started": false,
+			"companion_extra": ChoreOrchestrator.reply_money_balance(),
+		}
 	var snapshot := WorldSnapshot.capture()
 	var plots: Dictionary = snapshot.get("plots", {})
 	var inventory: Dictionary = snapshot.get("inventory", {})

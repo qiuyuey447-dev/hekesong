@@ -72,7 +72,7 @@ static func is_affirmative_reply(text: String) -> bool:
 	if trimmed in [
 		"好", "好的", "好啊", "好呀", "好哦", "行", "行啊", "可以", "可以的",
 		"要", "要的", "嗯", "嗯嗯", "帮吧", "浇吧", "种吧", "买吧", "收吧",
-		"去吧", "麻烦你了", "拜托了", "拜托", "那就麻烦你了",
+		"收了吧", "收了", "去吧", "麻烦你了", "拜托了", "拜托", "那就麻烦你了",
 	]:
 		return true
 	return false
@@ -262,8 +262,14 @@ static func looks_like_harvest_offer(text: String) -> bool:
 	var normalized := text.strip_edges()
 	if normalized.is_empty():
 		return false
+	if "你来收" in normalized or "我馋" in normalized or "规矩不让" in normalized:
+		return false
 	if looks_like_shop_offer(normalized) or looks_like_plant_offer(normalized) or looks_like_water_offer(normalized):
 		return false
+	if "拿筐" in normalized and ("收" in normalized or "熟" in normalized):
+		return true
+	if "要收的话" in normalized or "这就去拿筐" in normalized:
+		return true
 	if not ("收" in normalized or "摘" in normalized):
 		return false
 	if not _looks_like_offer_question(normalized):

@@ -542,6 +542,52 @@ def looks_like_sleep_request(message: str) -> bool:
     return any(p in text for p in sleep_phrases if len(p) >= 2)
 
 
+def looks_like_why_not_harvesting(message: str) -> bool:
+    compact = message.strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    if any(p in compact for p in (
+        "为啥不帮", "为什么不帮", "为何不帮", "怎么不帮", "咋不帮",
+        "为啥不收", "为什么不收", "怎么不收", "咋不收", "为啥不帮忙收",
+    )):
+        return True
+    return any(p in compact for p in ("为啥", "为什么", "为何")) and "不帮" in compact and any(
+        p in compact for p in ("收", "萝卜")
+    )
+
+
+def looks_like_ripe_water_rebuttal(message: str) -> bool:
+    compact = message.strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    if not any(p in compact for p in ("熟透", "熟了", "都熟", "能收", "可以收")):
+        return False
+    return any(p in compact for p in ("浇什么水", "还浇", "浇水干嘛", "浇什么"))
+
+
+def looks_like_money_inquiry(message: str) -> bool:
+    compact = message.strip().replace(" ", "").replace("　", "")
+    if not compact:
+        return False
+    if looks_like_max_gold_seed_buy(compact):
+        return False
+    if any(p in compact for p in ("卖多少", "多少钱一", "一包多少", "种子多少钱", "萝卜多少钱", "卖多少钱")):
+        return False
+    if any(p in compact for p in (
+        "还有多少钱", "还剩多少钱", "我有多少钱", "我还有多少",
+        "多少金币", "金币还剩", "金币还有", "剩多少金币", "还有几个金币",
+        "口袋里有多少", "钱包里", "钱还剩多少", "钱还有多少",
+    )):
+        return True
+    if any(p in compact for p in ("钱", "金币")) and any(
+        p in compact for p in ("还有", "还剩", "剩多少", "有多少")
+    ) and any(p in compact for p in ("多少", "几")):
+        if "种子" in compact or "卖" in compact:
+            return False
+        return True
+    return False
+
+
 def looks_like_status_inquiry(message: str) -> bool:
     text = message.strip().replace(" ", "").replace("　", "")
     if not text:
@@ -666,7 +712,13 @@ def guess_intent(message: str) -> tuple[str, float]:
         return "chat", 0.95
     if looks_like_shop_inquiry(message):
         return "chat", 0.95
+    if looks_like_ripe_water_rebuttal(message):
+        return "chat", 0.95
+    if looks_like_why_not_harvesting(message):
+        return "harvest_all", 0.92
     if looks_like_chore_question(message):
+        return "chat", 0.95
+    if looks_like_money_inquiry(message):
         return "chat", 0.95
     if looks_like_status_inquiry(message):
         return "check_status", 0.92
@@ -1814,6 +1866,9 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收或说明为何不能代收。",
         "- 未完成 D3 约定节点（P_N11）前，禁止主动提「等萝卜长好一起看」或声称「我们约过」。玩家问「是不是已经约好了」时，反问「约什么了」或说不记得，不要说已经写进本子。",
         "- 约定须按 game_state.promise：正式写入后只说本子里的那句，不要改口，也不要把玩家刚报的名字写成约定。",
+        "- 玩家问还剩多少钱/金币：必须报 chore_facts.gold 或 inventory.coins 的数字。intent=chat。禁止改口报天气或田里水够不够。",
+        "- 玩家说收了吧/帮我收/为啥不帮我收：必须去收熟萝卜，intent=harvest_all。禁止改口「你来收」「我馋」。",
+        "- 玩家说田已熟透、还浇什么水：承认熟了不用浇。禁止改口田是空的，禁止去买种子。",
         "- 玩家说留下/别走/住下：先答留下或住下。禁止改口「我这就去浇/去买种子」。",
         "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",

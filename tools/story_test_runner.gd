@@ -1046,7 +1046,7 @@ func _test_notebook_infiltration_loop() -> void:
 	_assert("一起看" in promise_blob, "promise page is first-person")
 	_assert("我写下来了" not in promise_blob, "promise page drops write-meta")
 	_assert("小狸写进本子" not in promise_blob, "promise page drops system prefix")
-	_assert(bool(GameState.get_ending_flags().get("notebook_pin_hint_due", false)), "promise queues pin hint")
+	_assert(not bool(GameState.get_ending_flags().get("notebook_pin_hint_due", false)), "promise no longer queues pin hint")
 
 	GameState.game_day = 6
 	var leak_ctx := LeakageEngine.peek_leak_context()
@@ -1932,6 +1932,26 @@ func _test_status_inquiry_not_sleep() -> void:
 	_assert(IntentParser.looks_like_chore_question("你浇了没"), "你浇了没 is chore question")
 	_assert(not IntentParser.looks_like_water_followthrough("你浇了没"), "你浇了没 is not water followthrough")
 	_assert(str(IntentParser.parse("你浇了没").get("intent", "")) == IntentParser.INTENT_CHAT, "你浇了没 stays chat")
+	_assert(IntentParser.looks_like_money_inquiry("我还有多少钱"), "我还有多少钱 is money inquiry")
+	_assert(not IntentParser.looks_like_money_inquiry("萝卜卖多少钱"), "萝卜卖多少钱 is not balance")
+	_assert(not IntentParser.looks_like_money_inquiry("剩下的钱全买种子"), "max-gold buy is not money inquiry")
+	_assert(str(IntentParser.parse("我还有多少钱").get("intent", "")) == IntentParser.INTENT_CHAT, "我还有多少钱 stays chat")
+	var money_merged := IntentParser.merge_intents(
+		{"intent": IntentParser.INTENT_CHAT, "raw_text": "我还有多少钱"},
+		{"intent": IntentParser.INTENT_CHECK_STATUS, "raw_text": "我还有多少钱"},
+		"我还有多少钱",
+		true
+	)
+	_assert(str(money_merged.get("intent", "")) == IntentParser.INTENT_CHAT, "API check_status cannot override money inquiry")
+	GameState.coins = 80
+	_assert("80" in ChoreOrchestrator.reply_money_balance(), "money reply uses live coins")
+	_assert(IntentParser.looks_like_player_harvest_request("收了吧"), "收了吧 is harvest request")
+	_assert(IntentParser.looks_like_why_not_harvesting("为啥不帮我收萝卜"), "为啥不帮我收 is why-not")
+	_assert(not IntentParser.looks_like_why_helping("为啥不帮我收萝卜"), "为啥不帮 is not why-helping")
+	_assert(IntentParser.looks_like_ripe_water_rebuttal("都熟透了还浇什么水"), "熟了还浇 is ripe rebuttal")
+	_assert(ShopDelegate.is_affirmative_reply("收了吧"), "收了吧 affirms harvest offer")
+	_assert(ShopDelegate.looks_like_harvest_offer("要收的话，我这就去拿筐。"), "拿筐 line is harvest offer")
+	_assert(not ShopDelegate.looks_like_harvest_offer("你来收。我望风——不对，我馋。"), "cannot-harvest line is not offer")
 	var follow_walk := CompanionBodyAction.infer_from_player("跟我走")
 	_assert(
 		follow_walk.size() == 1 and str(follow_walk[0].get("id", "")) == CompanionBodyAction.ACTION_FOLLOW,

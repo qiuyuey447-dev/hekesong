@@ -678,6 +678,9 @@ static func player_chat(
 	if GameState.looks_like_name_recall_question(text):
 		return _name_recall_reply()
 
+	if IntentParser.looks_like_money_inquiry(text):
+		return ChoreOrchestrator.reply_money_balance()
+
 	var intent_key := str(parsed_intent.get("intent", IntentParser.INTENT_CHAT))
 	match intent_key:
 		IntentParser.INTENT_WATER:

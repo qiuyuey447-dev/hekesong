@@ -56,6 +56,9 @@ func handle_player_message(text: String) -> Dictionary:
 	if ChorePreprocessor.looks_like_player_correction(text):
 		return {"handled": true, "skip_llm": true, "reply": reply_player_correction(text)}
 
+	if IntentParser.looks_like_money_inquiry(text):
+		return {"handled": true, "skip_llm": true, "reply": reply_money_balance()}
+
 	if ChorePreprocessor.looks_like_seed_location_inquiry(text):
 		return {"handled": true, "skip_llm": true, "reply": reply_seed_location()}
 
@@ -273,17 +276,36 @@ func reply_player_correction(text: String) -> String:
 				_record_step("sell_turnips")
 				return "对不起，刚才搞混了。现在我帮你卖了。"
 		return "对不起，刚才搞混了。筐里还没有萝卜可卖。"
-	if compact.contains("为啥") or compact.contains("为什么"):
+	if compact.contains("为啥") or compact.contains("为什么") or compact.contains("为何"):
 		if compact.contains("卖"):
 			if int(GameState.get_item_count("turnip")) <= 0 and "卖" in GameState.last_task_summary:
 				return GameState.last_task_summary if GameState.last_task_summary.ends_with("。") else GameState.last_task_summary + "。"
 			return "还没卖呢。要我现在帮你卖吗？"
+		if IntentParser.looks_like_ripe_water_rebuttal(text) or (
+			compact.contains("浇") and (compact.contains("熟") or int(GameState.get_plot_summary().get("harvestable", 0)) > 0)
+		):
+			var ripe := int(GameState.get_plot_summary().get("harvestable", 0))
+			if ripe > 0:
+				return "对，熟了不用浇。要收的话我去。"
+			return "对，熟了不用浇。"
 		if compact.contains("浇"):
 			var unwatered := GameState.get_unwatered_growing_plot_ids()
 			if unwatered.is_empty():
 				return PersonaGuard.reply_when_already_watered()
 			return "还没浇完。还有 %d 块田等着呢。" % unwatered.size()
-	return "对不起，刚才没接对。你再说一次要我做什么？"
+		if compact.contains("收") or compact.contains("不帮"):
+			var harvestable := int(GameState.get_plot_summary().get("harvestable", 0))
+			if harvestable > 0:
+				return "刚才那句我说岔了。熟了的我去收。"
+			return "不是不帮。这会儿还没有能收的。"
+	return "刚才哪句？你再说清楚，我听着。"
+
+
+func reply_money_balance() -> String:
+	var gold := int(GameState.coins)
+	if gold <= 0:
+		return "口袋空了。一个金币都不剩。"
+	return "你口袋里还有 %d 金币。" % gold
 
 
 func reply_seed_location() -> String:

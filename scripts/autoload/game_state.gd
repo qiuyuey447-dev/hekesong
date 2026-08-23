@@ -2752,7 +2752,8 @@ func _maybe_queue_notebook_pin_hint(kind: String) -> void:
 	if StoryDirector.is_stranger_mode():
 		return
 	if kind == "promise" or kind in MemoryService.LIFE_PAGE_KINDS:
-		set_ending_flag("notebook_pin_hint_due", true)
+		## 不再开口「有什么不想忘掉的…」。旧存档 due 由 UI 静默清掉。
+		return
 
 
 func _ensure_long_term_defaults() -> void:

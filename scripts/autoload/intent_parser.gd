@@ -87,6 +87,12 @@ func parse(text: String) -> Dictionary:
 		result["matched_terms"] = ["shop_inquiry"]
 		return result
 
+	if looks_like_money_inquiry(trimmed):
+		result["intent"] = INTENT_CHAT
+		result["confidence"] = 0.95
+		result["matched_terms"] = ["money_inquiry"]
+		return result
+
 	if looks_like_chore_question(trimmed):
 		result["intent"] = INTENT_CHAT
 		result["confidence"] = 0.95
@@ -277,6 +283,32 @@ func looks_like_chore_completion_statement(text: String) -> bool:
 		or ShopDelegate.looks_like_completed_shop_claim(text)
 
 
+func looks_like_money_inquiry(text: String) -> bool:
+	## 「我还有多少钱」是问余额，不是田况，也不是「种子多少钱」。
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if ChorePreprocessor.looks_like_max_gold_seed_buy(compact):
+		return false
+	if _match_any(compact, [
+		"卖多少", "多少钱一", "一包多少", "种子多少钱", "萝卜多少钱", "卖多少钱",
+	]):
+		return false
+	if _match_any(compact, [
+		"还有多少钱", "还剩多少钱", "我有多少钱", "我还有多少",
+		"多少金币", "金币还剩", "金币还有", "剩多少金币", "还有几个金币",
+		"口袋里有多少", "钱包里", "钱还剩多少", "钱还有多少",
+	]):
+		return true
+	if _match_any(compact, ["钱", "金币"]) \
+			and _match_any(compact, ["还有", "还剩", "剩多少", "有多少"]) \
+			and _match_any(compact, ["多少", "几"]):
+		if "种子" in compact or "卖" in compact:
+			return false
+		return true
+	return false
+
+
 func looks_like_status_inquiry(text: String) -> bool:
 	if looks_like_chore_completion_statement(text):
 		return false
@@ -363,6 +395,51 @@ func _mentions_farm_chore(compact: String) -> bool:
 	if "买" in compact and _match_any(compact, ["种子", "商店", "包"]):
 		return true
 	return false
+
+
+func looks_like_player_harvest_request(text: String) -> bool:
+	## 玩家明确让她收，或追问「为啥不帮我收」。不是「为啥你帮我收」。
+	if looks_like_why_helping(text):
+		return false
+	if looks_like_why_not_harvesting(text):
+		return true
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if looks_like_chore_question(text) and not looks_like_why_not_harvesting(text):
+		return false
+	if ShopDelegate.looks_like_harvest_commitment(text):
+		return true
+	return _match_any(compact, [
+		"收了吧", "收吧", "去收吧", "帮我收", "替我收", "去收萝卜",
+		"把萝卜收", "把熟的收", "收萝卜",
+	])
+
+
+func looks_like_why_not_harvesting(text: String) -> bool:
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if _match_any(compact, [
+		"为啥不帮", "为什么不帮", "为何不帮", "怎么不帮", "咋不帮",
+		"为啥不收", "为什么不收", "怎么不收", "咋不收", "为啥不帮忙收",
+	]):
+		return true
+	if _match_any(compact, ["为啥", "为什么", "为何"]) \
+			and "不帮" in compact \
+			and _match_any(compact, ["收", "萝卜"]):
+		return true
+	return false
+
+
+func looks_like_ripe_water_rebuttal(text: String) -> bool:
+	## 「都熟透了还浇什么水」是顶她乱浇，不是说田是空的。
+	var compact := _compact(_normalize(text))
+	if compact == "":
+		return false
+	if not _match_any(compact, ["熟透", "熟了", "都熟", "能收", "可以收"]):
+		return false
+	return _match_any(compact, ["浇什么水", "还浇", "浇水干嘛", "浇什么"])
 
 
 func looks_like_why_helping(text: String) -> bool:
@@ -479,6 +556,16 @@ func merge_intents(
 			"confidence": 0.95,
 			"raw_text": raw_text,
 			"matched_terms": ["shop_inquiry"],
+			"source": "local",
+		}
+	if looks_like_money_inquiry(raw_text):
+		return {
+			"intent": INTENT_CHAT,
+			"refuse_kind": "",
+			"plot_id": -1,
+			"confidence": 0.95,
+			"raw_text": raw_text,
+			"matched_terms": ["money_inquiry"],
 			"source": "local",
 		}
 	if looks_like_status_inquiry(raw_text):

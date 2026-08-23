@@ -25,7 +25,7 @@ func check_intent(intent: Dictionary) -> Dictionary:
 
 	var action := str(intent.get("intent", ""))
 	if action in [IntentParser.INTENT_HARVEST, IntentParser.INTENT_HARVEST_ALL]:
-		if not can_delegate_harvest():
+		if not can_delegate_harvest() and not IntentParser.looks_like_player_harvest_request(str(intent.get("raw_text", ""))):
 			return {
 				"blocked": true,
 				"reply": "你来收吧，我馋，规矩不让。点田就能收。",
