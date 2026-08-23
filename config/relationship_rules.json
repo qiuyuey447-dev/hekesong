@@ -4,10 +4,8 @@
 	"bond_min": 0,
 	"bond_max": 2,
 	"memory_recovery_max": 0.05,
-	"daily_chat_affection_cap": 12,
+	"daily_chat_affection_cap": 18,
 	"base_chat_affection": 1,
-	"long_message_chars": 12,
-	"long_message_bonus": 1,
 	"warm_words": [
 		"谢谢", "辛苦", "记住", "留下", "陪", "慢慢来", "没关系", "对不起", "抱歉", "担心", "接纳", "不会赶", "收留"
 	],
@@ -32,14 +30,16 @@
 		"我就守着", "陪着你就好", "你忙你的，我", "我就在旁边", "我在这儿。你忙",
 		"还有要说的吗", "没有也行，我坐着", "没有也行我坐着"
 	],
+	"care_words": ["累不累", "吃了没", "吃了吗", "还好吗", "冷不冷", "饿不饿", "你怎么样", "身体"],
+	"story_words": ["本子", "名字", "认得", "约定", "记得"],
 	"action_intent_affection_cap": 1,
 	"interaction_weights": {
-		"chat_days": 0.30,
-		"nodes": 0.28,
+		"chat_days": 0.40,
+		"nodes": 0.22,
 		"affection": 0.12,
-		"gifts": 0.12,
+		"gifts": 0.10,
 		"nights": 0.10,
-		"tasks": 0.08
+		"tasks": 0.06
 	},
 	"interaction_targets": {
 		"chat_days": 12,

@@ -22,6 +22,8 @@ var _reply_contracts: Dictionary = {}
 var _response_meta: Dictionary = {}
 var _api_queue: Array[Dictionary] = []
 var _in_flight_request_id: int = -1
+var last_validation_reason := ""
+var last_rejected_reply := ""
 
 
 func _ready() -> void:
@@ -99,6 +101,9 @@ func request_event(event: String, extra: Dictionary = {}) -> int:
 		return request_id
 
 	var payload := _build_payload(event, extra)
+	if event in ["player_chat", "session_start"]:
+		last_validation_reason = ""
+		last_rejected_reply = ""
 	_pending[request_id] = {
 		"event": event,
 		"payload": payload,
@@ -394,6 +399,8 @@ func _emit_local_fallback(request_id: int, event: String, text: String) -> void:
 
 
 func _emit_llm_failure(request_id: int, event: String, error: String, extra: Dictionary = {}) -> void:
+	if last_validation_reason == "" and "校验层拦截" in error:
+		last_validation_reason = error.get_slice(": ", 1)
 	_pending.erase(request_id)
 	request_failed.emit(request_id, event, error)
 	if event in SILENT_FAILURE_EVENTS:
@@ -611,13 +618,38 @@ func _on_http_completed(
 			cited_ids = _extract_cited_memory_ids(embedded)
 	var validation := ResponseValidator.validate(event, reply_text, payload, cited_ids)
 	if not bool(validation.get("ok", false)):
+		var reason := str(validation.get("reason", ""))
+		last_validation_reason = reason
+		last_rejected_reply = reply_text.strip_edges()
+		_response_meta[request_id] = {
+			"source": "fallback",
+			"fallback_reason": reason,
+			"rejected_reply": last_rejected_reply,
+		}
 		if event == "companion_feed":
 			var fallback_text := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, fallback_text, true)
 			call_deferred("_pump_api_queue")
 			return
-		var reason := str(validation.get("reason", ""))
-		if reason in ["literary", "action_mismatch", "l3_episodic", "awkward_waiting", "weather_mismatch", "chat_timing", "repetitive", "letter_jargon"]:
+		var salvage := ResponseValidator.try_rewrite(event, reply_text, payload, reason)
+		if bool(salvage.get("ok", false)):
+			var salvaged := str(salvage.get("text", "")).strip_edges()
+			if salvaged != "":
+				last_validation_reason = ""
+				last_rejected_reply = ""
+				_response_meta[request_id] = {
+					"source": "llm_rewrite",
+					"fallback_reason": "",
+					"rejected_reply": "",
+				}
+				reply_ready.emit(request_id, event, salvaged, false)
+				call_deferred("_pump_api_queue")
+				return
+		if reason in [
+			"literary", "action_mismatch", "l3_episodic", "awkward_waiting",
+			"weather_mismatch", "chat_timing", "repetitive", "letter_jargon",
+			"name_amnesia", "farm_hard_sell", "premature_promise", "promise_misquote",
+		]:
 			var literary_fallback := _fallback_for_event(event, extra)
 			reply_ready.emit(request_id, event, literary_fallback, true)
 			call_deferred("_pump_api_queue")

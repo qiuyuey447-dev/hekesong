@@ -90,7 +90,10 @@ func handle_player_message(text: String) -> Dictionary:
 			if bool(started.get("executed", false)):
 				reply = "好，我这就去。"
 			else:
-				reply = "这会儿还走不开，稍等我一下。"
+				var first := ""
+				if plan.size() > 0 and plan[0] is Dictionary:
+					first = str(plan[0].get("step", ""))
+				reply = _cannot_start_reply(first, started)
 		return {
 			"handled": true,
 			"skip_llm": true,
@@ -121,7 +124,7 @@ func try_confirm_offer(text: String) -> Dictionary:
 	var executed := bool(result.get("executed", false))
 	var reply := str(result.get("reply", "")).strip_edges()
 	if reply == "":
-		reply = "好，我这就去。" if executed else "这会儿还走不开，稍等我一下。"
+		reply = "好，我这就去。" if executed else _cannot_start_reply(step_key, result)
 	return {"handled": true, "skip_llm": true, "reply": reply, "executed": executed}
 
 
@@ -241,6 +244,8 @@ func execute_step(step: Dictionary) -> Dictionary:
 			})
 			if bool(water_result.get("executed", false)):
 				_record_step("water_all")
+			elif str(water_result.get("reply", "")).strip_edges() == "":
+				water_result["reply"] = _cannot_start_reply("water_all", water_result)
 			return water_result
 		"sleep":
 			var sleep_result := ActionExecutor.execute({
@@ -311,29 +316,26 @@ func buy_seeds_from_text(raw: String, max_gold: bool = false) -> Dictionary:
 func _execute_buy_seeds(step: Dictionary) -> Dictionary:
 	var raw := str(step.get("raw_text", ""))
 	var max_gold := bool(step.get("max_gold", false))
-	var preset := ShopDelegate.parse_seed_purchase_quantity(raw) if raw != "" else 0
+	var preset := ShopDelegate.parse_seed_purchase_quantity(raw) if raw != "" else -1
 	if preset <= 0 and max_gold:
 		var price := GameState.get_seed_buy_price()
 		if price <= 0:
 			return {"executed": false, "reply": "商店还没开价。"}
 		preset = int(GameState.coins / price)
-	if preset <= 0:
-		if TaskSystem.start_shop_task(true):
-			get_tree().call_group("main_ui", "begin_companion_seed_purchase_from_orchestrator", raw)
-			_record_step("shop_buy_seeds")
-			return {"executed": true, "reply": "好，我先去商店。要买几包？"}
-		return {"executed": false, "reply": "这会儿还走不开，稍等我一下。"}
-	var bought := GameState.buy_shop_item_count("turnip_seed", preset)
-	if bool(bought.get("ok", false)):
+	## 没说几包：只走路、只问数字，绝不先扣金币。
+	if TaskSystem.is_busy() and TaskSystem.current_task == TaskSystem.TaskType.SHOP:
+		get_tree().call_group("main_ui", "prepare_companion_seed_trip", raw, preset)
 		_record_step("shop_buy_seeds")
-		return {"executed": true, "reply": str(bought.get("message", "买好了。"))}
-	var affordable := int(bought.get("affordable_count", 0))
-	if affordable > 0:
-		var partial := GameState.buy_shop_item_count("turnip_seed", affordable)
-		if bool(partial.get("ok", false)):
-			_record_step("shop_buy_seeds")
-			return {"executed": true, "reply": str(partial.get("message", "能买的我都买了。"))}
-	return {"executed": false, "reply": str(bought.get("message", "金币不够买种子。"))}
+		if preset > 0:
+			return {"executed": true, "reply": "好，记下了，到店买 %d 包。" % preset}
+		return {"executed": true, "reply": "我正往商店走。要买几包？说个数字。"}
+	if not TaskSystem.start_shop_task(true):
+		return {"executed": false, "reply": "这会儿还走不开，稍等我一下。"}
+	get_tree().call_group("main_ui", "prepare_companion_seed_trip", raw, preset)
+	_record_step("shop_buy_seeds")
+	if preset > 0:
+		return {"executed": true, "reply": "好，我去商店买 %d 包萝卜种子。" % preset}
+	return {"executed": true, "reply": "好，我先去商店。要买几包？说个数字就行。"}
 
 
 func _start_next_step() -> Dictionary:
@@ -346,9 +348,12 @@ func _start_next_step() -> Dictionary:
 	if bool(result.get("executed", false)):
 		_queue.remove_at(0)
 		plan_step_started.emit(step, 0)
+		var live_reply := str(result.get("reply", "")).strip_edges()
+		if live_reply == "":
+			live_reply = _step_start_reply(str(step.get("step", "")))
 		if _is_sync_step(str(step.get("step", ""))):
-			return _continue_after_sync(str(result.get("reply", "")))
-		return {"executed": true, "reply": _step_start_reply(str(step.get("step", "")))}
+			return _continue_after_sync(live_reply)
+		return {"executed": true, "reply": live_reply}
 	_queue.remove_at(0)
 	return {"executed": false, "reply": str(result.get("reply", ""))}
 
@@ -444,5 +449,19 @@ func _try_chore_nudge(text: String) -> bool:
 	if bool(result.get("executed", false)):
 		_last_nudge_reply = "对不起，刚才嘴上说了没动身。我这就去浇。"
 	else:
-		_last_nudge_reply = str(result.get("reply", "这会儿还走不开，稍等我一下。"))
+		_last_nudge_reply = str(result.get("reply", _cannot_start_reply("water_all", result)))
 	return true
+
+
+func _cannot_start_reply(step_key: String, result: Dictionary) -> String:
+	if TaskSystem.is_busy() or str(result.get("reason", "")) == "busy":
+		return "这会儿还走不开，稍等我一下。"
+	if step_key == "water_all":
+		if GameState.weather_today == GameState.WEATHER_RAIN:
+			return "雨在浇，这会儿不用浇。"
+		var reason := str(result.get("reason", ""))
+		if reason in ["no_plots", "plot_already_watered"]:
+			return "这会儿不用浇。"
+		if reason == "no_growing":
+			return "这会儿没有要浇的苗。"
+	return "这会儿还走不开，稍等我一下。"

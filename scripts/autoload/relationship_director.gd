@@ -35,11 +35,11 @@ func _default_rules() -> Dictionary:
 		"bond_min": 0,
 		"bond_max": 2,
 		"memory_recovery_max": 0.05,
-		"daily_chat_affection_cap": 12,
+		"daily_chat_affection_cap": 18,
 		"base_chat_affection": 1,
-		"long_message_chars": 12,
-		"long_message_bonus": 1,
 		"warm_words": ["谢谢", "辛苦", "记住", "留下", "陪", "慢慢来", "没关系", "对不起", "抱歉"],
+		"care_words": ["累不累", "吃了没", "吃了吗", "还好吗", "冷不冷", "饿不饿", "你怎么样", "身体"],
+		"story_words": ["本子", "名字", "认得", "约定", "记得"],
 		"cold_words": ["滚", "赶走", "烦", "笨", "没用"],
 		"memory_words": ["记得", "约定", "忘记", "想起", "回忆"],
 		"dismissive_exact": ["哦", "嗯", "行", "好", "ok", "OK", "算了", "随便"],
@@ -53,8 +53,8 @@ func _default_rules() -> Dictionary:
 		"stranger_intimate_phrases": ["想你了", "亲爱的", "宝贝", "乖", "抱抱", "爱你", "好想你"],
 		"action_intent_affection_cap": 1,
 		"interaction_weights": {
-			"chat_days": 0.30, "nodes": 0.28, "affection": 0.12,
-			"gifts": 0.12, "nights": 0.10, "tasks": 0.08,
+			"chat_days": 0.40, "nodes": 0.22, "affection": 0.12,
+			"gifts": 0.10, "nights": 0.10, "tasks": 0.06,
 		},
 		"interaction_targets": {
 			"chat_days": 12, "gifts": 6, "nodes": 18, "nights": 2, "tasks": 10,
@@ -265,15 +265,26 @@ func score_player_message(
 	var rec := 0.0
 	var reason := "普通聊天"
 
-	if cleaned.length() >= int(_rules.get("long_message_chars", 12)):
-		aff += int(_rules.get("long_message_bonus", 1))
-		reason = "认真回应"
-
 	var warm_hit := _first_word_hit(cleaned, _rules.get("warm_words", []))
 	if warm_hit != "":
 		aff += 1
 		rec += 0.01
 		reason = "暖语：%s" % warm_hit
+
+	var care_hit := _first_word_hit(cleaned, _rules.get("care_words", []))
+	if care_hit != "":
+		aff += 1
+		reason = "关心：%s" % care_hit
+
+	var story_hit := _first_word_hit(cleaned, _rules.get("story_words", []))
+	var player_name := GameState.player_name.strip_edges()
+	if player_name.length() >= 2 and player_name in cleaned:
+		if story_hit == "":
+			story_hit = player_name
+	if story_hit != "":
+		aff += 1
+		rec += 0.01
+		reason = "聊到她：%s" % story_hit
 
 	var cold_hit := _first_word_hit(cleaned, _rules.get("cold_words", []))
 	if cold_hit != "":
@@ -283,7 +294,7 @@ func score_player_message(
 	var mem_hit := _first_word_hit(cleaned, _rules.get("memory_words", []))
 	if mem_hit != "":
 		rec += 0.01
-		if mem_hit in ["记得", "约定"]:
+		if mem_hit in ["记得", "约定"] and story_hit == "":
 			aff += 1
 		reason = "记忆/承诺：%s" % mem_hit
 
@@ -317,7 +328,8 @@ func score_player_message(
 
 
 func _is_dismissive(text: String) -> bool:
-	if text.length() <= 2:
+	## 单字才算敷衍。「谢谢 / 留下」两个字也可以是认真的。
+	if text.length() <= 1:
 		return true
 	var lower := text.to_lower()
 	for word in _rules.get("dismissive_exact", []):
@@ -364,11 +376,11 @@ func get_interaction_score() -> float:
 	var nights := int(GameState.get_ending_flags().get("companionship_nights", 0))
 	var tasks := int(s.get("tasks_together", 0))
 	var score := 0.0
-	score += _weighted_ratio(chat_days, int(targets.get("chat_days", 12)), float(weights.get("chat_days", 0.30)))
-	score += _weighted_ratio(gifts, int(targets.get("gifts", 6)), float(weights.get("gifts", 0.12)))
-	score += _weighted_ratio(nodes, int(targets.get("nodes", 18)), float(weights.get("nodes", 0.28)))
+	score += _weighted_ratio(chat_days, int(targets.get("chat_days", 12)), float(weights.get("chat_days", 0.40)))
+	score += _weighted_ratio(gifts, int(targets.get("gifts", 6)), float(weights.get("gifts", 0.10)))
+	score += _weighted_ratio(nodes, int(targets.get("nodes", 18)), float(weights.get("nodes", 0.22)))
 	score += _weighted_ratio(nights, int(targets.get("nights", 2)), float(weights.get("nights", 0.10)))
-	score += _weighted_ratio(tasks, int(targets.get("tasks", 10)), float(weights.get("tasks", 0.08)))
+	score += _weighted_ratio(tasks, int(targets.get("tasks", 10)), float(weights.get("tasks", 0.06)))
 	score += _weighted_ratio(GameState.affection, 100, float(weights.get("affection", 0.12)))
 	return clampf(score, 0.0, 1.0)
 

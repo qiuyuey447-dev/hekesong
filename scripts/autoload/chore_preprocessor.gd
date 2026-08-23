@@ -65,6 +65,13 @@ func _segment_to_step_core(seg: String) -> Dictionary:
 		return {"step": "shop_buy_seeds", "raw_text": seg, "max_gold": max_gold}
 	if compact.contains("收") or compact.contains("摘"):
 		return {"step": "harvest_all", "raw_text": seg}
+	if compact.contains("浇") and (
+		IntentParser.looks_like_water_followthrough(seg)
+		or compact.contains("浇水")
+		or compact.contains("浇田")
+		or compact.contains("浇了")
+	):
+		return {"step": "water_all", "raw_text": seg}
 	if compact.contains("种") and not compact.contains("种子"):
 		return {"step": "plant_all", "raw_text": seg}
 	if compact.contains("浇"):
@@ -137,6 +144,8 @@ func should_auto_start_single_plan(text: String, plan: Array) -> bool:
 	if IntentParser.looks_like_chore_question(text):
 		return false
 	if looks_like_explicit_delegate(text):
+		return true
+	if IntentParser.looks_like_water_followthrough(text):
 		return true
 	if looks_like_bare_farm_command(text):
 		return true

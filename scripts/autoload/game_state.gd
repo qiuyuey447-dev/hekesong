@@ -293,6 +293,72 @@ func set_player_display_name(name: String) -> void:
 	save_game()
 
 
+func looks_like_name_recall_question(text: String) -> bool:
+	var cleaned := text.strip_edges().replace(" ", "").replace("　", "")
+	if cleaned == "":
+		return false
+	if "叫什么时候" in cleaned or "叫什么地方" in cleaned:
+		return false
+	if "叫什么" in cleaned or "名字是什么" in cleaned or "还记得我叫" in cleaned:
+		return true
+	if "记不记得我叫" in cleaned or "记得我叫" in cleaned:
+		return true
+	if "记得" in cleaned and ("名字" in cleaned or "称呼" in cleaned):
+		return true
+	if "我叫谁" in cleaned or "我是谁来着" in cleaned:
+		return true
+	return false
+
+
+func extract_self_introduced_name(text: String) -> String:
+	var cleaned := text.strip_edges().replace("　", "")
+	if cleaned == "" or looks_like_name_recall_question(cleaned):
+		return ""
+	var prefixes := ["你可以叫我", "请叫我", "我的名字是", "我的名字叫", "我叫", "叫我"]
+	var found_at := -1
+	var prefix_len := 0
+	for prefix in prefixes:
+		var idx := cleaned.find(prefix)
+		if idx >= 0:
+			found_at = idx
+			prefix_len = prefix.length()
+			break
+	if found_at < 0:
+		return ""
+	var rest := cleaned.substr(found_at + prefix_len).strip_edges()
+	for quote in ["「", "『", "\"", "'", "“"]:
+		if rest.begins_with(quote):
+			rest = rest.substr(quote.length())
+			break
+	var extracted := ""
+	for i in rest.length():
+		var ch := rest.substr(i, 1)
+		if ch in ["。", "，", ",", "！", "!", "？", "?", "…", "—", " ", "　", "」", "』", "\"", "'", "”", ".", "；", ";", "：", ":"]:
+			break
+		if ch in ["你", "我", "他", "她"]:
+			return ""
+		extracted += ch
+		if extracted.length() >= 12:
+			break
+	extracted = extracted.strip_edges()
+	if extracted.length() < 1:
+		return ""
+	for bad in ["什么", "谁", "哪个", "一声", "别忘", "小狸"]:
+		if bad in extracted:
+			return ""
+	return extracted
+
+
+func try_learn_player_name_from_chat(text: String) -> bool:
+	if has_player_name_set():
+		return false
+	var learned := extract_self_introduced_name(text)
+	if learned == "":
+		return false
+	set_player_display_name(learned)
+	return has_player_name_set()
+
+
 func get_player_name_for_llm() -> String:
 	if companion_knows_player_name():
 		return player_name.strip_edges()

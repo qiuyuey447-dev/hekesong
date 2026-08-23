@@ -665,12 +665,19 @@ static func task_complete(game_facts: Dictionary, _market: Dictionary) -> String
 			return "这件事我记下了。"
 
 
+static func name_recall_reply() -> String:
+	return _name_recall_reply()
+
+
 static func player_chat(
 	text: String,
 	stage: String,
 	memory_context: Dictionary,
 	parsed_intent: Dictionary = {}
 ) -> String:
+	if GameState.looks_like_name_recall_question(text):
+		return _name_recall_reply()
+
 	var intent_key := str(parsed_intent.get("intent", IntentParser.INTENT_CHAT))
 	match intent_key:
 		IntentParser.INTENT_WATER:
@@ -708,6 +715,11 @@ static func player_chat(
 	if _asks_prior_acquaintance(text):
 		return _prior_acquaintance_reply(memory_context)
 
+	if "留下" in text and not ("留下种子" in text):
+		if _is_stranger_amnesia(memory_context):
+			return "……你愿意让我留下的话，我就先住下。"
+		return "好。那我先住下。"
+
 	if _looks_like_where_or_place_challenge(text):
 		return _grounded_presence_reply()
 
@@ -719,7 +731,11 @@ static func player_chat(
 		return pick_random(FALLBACK_CHAT_WATER_HINT)
 	if "你好" in text or "hi" in lower or "hello" in lower:
 		return pick_random(FALLBACK_CHAT_HELLO)
-	if "天气" in text or "下雨" in text or "晴天" in text:
+	if "天气" in text or "下雨" in text or "晴天" in text or "雨还在" in text or "还在下" in text:
+		if "雨还在" in text or "还在下" in text:
+			if GameState.weather_today == GameState.WEATHER_RAIN:
+				return "还在下。廊下这边干一点。"
+			return "没下。你听错风了。"
 		var today := GameState.get_weather_label()
 		var tomorrow := GameState.get_weather_label(GameState.weather_tomorrow_hint)
 		return "今天%s，明天大概是%s。田里的情况我会帮你看。" % [today, tomorrow]
@@ -752,6 +768,8 @@ static func stranger_chat(text: String, memory_context: Dictionary) -> String:
 	if _is_stranger_amnesia(memory_context):
 		if "零食" in text or "喜欢吃" in text or ("喜欢" in text and "商店" in text):
 			return "……商店里甜的、咸的我都见过。我这会儿想不起自己爱吃哪个。"
+		if GameState.looks_like_name_recall_question(text):
+			return _name_recall_reply()
 		if "我是谁" in text or "你是谁" in text or "不认识" in text or "记得我" in text:
 			return "……你说我们见过？对不起。我想不起来。"
 		if "约定" in text or "一起看" in text or "本子" in text:
@@ -1042,6 +1060,16 @@ static func _looks_like_save_bug_worry(text: String) -> bool:
 	return false
 
 
+static func _name_recall_reply() -> String:
+	if GameState.companion_can_say_player_name() and GameState.has_player_name_set():
+		return "……%s。你告诉过我的。" % GameState.player_name
+	if StoryDirector.is_stranger_mode():
+		return "……我想不起来。你再告诉我一次？"
+	if GameState.has_player_name_set():
+		return "……舌尖上有个音。这会儿叫不出口。"
+	return "你还没告诉我该怎么叫你。"
+
+
 static func _asks_prior_acquaintance(text: String) -> bool:
 	if "认不认识" in text:
 		return true
@@ -1051,7 +1079,11 @@ static func _asks_prior_acquaintance(text: String) -> bool:
 		return true
 	if "我们认识" in text or "我们见过" in text:
 		return true
-	if ("认识吗" in text or "见过吗" in text) and ("我们" in text or "以前" in text or "曾经" in text or "之前" in text):
+	if "昨天" in text and "见过" in text:
+		return true
+	if "是不是见过" in text or "有没有见过" in text:
+		return true
+	if ("认识吗" in text or "见过吗" in text) and ("我们" in text or "以前" in text or "曾经" in text or "之前" in text or "昨天" in text):
 		return true
 	if "认识我" in text or "见过我" in text:
 		return true
@@ -1059,6 +1091,8 @@ static func _asks_prior_acquaintance(text: String) -> bool:
 
 
 static func _prior_acquaintance_reply(memory_context: Dictionary) -> String:
+	if GameState.game_day <= 1:
+		return "今天才碰上你。更早的对不上。"
 	if str(memory_context.get("story_mode", "")) == "stranger":
 		return "对不起。我想不起来。"
 	if GameState.has_player_name_set():

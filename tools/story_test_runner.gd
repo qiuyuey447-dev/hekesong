@@ -80,6 +80,7 @@ func _run_ten_day_tests() -> void:
 	_test_notebook_infiltration_loop()
 	_test_ten_day_residual_playtest_fixes()
 	_test_infiltrate_playtest_followups()
+	_test_d1_name_recall()
 	_test_ten_day_promise_slot_empty()
 	_test_ten_day_pure_narrative_lock()
 	_test_ten_day_chat_promise()
@@ -106,6 +107,7 @@ func _run_ten_day_tests() -> void:
 	_test_player_notebook_awakening_reveal()
 	_test_persona_regression_suite()
 	_test_ten_day_e_polish()
+	_test_chat_affection_from_length_and_content()
 	_test_n15_mid_tier_render()
 	_test_p_n11_cold_contract_phrases()
 	_test_ten_day_letter_skips_system_followup()
@@ -1193,6 +1195,102 @@ func _test_infiltrate_playtest_followups() -> void:
 	_assert("这几天" not in stranger_quiet, "stranger silence is present-tense")
 
 
+func _test_d1_name_recall() -> void:
+	print("  .. D1 name recall")
+	GameState.reset_for_new_game()
+	GameState.game_day = 1
+	_assert(GameState.extract_self_introduced_name("我叫槐秋。你念三遍。") == "槐秋", "chat intro extracts name")
+	_assert(GameState.extract_self_introduced_name("叫我阿松") == "阿松", "叫我 extracts name")
+	_assert(GameState.extract_self_introduced_name("我叫什么") == "", "name question is not an intro")
+	_assert(GameState.extract_self_introduced_name("我叫你去浇水") == "", "command is not an intro")
+	_assert(GameState.looks_like_name_recall_question("你还记得我叫什么吗"), "recall question detected")
+	_assert(GameState.looks_like_name_recall_question("我叫什么"), "bare 我叫什么 is a recall question")
+	_assert(not GameState.looks_like_name_recall_question("我叫什么时候去浇水"), "叫什么时候 is not a name question")
+	_assert(GameState.try_learn_player_name_from_chat("我叫槐秋。你念三遍。"), "D1 chat writes player_name")
+	_assert(GameState.has_player_name_set() and GameState.player_name == "槐秋", "learned name stored")
+	_assert(GameState.companion_can_say_player_name(), "D1 can say learned name")
+	_assert(not GameState.try_learn_player_name_from_chat("叫我阿松"), "already-set name is not overwritten")
+	_assert(GameState.player_name == "槐秋", "stored name stays first intro")
+
+	var payload := {
+		"event": "player_chat",
+		"player_message": "你还记得我叫什么吗",
+		"player_name": GameState.get_player_name_for_llm(),
+		"player_name_context": GameState.get_player_name_context(),
+		"memory_context": {"story_boundaries": MemoryService.get_story_boundaries()},
+	}
+	var forgot := ResponseValidator.validate(
+		"player_chat",
+		"……我想不起来。你再告诉我一次？",
+		payload,
+		[]
+	)
+	_assert(not bool(forgot.get("ok", true)), "D1 rejects forgetting a known name")
+	_assert(str(forgot.get("reason", "")) == "name_amnesia", "reason is name_amnesia")
+	var evaded := ResponseValidator.validate(
+		"player_chat",
+		"说吧。我听着，这次不装忘。",
+		{
+			"event": "player_chat",
+			"player_message": "我叫什么",
+			"player_name": GameState.get_player_name_for_llm(),
+			"player_name_context": GameState.get_player_name_context(),
+			"memory_context": {"story_boundaries": MemoryService.get_story_boundaries()},
+		},
+		[]
+	)
+	_assert(not bool(evaded.get("ok", true)), "D1 rejects evading 我叫什么")
+	var remembered := ResponseValidator.validate(
+		"player_chat",
+		"……槐秋。你告诉过我的。",
+		payload,
+		[]
+	)
+	_assert(bool(remembered.get("ok", false)), "D1 name answer is allowed")
+	var fallback := NpcFallback.player_chat("你还记得我叫什么吗", GameState.get_stage(), payload["memory_context"])
+	_assert("槐秋" in fallback, "D1 fallback speaks the stored name")
+	_assert("槐秋" in NpcFallback.player_chat("我叫什么", GameState.get_stage(), payload["memory_context"]), "D1 我叫什么 speaks the name")
+
+	GameState.game_day = 4
+	_assert(StoryDirector.get_story_mode() == "stranger", "D4 is stranger")
+	_assert(not GameState.companion_can_say_player_name(), "D4 cannot say the name")
+	var stranger_payload := {
+		"event": "player_chat",
+		"player_message": "我叫什么",
+		"player_name": GameState.get_player_name_for_llm(),
+		"player_name_context": GameState.get_player_name_context(),
+		"memory_context": {"story_boundaries": MemoryService.get_story_boundaries()},
+	}
+	var stranger_ok := ResponseValidator.validate(
+		"player_chat",
+		"……我想不起来。你再告诉我一次？",
+		stranger_payload,
+		[]
+	)
+	_assert(bool(stranger_ok.get("ok", false)), "D4 may still forget the name")
+	var leaked := ResponseValidator.validate(
+		"player_chat",
+		"槐秋。你叫槐秋。",
+		stranger_payload,
+		[]
+	)
+	_assert(not bool(leaked.get("ok", true)), "D4 rejects speaking the stored name")
+	var stranger_fb := NpcFallback.player_chat(
+		"我叫什么",
+		GameState.get_stage(),
+		stranger_payload["memory_context"]
+	)
+	_assert("槐秋" not in stranger_fb, "D4 fallback does not speak the stored name")
+	_assert("想不起来" in stranger_fb or "叫不出口" in stranger_fb, "D4 我叫什么 admits forgetting")
+
+	GameState.game_day = 5
+	var d5_fb := NpcFallback.player_chat("你记不记得我叫什么", GameState.get_stage(), {
+		"story_mode": StoryDirector.get_story_mode(),
+		"story_boundaries": MemoryService.get_story_boundaries(),
+	})
+	_assert("槐秋" not in d5_fb, "D5 fallback does not speak the stored name")
+
+
 func _test_ten_day_promise_slot_empty() -> void:
 	GameState.reset_for_new_game()
 	var ctx := StorySlotService.build_context()
@@ -1555,6 +1653,17 @@ func _test_persona10_bugfix_batch() -> void:
 	)
 	_assert(not bool(porch_lie.get("ok", true)), "field location blocks 廊下看雨")
 	_assert(str(porch_lie.get("reason", "")) == "action_mismatch", "porch lie is action_mismatch")
+	var porch_invite := ResponseValidator.validate(
+		"player_chat",
+		"还在下。你就在廊下躲会儿吧，反正田里的事不急。",
+		{
+			"player_message": "雨还在下吗。",
+			"weather_today": GameState.WEATHER_RAIN,
+			"world_snapshot": {"companion": {"location_name": "小径", "activity": "闲逛"}},
+		},
+		[]
+	)
+	_assert(bool(porch_invite.get("ok", false)), "invite player to porch is not her location claim")
 	var field_fix := ResponseValidator.validate(
 		"player_chat",
 		"对，我就在田这边。刚才那句说岔了。",
@@ -1818,6 +1927,25 @@ func _test_status_inquiry_not_sleep() -> void:
 	var parsed := IntentParser.parse("能收了吗")
 	_assert(str(parsed.get("intent", "")) == IntentParser.INTENT_CHECK_STATUS, "能收了吗 → check_status")
 	_assert(IntentParser.looks_like_stop_farm_chore("别浇了"), "别浇了 is stop chore")
+	_assert(not IntentParser.looks_like_water_followthrough("别浇了"), "别浇了 is not water followthrough")
+	_assert(IntentParser.looks_like_water_followthrough("种完记得把水也浇了"), "种完记得浇 is water followthrough")
+	_assert(IntentParser.looks_like_chore_question("你浇了没"), "你浇了没 is chore question")
+	_assert(not IntentParser.looks_like_water_followthrough("你浇了没"), "你浇了没 is not water followthrough")
+	_assert(str(IntentParser.parse("你浇了没").get("intent", "")) == IntentParser.INTENT_CHAT, "你浇了没 stays chat")
+	var follow_walk := CompanionBodyAction.infer_from_player("跟我走")
+	_assert(
+		follow_walk.size() == 1 and str(follow_walk[0].get("id", "")) == CompanionBodyAction.ACTION_FOLLOW,
+		"跟我走 infers follow"
+	)
+	var water_after := IntentParser.parse("种完记得把水也浇了")
+	_assert(str(water_after.get("intent", "")) == IntentParser.INTENT_WATER_ALL, "种完记得浇 → water_all")
+	_assert(not IntentParser.looks_like_shop_purchase("种完记得把水也浇了"), "water followthrough is not shop")
+	var water_plan := ChorePreprocessor.parse_plan("种完记得把水也浇了")
+	_assert(water_plan.size() == 1 and str(water_plan[0].get("step", "")) == "water_all", "种完记得浇 plan is water not plant")
+	_assert(
+		ChorePreprocessor.should_auto_start_single_plan("种完记得把水也浇了", water_plan),
+		"water followthrough auto-starts"
+	)
 	var stop := IntentParser.parse("雨停再种")
 	_assert(str(stop.get("intent", "")) == IntentParser.INTENT_CHAT, "雨停再种 stays chat")
 
@@ -2357,6 +2485,17 @@ func _test_persona_regression_suite() -> void:
 	var l3_bad := ResponseValidator.validate("player_chat", "上周我们一起浇过田。", payload, [])
 	_assert(not bool(l3_bad.get("ok", true)), "L3 episodic claim rejected without citation")
 	_assert(str(l3_bad.get("reason", "")) == "l3_episodic", "L3 rejection reason tagged")
+	var l3_banter := ResponseValidator.validate(
+		"player_chat",
+		"拔走啊。那天要是真长成萝卜，我先啃一口。",
+		{
+			"memory_context": MemoryService.get_context_for_event("player_chat", {}),
+			"story_mode": "normal",
+			"player_message": "如果我是萝卜，你会把我拔走吗。",
+		},
+		[]
+	)
+	_assert(bool(l3_banter.get("ok", false)), "banter with 那天 is not L3")
 
 	GameState.game_day = 4
 	var stranger_payload := {
@@ -2387,6 +2526,64 @@ func _test_persona_regression_suite() -> void:
 
 	var literary := ResponseValidator.validate("player_chat", "雨帘后面，心里发紧。", payload, [])
 	_assert(not bool(literary.get("ok", true)), "literary phrase rejected in chat")
+
+	var seen_backup: Array = GameState.get_story_nodes_seen()
+	var promise_backup: Variant = GameState.long_term_memory.get("promise", {})
+	var seen_work := seen_backup.duplicate()
+	seen_work.erase("P_N11")
+	seen_work.erase("BE_N11")
+	GameState.long_term_memory["story_nodes_seen"] = seen_work
+	GameState.long_term_memory["promise"] = {}
+	var echo_ok := ResponseValidator.validate(
+		"player_chat",
+		"好。等它们长好了，我们一起看。",
+		{"player_message": "等萝卜长好了，我们一起看。", "story_mode": "normal"},
+		[]
+	)
+	_assert(bool(echo_ok.get("ok", false)), "player-floated promise echo allowed before P_N11")
+	var premature := ResponseValidator.validate(
+		"player_chat",
+		"等萝卜长好了，我们一起看看吧。",
+		{"player_message": "你尾巴刚才扫到我裤子了。", "story_mode": "normal"},
+		[]
+	)
+	_assert(not bool(premature.get("ok", true)), "unsolicited promise rejected before P_N11")
+	_assert(str(premature.get("reason", "")) == "premature_promise", "premature_promise reason")
+	var asked_promise := ResponseValidator.validate(
+		"player_chat",
+		"约好了？我这记性……你倒说说看，我们约什么了？",
+		{"player_message": "我们是不是已经约好了？", "story_mode": "normal"},
+		[]
+	)
+	_assert(bool(asked_promise.get("ok", false)), "asking back about unset promise is allowed")
+	var sell := ResponseValidator.validate(
+		"player_chat",
+		"十八块地都空着，要不要种点什么？",
+		{"player_message": "本子上那句是你写的吗", "story_mode": "normal"},
+		[]
+	)
+	_assert(not bool(sell.get("ok", true)), "farm hard sell rejected on notebook chat")
+	_assert(str(sell.get("reason", "")) == "farm_hard_sell", "farm_hard_sell reason")
+	var stay_water := ResponseValidator.validate(
+		"player_chat",
+		"好，我这就去浇。",
+		{"player_message": "留下吧。", "story_mode": "stranger"},
+		[]
+	)
+	_assert(not bool(stay_water.get("ok", true)), "stay request rejects watering pitch")
+	_assert(str(stay_water.get("reason", "")) == "farm_hard_sell", "stay watering is farm_hard_sell")
+	var leak_fog := ResponseValidator.validate(
+		"player_chat",
+		"认得。别的有点模糊，像隔着一层。",
+		{"player_message": "你还认得我一点吗。", "story_mode": "leak"},
+		[]
+	)
+	_assert(bool(leak_fog.get("ok", false)), "leak fog phrase allowed")
+	GameState.long_term_memory["story_nodes_seen"] = seen_backup
+	if promise_backup is Dictionary:
+		GameState.long_term_memory["promise"] = promise_backup
+	else:
+		GameState.long_term_memory.erase("promise")
 
 	var sunny_payload := {
 		"weather_today": GameState.WEATHER_SUN,
@@ -2584,6 +2781,27 @@ func _seed_true_ending_stats() -> void:
 		"chat_aff_today": 0,
 		"chat_aff_day": -1,
 	}
+
+
+func _test_chat_affection_from_length_and_content() -> void:
+	print("  .. chat affection from content only")
+	var thanks := RelationshipDirector.score_player_message("谢谢", "player_chat", "normal")
+	_assert(int(thanks.get("affection_delta", 0)) >= 1, "谢谢 is warm content")
+	var huh := RelationshipDirector.score_player_message("哦", "player_chat", "normal")
+	_assert(int(huh.get("affection_delta", 0)) == 0, "敷衍 still 0")
+	var care := RelationshipDirector.score_player_message("你累不累", "player_chat", "normal")
+	_assert(int(care.get("affection_delta", 0)) >= 2, "care content raises affection")
+	var story := RelationshipDirector.score_player_message("本子上那句约定还在吗", "player_chat", "normal")
+	_assert(int(story.get("affection_delta", 0)) >= 2, "story talk raises affection")
+	var water := RelationshipDirector.score_player_message("浇水", "player_chat", "normal", IntentParser.parse("浇水"))
+	_assert(int(water.get("affection_delta", 0)) <= 1, "farm command stays capped")
+	var long_farm := RelationshipDirector.score_player_message(
+		"你去把那几垄都浇一遍，空着的也看看要不要浇。",
+		"player_chat",
+		"normal",
+		IntentParser.parse("浇水")
+	)
+	_assert(int(long_farm.get("affection_delta", 0)) <= 1, "long farm talk does not get length bonus")
 
 
 func _test_xlh_history_contract() -> void:
@@ -2799,6 +3017,29 @@ func _test_chore_instruction_closure() -> void:
 	var fixed := SayDoValidator.enforce("田都浇好了。", [], "")
 	_assert(fixed.contains("浇"), "Say-Do fixes false completion claim")
 	_assert(SayDoValidator.should_skip_repetitive_fallback("好的"), "skip 嗯我在 on confirmation")
+	_assert(SayDoValidator.should_skip_repetitive_fallback("帮我买点种子"), "skip 嗯我在 on shop request")
+	_assert(SayDoValidator.should_skip_repetitive_fallback("现在去商店帮我买萝卜种子"), "skip 嗯我在 on shop walk request")
+	_assert(ShopDelegate.parse_seed_purchase_quantity("帮我买点种子然后种上") <= 0, "买点种子 is not a pack count")
+	_assert(ShopDelegate.parse_seed_purchase_quantity("现在去商店帮我买萝卜种子") <= 0, "go-buy is not a pack count")
+	_assert(ShopDelegate.parse_seed_purchase_quantity("帮我买3包萝卜种子") == 3, "explicit 3 packs")
+	_assert(ShopDelegate.parse_quantity("3") == 3, "bare 3 is quantity reply")
+	_assert(ShopDelegate.parse_quantity("帮我买点种子") <= 0, "repeat buy command is not a quantity")
+
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	var seeds0 := GameState.get_item_count("turnip_seed")
+	var coins0 := GameState.coins
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	var buy_now := ChoreOrchestrator.buy_seeds_from_text("帮我买3包萝卜种子")
+	_assert(GameState.get_item_count("turnip_seed") == seeds0, "buy waits for shop walk, no instant seeds")
+	_assert(GameState.coins == coins0, "buy waits for shop walk, no instant coins")
+	var buy_reply := str(buy_now.get("reply", ""))
+	_assert(buy_reply != "", "shop buy has a spoken reply")
+	if bool(buy_now.get("executed", false)):
+		_assert("商店" in buy_reply or "包" in buy_reply, "shop start talks about going or quantity")
+	else:
+		_assert("走不开" in buy_reply or "忙" in buy_reply, "shop start fails closed without buying")
 
 	# C5 busy block
 	TaskSystem.cancel_task()

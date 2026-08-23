@@ -262,6 +262,10 @@ func _narrative_constraints() -> Array[String]:
 		)
 	elif GameState.companion_can_say_player_name():
 		constraints.append("可自然称呼「%s」" % GameState.player_name)
+		constraints.append(
+			"若被问名字或「还记得我叫什么」，必须答出「%s」；禁止说想不起来或「叫什么来着」。今日已告知的称呼不是失忆范围。"
+			% GameState.player_name
+		)
 
 	if bool(GameState.get_ending_flags().get("w2_chose_expel", false)):
 		constraints.append("玩家曾选择赶她走：语气更疏，仍保留复杂情感，勿假装无事发生")

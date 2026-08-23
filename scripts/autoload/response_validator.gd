@@ -35,12 +35,17 @@ const NO_NOTEBOOK_RECITE_EVENTS := [
 const L3_EPISODIC_PHRASES := [
 	"上周",
 	"上回",
-	"那天",
 	"记得那次",
 	"我们以前",
 	"你第一次",
 	"还记得那次",
+]
+const L3_WEAK_TIME_PHRASES := [
+	"那天",
 	"以前你",
+]
+const L3_WEAK_EVENT_CUES := [
+	"一起浇", "一起种", "一起收", "浇过田", "那次", "记得我们",
 ]
 
 const RAIN_SUNNY_PHRASES := [
@@ -227,8 +232,11 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 	if event in CHAT_LIKE_EVENTS and _violates_harvest_capability(cleaned, payload):
 		return {"ok": false, "reason": "harvest_capability"}
 
-	if event in CHAT_LIKE_EVENTS and _mentions_premature_promise(cleaned):
+	if event in CHAT_LIKE_EVENTS and _mentions_premature_promise(cleaned, payload):
 		return {"ok": false, "reason": "premature_promise"}
+
+	if event in CHAT_LIKE_EVENTS and _misquotes_written_promise(cleaned, payload):
+		return {"ok": false, "reason": "promise_misquote"}
 
 	if event in CHAT_LIKE_EVENTS and _recites_journal_digest(cleaned):
 		return {"ok": false, "reason": "journal_digest"}
@@ -236,7 +244,7 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 	if event in NO_NOTEBOOK_RECITE_EVENTS and _recites_notebook_aloud(cleaned, payload):
 		return {"ok": false, "reason": "notebook_recite"}
 
-	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"] and _is_farm_hard_sell(cleaned):
+	if _is_farm_hard_sell(cleaned) and _farm_hard_sell_applies(event, payload):
 		return {"ok": false, "reason": "farm_hard_sell"}
 
 	if event in CHAT_LIKE_EVENTS and _addresses_place_as_name(cleaned, payload):
@@ -244,6 +252,9 @@ func validate(event: String, text: String, payload: Dictionary, cited_ids: Array
 
 	if event in CHAT_LIKE_EVENTS and _leaks_director_meta(cleaned):
 		return {"ok": false, "reason": "director_meta"}
+
+	if event in CHAT_LIKE_EVENTS and _claims_forgot_known_name(cleaned, payload):
+		return {"ok": false, "reason": "name_amnesia"}
 
 	if event in ["companion_proactive", "companion_casual", "morning_sidewrite", "player_chat"] and _is_action_mismatch_reply(cleaned, payload):
 		return {"ok": false, "reason": "action_mismatch"}
@@ -370,13 +381,38 @@ func _violates_l3_episodic_claim(text: String, cited_ids: Array, payload: Dictio
 	var story_mode := str(memory_context.get("story_mode", payload.get("story_mode", "")))
 	if story_mode == "stranger":
 		return false
+	var player_msg := str(payload.get("player_message", "")).strip_edges()
+	var banter := _is_banter_or_hypothetical(player_msg, text)
 	for phrase in L3_EPISODIC_PHRASES:
-		if phrase in text:
+		if phrase in text and phrase not in player_msg:
 			return true
-	return _mentions_pref_as_fact(text, memory_context)
+	if not banter and _has_weak_l3_event_claim(text):
+		return true
+	return _mentions_pref_as_fact(text, memory_context, banter)
 
 
-func _mentions_pref_as_fact(text: String, memory_context: Dictionary) -> bool:
+func _is_banter_or_hypothetical(player_msg: String, reply: String) -> bool:
+	for cue in ["如果我", "要是我", "故意的", "记仇", "拔走", "开玩笑", "尾巴刚才", "跟你尾巴", "破笑话"]:
+		if cue in player_msg or cue in reply:
+			return true
+	return false
+
+
+func _has_weak_l3_event_claim(text: String) -> bool:
+	var hit_time := false
+	for phrase in L3_WEAK_TIME_PHRASES:
+		if phrase in text:
+			hit_time = true
+			break
+	if not hit_time:
+		return false
+	for cue in L3_WEAK_EVENT_CUES:
+		if cue in text:
+			return true
+	return false
+
+
+func _mentions_pref_as_fact(text: String, memory_context: Dictionary, skip_crop_pref: bool = false) -> bool:
 	var prefs: Variant = memory_context.get("long_term_prefs", {})
 	if prefs is not Dictionary or prefs.is_empty():
 		return false
@@ -386,7 +422,7 @@ func _mentions_pref_as_fact(text: String, memory_context: Dictionary) -> bool:
 	if str(prefs.get("pace", "")) == "slow":
 		if "慢慢来" in text and ("总" in text or "一直" in text or "老是" in text):
 			return true
-	if "最喜欢" in text and "萝卜" in text:
+	if not skip_crop_pref and "最喜欢" in text and "萝卜" in text:
 		return true
 	return false
 
@@ -423,10 +459,32 @@ func _validate_story_mode_reply(text: String, payload: Dictionary) -> Dictionary
 			if phrase in text:
 				return {"ok": false, "reason": "stranger_intimate"}
 
-	if not bool(boundaries.get("can_use_player_name", true)) and player_name != "" and player_name in text:
+	var locked_name := player_name if player_name != "" else _stored_player_name(payload)
+	if not bool(boundaries.get("can_use_player_name", true)) and locked_name != "" and locked_name in text:
 		return {"ok": false, "reason": "name_locked"}
 
 	return {"ok": true, "text": ""}
+
+
+func _claims_forgot_known_name(text: String, payload: Dictionary) -> bool:
+	if not GameState.companion_can_say_player_name():
+		return false
+	var stored := GameState.player_name.strip_edges()
+	if stored == "":
+		return false
+	for phrase in [
+		"叫什么来着", "你叫什么来着", "想不起你叫", "想不起来你叫",
+		"记不清你叫", "记不得你叫", "忘了你叫", "忘了你的名字",
+		"想不起你的名字", "记不清你的名字",
+	]:
+		if phrase in text:
+			return true
+	var player_msg := str(payload.get("player_message", "")).strip_edges()
+	if not GameState.looks_like_name_recall_question(player_msg):
+		return false
+	if stored in text:
+		return false
+	return true
 
 
 func _stored_player_name(payload: Dictionary) -> String:
@@ -538,7 +596,8 @@ func _is_literary_reply(text: String, payload: Dictionary = {}) -> bool:
 	if story_mode == "":
 		var memory_context: Dictionary = payload.get("memory_context", {})
 		story_mode = str(memory_context.get("story_mode", ""))
-	if story_mode == "stranger":
+	## 雾口吻只在记忆完整的前三日算文艺腔；陌生化/渗漏/觉醒本来就该对不上。
+	if story_mode in ["stranger", "leak", "awaken", "keep"]:
 		return false
 	for phrase in STRANGER_ALLOWED_FOG_PHRASES:
 		if phrase in text:
@@ -556,18 +615,77 @@ func _is_awkward_waiting_reply(text: String) -> bool:
 	return false
 
 
-func _mentions_premature_promise(text: String) -> bool:
+func _mentions_premature_promise(text: String, payload: Dictionary = {}) -> bool:
 	if GameState.has_story_promise():
 		return false
+	## 反问/否认「约过没有」不是在宣称已有约定。
+	if _questions_or_denies_promise(text):
+		return _claims_written_promise(text)
+	## 玩家先把约定句说出口，或问是不是已经约好：她可以接/反问；仍禁止假装已经写进本子。
+	if (
+		_player_floated_promise(str(payload.get("player_message", "")))
+		or _player_asked_if_already_promised(str(payload.get("player_message", "")))
+	):
+		return _claims_written_promise(text)
 	for phrase in [
 		"等萝卜长好", "长好了，我们一起", "长好了我们一起", "一起看看吧",
-		"萝卜长好了", "我们约", "你说过等", "你说的等", "有个约定", "本子上写着",
+		"萝卜长好了", "我们约过", "我们约好了", "你说过等", "你说的等", "有个约定", "本子上写着",
 		"你说等",
 	]:
 		if phrase in text:
 			return true
+	if "约好了" in text and "约好了？" not in text and "约好了吗" not in text:
+		return true
 	if "约定" in text and ("萝卜" in text or "看看" in text):
 		return true
+	return false
+
+
+func _claims_written_promise(text: String) -> bool:
+	for phrase in ["本子上写着", "有个约定", "我们约过", "你说过等", "你说的等"]:
+		if phrase in text:
+			return true
+	return false
+
+
+func _questions_or_denies_promise(text: String) -> bool:
+	for phrase in ["约什么了", "约过吗", "约过什么", "我们约什么", "不记得约", "没约过", "倒说说看"]:
+		if phrase in text:
+			return true
+	return "约好了？" in text or "约好了吗" in text
+
+
+func _player_asked_if_already_promised(player_msg: String) -> bool:
+	var msg := player_msg.strip_edges()
+	if msg == "":
+		return false
+	for phrase in ["已经约", "约好了吗", "约好了？", "是不是约", "有约定吗", "我们约好"]:
+		if phrase in msg:
+			return true
+	return false
+
+
+func _misquotes_written_promise(text: String, payload: Dictionary) -> bool:
+	if not GameState.has_story_promise():
+		return false
+	var player_msg := str(payload.get("player_message", ""))
+	if not ("本子" in player_msg or "写进" in player_msg):
+		return false
+	if "你记住了吗" in text or "你记住了么" in text:
+		return true
+	var name := _stored_player_name(payload)
+	if name != "" and ("我叫" + name) in text and ("写进本子" in text or "本子上" in text):
+		return true
+	return false
+
+
+func _player_floated_promise(player_msg: String) -> bool:
+	var msg := player_msg.strip_edges()
+	if msg == "":
+		return false
+	for phrase in ["等萝卜长好", "一起看", "不想忘掉", "写进本子", "这一句"]:
+		if phrase in msg:
+			return true
 	return false
 
 
@@ -595,10 +713,35 @@ func _recites_notebook_aloud(text: String, payload: Dictionary = {}) -> bool:
 	return false
 
 
+func _farm_hard_sell_applies(event: String, payload: Dictionary) -> bool:
+	if event in ["companion_proactive", "companion_casual", "morning_sidewrite"]:
+		return true
+	if event != "player_chat":
+		return false
+	return not _player_is_talking_farm(str(payload.get("player_message", "")))
+
+
+func _player_is_talking_farm(player_msg: String) -> bool:
+	var msg := player_msg.strip_edges()
+	if msg == "":
+		return false
+	if _player_floated_promise(msg):
+		return false
+	for cue in ["本子", "认得", "记得我", "水壶", "名字", "留下", "约定"]:
+		if cue in msg:
+			return false
+	for cue in ["田", "浇", "垄", "种子", "收萝卜", "买种", "种上", "哪头认"]:
+		if cue in msg:
+			return true
+	return false
+
+
 func _is_farm_hard_sell(text: String) -> bool:
 	for cue in [
 		"要不要我去买点种子", "买点种子回来", "买点种子种上", "十八块都空",
-		"要不要种点什么", "要不要我顺手浇",
+		"要不要种点什么", "要不要种点", "要不要我顺手浇",
+		"十八块地", "该去买种子",
+		"我这就去浇", "这就去浇", "我去浇水", "去浇水",
 	]:
 		if cue in text:
 			return true
@@ -706,9 +849,20 @@ func _claims_being_at(text: String, place: String) -> bool:
 		place + "躲雨",
 		place + "打盹",
 	]:
-		if needle in text:
-			return true
+		var idx := text.find(needle)
+		while idx >= 0:
+			if not _is_player_directed_place(text, idx):
+				return true
+			idx = text.find(needle, idx + needle.length())
 	return false
+
+
+func _is_player_directed_place(text: String, idx: int) -> bool:
+	## 「你就在廊下躲会儿」是请玩家去，不是自称人在廊下。
+	if idx <= 0:
+		return false
+	var start := maxi(0, idx - 2)
+	return "你" in text.substr(start, idx - start)
 
 
 func _is_action_mismatch_reply(text: String, payload: Dictionary) -> bool:
@@ -811,3 +965,43 @@ func is_off_topic_feed_reply(text: String, payload: Dictionary) -> bool:
 
 func set_debug_disable_fact_lock(disabled: bool) -> void:
 	debug_disable_fact_lock = disabled
+
+
+func try_rewrite(event: String, text: String, payload: Dictionary, reason: String) -> Dictionary:
+	## 校验误杀或可就地改口时，改完再验一遍，避免换成空话库存。
+	var player := str(payload.get("player_message", "")).strip_edges()
+	var rewritten := ""
+	match reason:
+		"chat_timing":
+			if _game_day_from_payload(payload) <= 1 and "昨天" in text:
+				if "见过" in player or "昨天" in player:
+					rewritten = "今天才碰上你。更早的对不上。"
+		"stranger_name", "name_locked":
+			var name := _stored_player_name(payload)
+			if name != "":
+				var stripped := text.replace(name + "……", "").replace(name + "…", "").replace(name, "")
+				stripped = stripped.strip_edges()
+				while stripped.begins_with("，") or stripped.begins_with("。") or stripped.begins_with(" "):
+					stripped = stripped.substr(1).strip_edges()
+				if stripped != "" and name not in stripped:
+					rewritten = stripped
+			if rewritten == "" and ("名字" in player or "我叫" in player or "记得" in player):
+				rewritten = "这名字对不上。你再说一遍也行。"
+		"farm_hard_sell":
+			if "留下" in player:
+				rewritten = "……你让我留下，那我就先住下。"
+		"promise_misquote":
+			var summary := GameState.get_story_promise_summary()
+			if summary != "":
+				rewritten = "写进本子了。就是那句——%s。" % summary
+	if rewritten == "":
+		return {"ok": false, "reason": reason}
+	var again := validate(event, rewritten, payload, [])
+	if bool(again.get("ok", false)):
+		return {"ok": true, "text": str(again.get("text", rewritten))}
+	if reason in ["stranger_name", "name_locked"]:
+		var canned := "这名字对不上。你再说一遍也行。"
+		var canned_v := validate(event, canned, payload, [])
+		if bool(canned_v.get("ok", false)):
+			return {"ok": true, "text": canned}
+	return {"ok": false, "reason": reason}

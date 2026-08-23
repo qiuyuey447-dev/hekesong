@@ -165,7 +165,7 @@ def load_relationship_rules() -> dict[str, Any]:
 
 
 def _is_dismissive(text: str, rules: dict[str, Any]) -> bool:
-    if len(text) <= 2:
+    if len(text) <= 1:
         return True
     lower = text.lower()
     for word in rules.get("dismissive_exact", []):
@@ -229,15 +229,25 @@ def score_relationship_delta(payload: dict[str, Any], reply: str = "") -> dict[s
     rec = 0.0
     reason = "普通聊天"
 
-    if len(text) >= int(rules.get("long_message_chars", 12)):
-        aff += int(rules.get("long_message_bonus", 1))
-        reason = "认真回应"
-
     warm = _first_word_hit(text, rules.get("warm_words", []))
     if warm:
         aff += 1
         rec += 0.01
         reason = f"暖语：{warm}"
+
+    care = _first_word_hit(text, rules.get("care_words", []))
+    if care:
+        aff += 1
+        reason = f"关心：{care}"
+
+    story = _first_word_hit(text, rules.get("story_words", []))
+    player_name = str(payload.get("player_name", "")).strip()
+    if len(player_name) >= 2 and player_name in text and not story:
+        story = player_name
+    if story:
+        aff += 1
+        rec += 0.01
+        reason = f"聊到她：{story}"
 
     cold = _first_word_hit(text, rules.get("cold_words", []))
     if cold:
@@ -247,7 +257,7 @@ def score_relationship_delta(payload: dict[str, Any], reply: str = "") -> dict[s
     mem = _first_word_hit(text, rules.get("memory_words", []))
     if mem:
         rec += 0.01
-        if mem in ("记得", "约定"):
+        if mem in ("记得", "约定") and not story:
             aff += 1
         reason = f"记忆/承诺：{mem}"
 
@@ -280,18 +290,18 @@ def build_relationship_score_messages(payload: dict[str, Any], reply: str) -> li
     rules = load_relationship_rules()
     system = "\n".join([
         "你是《河可松》关系裁判，只输出 JSON，不要 markdown。",
-        "根据玩家发言、小狸回复、剧情模式判断关系变化。",
+        "根据玩家这句话的【内容与意图】判断关系变化，禁止按字数、标点多少或句子长短加分。",
+        "长句若只是催浇水/买种子/重复空话，affection_delta=0。短句若真心留下、报名字、问她累不累、提约定，可以 +2~+3。",
         "必填：affection_delta(整数-2~3)、bond_delta(整数0~2)、"
-        "memory_recovery_delta(浮点0~0.05)、relationship_reason(短字符串，中文)。",
-        "评分表：",
-        "- 敷衍（哦/嗯/行/好/算了，≤2字）→ affection_delta=0",
-        "- 纯事务指令（浇水/打开集市）→ 0~+1",
-        "- 普通关心聊天 → +1",
-        "- 长句认真回应(≥12字) → +2",
-        "- 安慰/接纳/谢谢/慢慢来/对不起 → +2~+3",
+        "memory_recovery_delta(浮点0~0.05)、relationship_reason(短字符串，中文，写内容理由不要写「字多」)。",
+        "评分表（只看内容）：",
+        "- 敷衍（哦/嗯/行/好/算了）→ 0",
+        "- 纯事务指令（浇水/打开集市/过来）→ 0~+1",
+        "- 普通闲聊、接话 → +1",
+        "- 安慰/留下/谢谢/关心她/问本子名字约定/耐心自报身份 → +2~+3",
         "- 伤人/赶走/滚/烦 → -1~-2",
         "- 提到记得/约定/不会赶你走 → memory_recovery_delta 0.01~0.03",
-        "story_mode=stranger：玩家耐心重新介绍身份 → +2~+3；指责不耐烦 → -1~-2。",
+        "story_mode=stranger：耐心重新介绍身份 → +2~+3；指责不耐烦 → -1~-2。",
         f"配置上限：affection [{rules.get('affection_min', -2)}, {rules.get('affection_max', 3)}]。",
     ])
     user = json.dumps(
@@ -325,21 +335,24 @@ def ensure_relationship_fields(
     event = str(payload.get("event", ""))
     if event not in RELATIONSHIP_EVENTS:
         return data
-    if "affection_delta" in data:
+    reply = str(data.get("reply", ""))
+    ## 闲聊亲密度由内容裁判另判，不采用回话模型随口带的 affection_delta，也不按字数。
+    if event == "player_chat" and use_llm_score:
+        try:
+            data.update(score_relationship_with_llm(payload, reply))
+            if "cited_memory_ids" not in data:
+                data["cited_memory_ids"] = []
+            return data
+        except Exception as exc:
+            sys.stdout.write(f"[local_llm] LLM 关系裁判失败，规则回退: {exc}\n")
+            sys.stdout.flush()
+    if "affection_delta" in data and not (event == "player_chat" and use_llm_score):
         data["affection_delta"] = max(-2, min(3, int(data.get("affection_delta", 0))))
         data["bond_delta"] = max(0, min(2, int(data.get("bond_delta", 0))))
         data["memory_recovery_delta"] = max(0.0, min(0.05, float(data.get("memory_recovery_delta", 0.0))))
         if "cited_memory_ids" not in data:
             data["cited_memory_ids"] = []
         return data
-    reply = str(data.get("reply", ""))
-    if use_llm_score:
-        try:
-            data.update(score_relationship_with_llm(payload, reply))
-            return data
-        except Exception as exc:
-            sys.stdout.write(f"[local_llm] LLM 关系裁判失败，规则回退: {exc}\n")
-            sys.stdout.flush()
     data.update(score_relationship_delta(payload, reply))
     if "cited_memory_ids" not in data:
         data["cited_memory_ids"] = []
@@ -1513,8 +1526,14 @@ def mock_reply(payload: dict[str, Any]) -> dict[str, Any]:
 FARM_TOPIC_KEYWORDS = (
     "田", "浇", "萝卜", "种子", "收", "卖", "买", "集市", "行情", "价格", "金币", "商店", "种",
 )
-STORY_TOPIC_KEYWORDS = ("记得", "忘记", "你是谁", "认识", "留下", "循环", "记忆", "本子", "约定", "小狸")
-EMOTION_TOPIC_KEYWORDS = ("难过", "开心", "累", "烦", "谢谢", "对不起", "你好", "在吗", "哈哈", "孤独", "害怕", "想")
+STORY_TOPIC_KEYWORDS = (
+    "记得", "忘记", "你是谁", "认识", "留下", "循环", "记忆", "本子", "约定",
+    "小狸", "认得", "水壶", "名字", "忘掉", "一起看",
+)
+EMOTION_TOPIC_KEYWORDS = (
+    "难过", "开心", "累", "烦", "谢谢", "对不起", "你好", "在吗", "哈哈",
+    "孤独", "害怕", "想", "尾巴", "故意", "开玩笑", "打雷",
+)
 
 
 def _classify_player_message(message: str) -> str:
@@ -1523,10 +1542,15 @@ def _classify_player_message(message: str) -> str:
         return "empty"
     if looks_like_sleep_request(text):
         return "sleep"
-    if any(k in text for k in FARM_TOPIC_KEYWORDS):
-        return "farm"
-    if any(k in text for k in STORY_TOPIC_KEYWORDS):
+    story_hit = any(k in text for k in STORY_TOPIC_KEYWORDS)
+    farm_hit = any(k in text for k in FARM_TOPIC_KEYWORDS)
+    if story_hit and (
+        not farm_hit
+        or any(k in text for k in ("本子", "约定", "记得", "忘记", "一起看", "忘掉", "认得", "水壶", "留下"))
+    ):
         return "story"
+    if farm_hit:
+        return "farm"
     if any(k in text for k in EMOTION_TOPIC_KEYWORDS):
         return "emotion"
     return "general"
@@ -1605,6 +1629,10 @@ def _player_chat_priority_rules(message: str, topic: str) -> str:
         "- 你必须先回应这句话本身（回答、共情、接话、反问都可以）。",
         "- 不要无视玩家原话，转而汇报天气、行情、田况或剧情背景。",
     ]
+    if "昨天" in message and "见过" in message:
+        lines.append("- 问昨天见没见过：第1天说今天才碰上，嘴里不要出现「昨天」，不要说有印象。")
+    if "留下" in message and "种子" not in message:
+        lines.append("- 玩家让你留下：答留下或住下，禁止去浇田或买种子。")
     if any(k in message for k in ("去哪", "哪里", "哪儿", "你在", "人在")):
         lines.append("- 玩家在问或纠正你的位置：必须用当前真实位置回答；若与你上一句矛盾，承认说岔了，禁止顾左右而言他。")
     if looks_like_chore_question(message):
@@ -1616,11 +1644,19 @@ def _player_chat_priority_rules(message: str, topic: str) -> str:
         lines.append("- 【睡觉指令】必须 intent=sleep；reply 先答应休息/晚安，禁止转去浇田、报田况或推销种子。")
     if topic in ("general", "emotion", "empty", "sleep"):
         lines.append("- 玩家未提农场/任务：不要主动推销浇田、卖萝卜、看行情。")
-        lines.append("- 可以像朋友一样闲聊；农场细节仅在被问到时再提。")
+        lines.append("- 可以像朋友一样闲聊、接玩笑；农场细节仅在被问到时再提。")
+        lines.append("- 禁止改口「要不要种点什么」「十八块地都空着」。")
     elif topic == "farm":
         lines.append("- 玩家提到了农场相关：可结合下方世界事实具体回答。")
     elif topic == "story":
-        lines.append("- 玩家提到记忆/身份/关系：可结合剧情背景与可引用记忆，但仍先回答其问题。")
+        lines.append("- 玩家提到记忆/身份/关系/本子/水壶握法/留下：先答这句话。")
+        lines.append("- 禁止改口推销种田、报空垄、浇水或清晨套话。")
+        if any(k in message for k in ("昨天", "见过")):
+            lines.append("- 问昨天见没见过：按当前天数回答。第1天说今天才碰上，不要说昨天。")
+        if any(k in message for k in ("约好", "约定", "写进本子")):
+            lines.append("- 问约定/本子：未写入就否认或反问；已写入只复述约定原文，不要把名字写成约定。")
+        if "留下" in message:
+            lines.append("- 玩家让你留下：答留下或住下，禁止去浇田。")
     return "\n".join(lines)
 
 
@@ -1722,7 +1758,9 @@ def _prompt_player_name_rules(payload: dict[str, Any]) -> str:
         return (
             "[称呼规则]\n"
             f"可自然称呼玩家「{stored}」。\n"
-            "- 叫名时语气克制，符合当前关系阶段。"
+            "- 叫名时语气克制，符合当前关系阶段。\n"
+            f"- 若被问起名字或「还记得我叫什么」，必须答出「{stored}」。\n"
+            "- 今日已告知的称呼不是失忆范围，禁止说想不起来或「叫什么来着」。"
         )
     return "[称呼规则]\n可用「你」称呼玩家。"
 
@@ -1770,12 +1808,13 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         "- 禁止输出 intent:/plot_id:/confidence: 等内部字段名或调试信息。",
         "- 禁止输出「主线节点」「导演·勿复述」「变体」「锚点」等系统/导演字段。",
         "- 1～3 句口语。前期可轻微诙谐（泥、红薯、拨苗），不油、不讲主题；陌生化时立刻收起玩笑。",
-        "- 记性不好就直说记不清、对不上。禁止比喻和文艺腔：雨帘、隔着雾、心里发紧、模模糊糊、毛玻璃、像隔着什么看。",
-        "- 说话必须符合你现在的位置（world_snapshot.companion.location_name）。禁止声称自己在别处看雨、打盹或躲雨。",
+        "- 记性不好就直说记不清、对不上（已告知且此刻仍可称呼的名字除外）。禁止文艺腔：雨帘、心里发紧、行情、售价。渗漏/觉醒可以说对不上、隔着一层；前三日不要用雾/毛玻璃比喻。",
+        "- 说话必须符合你现在的位置（world_snapshot.companion.location_name）。禁止声称自己在别处看雨、打盹或躲雨。请玩家去廊下可以说「你去廊下躲会儿」，那不是自称你人在廊下。",
         "- 亲密度不足（world_snapshot.can_harvest=false）时，禁止主动问「要不要我收/帮你收/去收萝卜」；可说「你来收，我馋规矩不让」。",
         "- 玩家已肯定上一句里的收田邀约（好/行/收吧/去收吧）时，不要只报田况数字；应答应去收或说明为何不能代收。",
-        "- 未完成 D3 约定节点（P_N11）前，禁止提「等萝卜长好一起看」或任何约定；禁止说「你说过/我们约过」。",
-        "- 约定须按 game_state.promise：这是她写进本子的提议，不要改口成玩家先开口。",
+        "- 未完成 D3 约定节点（P_N11）前，禁止主动提「等萝卜长好一起看」或声称「我们约过」。玩家问「是不是已经约好了」时，反问「约什么了」或说不记得，不要说已经写进本子。",
+        "- 约定须按 game_state.promise：正式写入后只说本子里的那句，不要改口，也不要把玩家刚报的名字写成约定。",
+        "- 玩家说留下/别走/住下：先答留下或住下。禁止改口「我这就去浇/去买种子」。",
         "- 玩家说睡觉、睡吧、下一天、晚安，或晚上催睡（还不睡吗/怎么还不睡）：必须返回 intent=sleep，先答应休息，不要转去报田况或推销种子。",
         "- 没提到的任务、约定、田况不要编。",
         "- persona_vector、long_term_prefs、behavior_inferred 仅影响语气；禁止当作已发生的共同经历、具体日期或统计习惯引用。具体往事只能来自「可引用记忆」。",
@@ -1787,7 +1826,7 @@ def _dialogue_rules(*, story_mode: str = "", player_name: str = "你", chat_mode
         lines.append("- 禁止宣读本子或整句复述日记；往事只许化成感觉、动作或半句口误。")
     if story_mode == "stranger":
         lines.append("- 陌生化：礼貌疏远，拘谨，不开玩笑，不提红薯或共同经历。")
-        lines.append("- 禁止叫玩家曾用过的称呼；问起名字只说想不起来。")
+        lines.append("- 禁止叫玩家曾用过的称呼；问起名字或玩家自报名字时，禁止把名字念出口，只说想不起来、对不上。")
         lines.append("- 问起约定/本子：只说想不起来、认不得字；禁止复述约定原文（例如「等萝卜长好一起看」）。")
         lines.append("- 玩家问存档坏了/bug/数据丢了：答「不是坏了，是我这边又空了一截」；可提示本子字还在，禁止「数据没问题」「欢迎回来」。")
     elif can_say_name and player_name.strip() not in ("", "你"):
@@ -1995,6 +2034,7 @@ def _prompt_chat_timing(payload: dict[str, Any]) -> str:
     lines.append(f"当前第 {day} 游戏日。")
     if not timing.get("can_reference_yesterday", day >= 2):
         lines.append("禁止把今日或刚才的对话说成「昨天」；用「刚才/今天/早些时候」。")
+        lines.append("第1天玩家问「昨天见过吗」：答今天才碰上；嘴里不要出现「昨天」，不要说有印象，不要转去收萝卜。")
     else:
         lines.append("只有上一游戏日的事才用「昨天」；今日聊过的用「刚才/今天」。")
     today_lines = timing.get("today_player_lines") or []
@@ -2656,6 +2696,12 @@ def build_llm_messages(payload: dict[str, Any]) -> tuple[list[dict[str, str]], f
             "好回复示例：玩家说「可是你在农田呀」→「对，我就在田这边。刚才那句说岔了。」",
             "坏回复示例：玩家说「可是你在农田呀」→「嗯。还有要说的吗。没有也行，我坐着。」",
             "坏回复示例：玩家说「今天有点累」→「今天晴天，萝卜售价 13 金，要不要浇田？」",
+            "好回复示例：玩家说「你尾巴刚才扫到我裤子了」→「……扫到了就扫到了。又不是故意的。」",
+            "坏回复示例：玩家说「你尾巴刚才扫到我裤子了」→「田还空着，要不要种点什么？」",
+            "好回复示例：玩家说「本子上那句是你写的吗」→「字是我的。那句……我现在对不太上。」",
+            "坏回复示例：玩家说「本子上那句是你写的吗」→「十八块地都空着，要不要种点什么？」",
+            "好回复示例：玩家说「手还记得水壶怎么握吗」→「手好像还记得。脑子对不上。」",
+            "坏回复示例：玩家说「手还记得水壶怎么握吗」→「该浇水了？走吧。」",
             "坏回复示例：W2 陌生化时说「又见面了，还记得我们约定吗？」",
             "好回复示例：玩家说「我们以前认识吗」→「记不清。你的名字我记住了。以前的事对不上，我不敢乱说。」",
             "坏回复示例：玩家说「我们以前认识吗」→「很多事都像隔着雨帘看田，模模糊糊的。」",

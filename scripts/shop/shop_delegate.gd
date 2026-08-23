@@ -11,6 +11,8 @@ static func parse_quantity(text: String) -> int:
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
 		return -1
+	if trimmed in ["取消", "算了", "不用了", "不买了", "买点", "买点种子", "去买种子"]:
+		return -1
 
 	var regex := RegEx.new()
 	regex.compile("(\\d+)\\s*包")
@@ -23,13 +25,10 @@ static func parse_quantity(text: String) -> int:
 	if match_result:
 		return maxi(int(match_result.get_string(1)), 0)
 
-	regex.compile("(\\d+)")
-	match_result = regex.search(trimmed)
-	if match_result:
-		return maxi(int(match_result.get_string(1)), 0)
-
 	for cn in CN_NUMBERS.keys():
-		if ("%s包" % cn) in trimmed or ("买%s" % cn) in trimmed:
+		if ("%s包" % cn) in trimmed or ("买%s包" % cn) in trimmed:
+			return int(CN_NUMBERS[cn])
+		if trimmed == ("买%s" % cn) or trimmed.begins_with("买%s包" % cn):
 			return int(CN_NUMBERS[cn])
 
 	if trimmed in CN_NUMBERS:
@@ -39,13 +38,11 @@ static func parse_quantity(text: String) -> int:
 
 
 static func parse_seed_purchase_quantity(text: String) -> int:
+	## 只有玩家明说「N 包 / 买 N 包」才算数量。「买点种子」必须再问几包。
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
 		return -1
 	if trimmed.contains("买点") and not trimmed.contains("包"):
-		var bare := parse_quantity(trimmed)
-		if bare > 0:
-			return bare
 		return -1
 	return parse_quantity(trimmed)
 

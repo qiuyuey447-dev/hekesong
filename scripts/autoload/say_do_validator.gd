@@ -82,6 +82,12 @@ func should_skip_repetitive_fallback(player_text: String) -> bool:
 		return true
 	if IntentParser.looks_like_chore_question(player_text):
 		return true
+	if IntentParser.looks_like_shop_purchase(player_text):
+		return true
+	if IntentParser.looks_like_farm_directive(player_text):
+		return true
+	if ChorePreprocessor.looks_like_explicit_delegate(player_text):
+		return true
 	var compact := player_text.strip_edges().replace(" ", "")
 	for marker in ["浇吧", "种吧", "收吧", "买吧", "卖吧", "去吧", "好的", "好", "行"]:
 		if compact == marker:

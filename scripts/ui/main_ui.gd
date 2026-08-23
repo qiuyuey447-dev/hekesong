@@ -76,6 +76,7 @@ var _pending_post_snuggle_day_advance: bool = false
 var _queued_seed_count: int = -1
 var _seed_quantity_prompted: bool = false
 var _seed_purchase_resolved: bool = false
+var _seed_purchase_abandoned: bool = false
 var _farm_chain_after_task: String = ""
 var _pending_water_offer: bool = false
 var _pending_shop_offer: bool = false
@@ -389,7 +390,6 @@ func _on_name_prompt_confirmed(name: String) -> void:
 	_append_companion_message("……%s。好。我先念三遍。" % cleaned)
 	_maybe_show_d1_opening_guide()
 	_refresh_hud()
-	CompanionDirector.schedule_consider(0.8, "period")
 
 
 func _maybe_show_d1_opening_guide() -> void:
@@ -2257,7 +2257,21 @@ func open_market_from_companion() -> void:
 
 
 func begin_companion_seed_purchase_from_orchestrator(source_text: String = "") -> void:
-	_begin_auto_seed_shop_flow(source_text, true)
+	prepare_companion_seed_trip(source_text, ShopDelegate.parse_seed_purchase_quantity(source_text))
+
+
+func prepare_companion_seed_trip(source_text: String = "", preset: int = -1) -> void:
+	_auto_seed_shop_flow = true
+	_pending_seed_purchase = true
+	_pending_seed_source_text = source_text
+	_seed_purchase_resolved = false
+	_seed_purchase_abandoned = false
+	## 只有玩家亲口说了「N 包」才预填数量。否则到店必须再问。
+	if preset > 0:
+		_queued_seed_count = preset
+	else:
+		_queued_seed_count = -1
+	_seed_quantity_prompted = false
 
 
 func append_companion_line_from_orchestrator(text: String) -> void:
@@ -2267,7 +2281,7 @@ func append_companion_line_from_orchestrator(text: String) -> void:
 
 
 func begin_companion_seed_purchase() -> void:
-	if _seed_purchase_resolved:
+	if _seed_purchase_resolved or _seed_purchase_abandoned:
 		return
 
 	_pending_seed_purchase = true
@@ -2276,15 +2290,6 @@ func begin_companion_seed_purchase() -> void:
 		var queued := _queued_seed_count
 		_queued_seed_count = -1
 		_execute_companion_seed_purchase(queued, false)
-		return
-
-	var preset := ShopDelegate.parse_seed_purchase_quantity(_pending_seed_source_text)
-	if preset > 0:
-		_execute_companion_seed_purchase(preset, false)
-		if _seed_purchase_resolved or not _pending_seed_purchase:
-			return
-
-	if _seed_quantity_prompted:
 		return
 
 	_seed_quantity_prompted = true
@@ -2440,8 +2445,19 @@ func _send_chat_async(text: String) -> void:
 	GameState.record_player_chat(trimmed)
 	_append_player_message(trimmed)
 
+	if GameState.try_learn_player_name_from_chat(trimmed):
+		_append_companion_message("……%s。好。我先念三遍。" % GameState.player_name)
+		_maybe_show_d1_opening_guide()
+		_refresh_hud()
+		return
+
+	if _try_answer_name_recall(trimmed):
+		return
+
 	_ensure_pending_invite_delivered()
 	_expire_stale_farm_offers(trimmed)
+	if _should_abandon_seed_purchase(trimmed):
+		_abandon_seed_purchase_for_other_chore()
 
 	if _try_handle_seed_quantity_reply(trimmed):
 		return
@@ -2904,6 +2920,7 @@ func _apply_relationship_delta(
 	used_fallback: bool
 ) -> void:
 	var delta := NpcBridge.take_relationship_delta(request_id)
+	## 有云端分就听 LLM 内容裁判；只在没 API / 空话兜底时用本地内容规则。
 	if delta.is_empty() and (used_fallback or not NpcBridge.is_api_enabled()):
 		delta = RelationshipDirector.estimate_local_delta(player_text, event)
 	if delta.is_empty():
@@ -3232,6 +3249,15 @@ func _try_handle_harvest_offer_reply(text: String) -> bool:
 	return true
 
 
+func _try_answer_name_recall(text: String) -> bool:
+	if not GameState.looks_like_name_recall_question(text):
+		return false
+	_keep_spoken_line = true
+	_append_companion_message(NpcFallback.name_recall_reply())
+	_chat_action_handled = true
+	return true
+
+
 func _try_answer_why_helping(text: String) -> bool:
 	if not IntentParser.looks_like_why_helping(text):
 		return false
@@ -3325,6 +3351,10 @@ func _try_handle_seed_quantity_reply(text: String) -> bool:
 		_append_companion_message("好，先不买。")
 		return true
 
+	if IntentParser.looks_like_water_followthrough(trimmed):
+		_abandon_seed_purchase_for_other_chore()
+		return false
+
 	if ShopDelegate.looks_like_plant_now(trimmed) or _looks_like_immediate_plant_intent(trimmed):
 		_clear_seed_purchase_flow()
 		_append_companion_message("好，我现在就去种。")
@@ -3336,47 +3366,100 @@ func _try_handle_seed_quantity_reply(text: String) -> bool:
 		if ShopDelegate.is_quantity_reply(trimmed):
 			_append_companion_message("我没听清数量，再说一次好吗？比如「3」或「三」。")
 			return true
+		if IntentParser.looks_like_shop_purchase(trimmed):
+			_pending_seed_purchase = true
+			_auto_seed_shop_flow = true
+			_seed_quantity_prompted = true
+			_append_companion_message("要买几包？说个数字就行。")
+			return true
 		return false
 
 	if TaskSystem.is_busy():
 		_queued_seed_count = count
 		_pending_seed_purchase = true
+		_auto_seed_shop_flow = true
 		_pending_shop_offer = false
-		_append_companion_message("好，记下了，买 %d 包。忙完就去买。" % count)
+		_append_companion_message("好，记下了，买 %d 包。到店就买。" % count)
 		return true
 
-	_execute_companion_seed_purchase(count, true)
+	## 已经走到店、只等数字：当场买。否则先走去商店，到了再买。
+	if _pending_seed_purchase and not TaskSystem.is_busy():
+		_execute_companion_seed_purchase(count, true)
+		return true
+
+	_queued_seed_count = count
+	_pending_seed_purchase = true
+	_auto_seed_shop_flow = true
+	_pending_shop_offer = false
+	_seed_quantity_prompted = true
+	if TaskSystem.start_shop_task(true):
+		_append_companion_message("好，我去商店买 %d 包萝卜种子。" % count)
+		return true
+	_append_companion_message("这会儿还走不开，稍等我一下。")
 	return true
 
 
 func _begin_auto_seed_shop_flow(source_text: String, already_committed: bool = false) -> void:
-	_auto_seed_shop_flow = true
-	_pending_seed_purchase = true
-	_pending_seed_source_text = source_text
-	_seed_purchase_resolved = false
-
 	var preset := ShopDelegate.parse_seed_purchase_quantity(source_text)
-	if preset > 0:
-		if TaskSystem.is_busy():
-			_queued_seed_count = preset
-			if not _seed_quantity_prompted:
-				_append_companion_message("好，我去商店买 %d 包萝卜种子。" % preset)
-				_seed_quantity_prompted = true
-		else:
-			_execute_companion_seed_purchase(preset, false)
+	prepare_companion_seed_trip(source_text, preset)
+	if TaskSystem.is_busy() and TaskSystem.current_task == TaskSystem.TaskType.SHOP:
+		if not already_committed and not _seed_quantity_prompted:
+			_seed_quantity_prompted = true
+			_append_companion_message("要买几包？说个数字就行。" if preset <= 0 else "好，记下了，到店买 %d 包。" % preset)
 		return
-
-	if not _seed_quantity_prompted:
-		if already_committed:
-			_append_companion_message("要买几包？说个数字就行。")
-		else:
-			_append_companion_message("好，我先去商店。要买几包萝卜种子？说个数字就行。")
-		_seed_quantity_prompted = true
+	if not TaskSystem.is_busy():
+		if not TaskSystem.start_shop_task(true):
+			if preset <= 0:
+				_seed_quantity_prompted = true
+				_append_companion_message("要买几包萝卜种子？说个数字就行。")
+				return
+			_append_companion_message("这会儿还走不开，稍等我一下。")
+			return
+	if _seed_quantity_prompted:
+		return
+	_seed_quantity_prompted = true
+	if preset > 0:
+		_append_companion_message("好，我去商店买 %d 包萝卜种子。" % preset)
+	else:
+		_append_companion_message("好，我先去商店。要买几包萝卜种子？说个数字就行。")
 
 
 func _looks_like_immediate_plant_intent(text: String) -> bool:
 	var intent := IntentParser.parse(text)
 	return str(intent.get("intent", "")) in [IntentParser.INTENT_PLANT, IntentParser.INTENT_PLANT_ALL]
+
+
+func _should_abandon_seed_purchase(text: String) -> bool:
+	if not _pending_seed_purchase and not _auto_seed_shop_flow:
+		return false
+	if IntentParser.looks_like_shop_purchase(text) or ShopDelegate.parse_quantity(text) > 0:
+		return false
+	if ShopDelegate.is_quantity_reply(text):
+		return false
+	if IntentParser.looks_like_water_followthrough(text):
+		return true
+	var intent := IntentParser.parse(text)
+	var key := str(intent.get("intent", ""))
+	return key in [
+		IntentParser.INTENT_WATER,
+		IntentParser.INTENT_WATER_ALL,
+		IntentParser.INTENT_PLANT,
+		IntentParser.INTENT_PLANT_ALL,
+		IntentParser.INTENT_HARVEST,
+		IntentParser.INTENT_HARVEST_ALL,
+	]
+
+
+func _abandon_seed_purchase_for_other_chore() -> void:
+	_seed_purchase_abandoned = true
+	_pending_seed_purchase = false
+	_auto_seed_shop_flow = false
+	_pending_seed_source_text = ""
+	_queued_seed_count = -1
+	_seed_quantity_prompted = false
+	_pending_shop_offer = false
+	if TaskSystem.is_busy() and TaskSystem.current_task == TaskSystem.TaskType.SHOP:
+		TaskSystem.cancel_task()
 
 
 func _clear_seed_purchase_flow() -> void:
@@ -3386,6 +3469,7 @@ func _clear_seed_purchase_flow() -> void:
 	_queued_seed_count = -1
 	_seed_quantity_prompted = false
 	_seed_purchase_resolved = false
+	_seed_purchase_abandoned = true
 
 
 func _mark_seed_purchase_resolved() -> void:
@@ -3986,6 +4070,24 @@ func _append_player_message(text: String) -> void:
 	_render_chat_log()
 
 
+func _situational_repeat_fallback() -> String:
+	if _seed_purchase_abandoned:
+		return ""
+	if TaskSystem.is_busy() and TaskSystem.current_task == TaskSystem.TaskType.SHOP:
+		return "我正往商店走，到了再买。"
+	if _pending_seed_purchase and not _seed_purchase_resolved:
+		return "要买几包？说个数字就行。"
+	if _seed_purchase_resolved:
+		var seeds := GameState.get_item_count("turnip_seed")
+		if seeds > 0:
+			return "种子已经在篮子里了，现在有 %d 包。" % seeds
+	if IntentParser.looks_like_shop_purchase(_pending_chat_text):
+		return "好，我再去一趟商店。要买几包？"
+	if TaskSystem.is_busy():
+		return "还在忙手上这件，做完就去。"
+	return ""
+
+
 func _append_companion_message(text: String, ephemeral: bool = false, reply_contract: Dictionary = {}) -> void:
 	var raw := text.strip_edges()
 	var keep_line := _keep_spoken_line
@@ -3993,8 +4095,19 @@ func _append_companion_message(text: String, ephemeral: bool = false, reply_cont
 	if not _body_action_handled and not keep_line:
 		_maybe_sync_companion_move_from_line(raw)
 	var cleaned := ResponseValidator.sanitize_spoken_reply(raw)
-	if cleaned != "" and not keep_line and ResponseValidator.looks_repetitive_companion_line(cleaned):
-		if not SayDoValidator.should_skip_repetitive_fallback(_pending_chat_text):
+	if (
+		cleaned != ""
+		and not keep_line
+		and "几包" not in cleaned
+		and "说个数字" not in cleaned
+		and "告诉过我" not in cleaned
+		and "叫不出口" not in cleaned
+		and ResponseValidator.looks_repetitive_companion_line(cleaned)
+	):
+		var situational := _situational_repeat_fallback()
+		if situational != "":
+			cleaned = situational
+		elif not SayDoValidator.should_skip_repetitive_fallback(_pending_chat_text):
 			var previous := _recent_companion_line_texts(8)
 			cleaned = NpcFallback.pick_non_duplicate([
 				"嗯，我在。",

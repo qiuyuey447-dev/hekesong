@@ -99,6 +99,12 @@ func parse(text: String) -> Dictionary:
 		result["matched_terms"] = ["status_inquiry"]
 		return result
 
+	if looks_like_water_followthrough(trimmed):
+		result["intent"] = INTENT_WATER_ALL
+		result["confidence"] = 0.93
+		result["matched_terms"] = ["water_followthrough"]
+		return result
+
 	if looks_like_shop_purchase(trimmed):
 		result["intent"] = INTENT_OPEN_SHOP
 		result["confidence"] = 0.95
@@ -339,6 +345,8 @@ func looks_like_chore_question(text: String) -> bool:
 	if ("收的" in compact or "种的" in compact or "浇的" in compact or "买的" in compact) \
 			and _match_any(compact, ["是不是", "我是问", "吗", "么"]):
 		return true
+	if _match_any(compact, ["浇了没", "浇没浇", "浇了吗", "种了没", "收了没", "买了没"]):
+		return true
 	return false
 
 
@@ -395,6 +403,21 @@ func looks_like_missed_purchase(text: String) -> bool:
 		"咋没买", "怎么没买", "为什么没买", "为啥没买", "咋不买", "怎么不买",
 		"没去买", "为啥不买",
 	])
+
+
+func looks_like_water_followthrough(text: String) -> bool:
+	## 「种完记得浇 / 把水也浇了」：祈使在浇，前面的种完只是顺序。
+	if looks_like_stop_farm_chore(text) or looks_like_shop_purchase(text):
+		return false
+	var compact := _compact(_normalize(text))
+	if compact == "" or "浇" not in compact:
+		return false
+	for marker in ["把水也浇", "把水浇", "也浇了", "记得浇", "记得把水", "浇过去", "浇一遍"]:
+		if marker in compact:
+			return true
+	if "水" in compact and "浇" in compact and _match_any(compact, ["种完", "种好", "种了再", "收完", "买完"]):
+		return true
+	return false
 
 
 func looks_like_shop_purchase(text: String) -> bool:
@@ -934,6 +957,8 @@ func _score_water(normalized: String) -> Dictionary:
 		"浇个水": 8, "浇浇水": 8, "浇一浇": 8, "浇一遍水": 8,
 		"派你去浇": 10, "派你浇": 10, "叫你去浇": 10,
 		"田里浇水": 8, "农田浇水": 8, "萝卜田浇水": 9,
+		"浇了": 8, "把水也浇": 10, "把水浇": 9, "也浇了": 8,
+		"记得浇": 8, "浇过去": 8,
 	}
 	var scored := _score_with_terms(normalized, keywords)
 	if "浇" in normalized and not _looks_like_water_all(normalized):
