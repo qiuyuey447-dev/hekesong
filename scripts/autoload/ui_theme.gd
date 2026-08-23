@@ -15,6 +15,7 @@ const WEB_GLYPH_WARMUP := (
 	"去狸的岛继续新游戏退出确定取消开始这将删除当前存档从第一天重新开始"
 	+ "十日完整故事……（轻声对小狸说）发送知道了你是谁记性不好先睡吧"
 	+ "阿松小狸田边廊下树洞浇水萝卜约定记忆本子"
+	+ "这是小狸的本子这是你的本子她的本子我的本子记起的片段记忆与本子关闭"
 )
 
 const DEFAULT_FONT_SIZE := 16
@@ -186,7 +187,7 @@ func _warm_web_font_cache() -> void:
 	probe.visible = false
 	probe.add_theme_font_override("font", _font)
 	add_child(probe)
-	for size in [14, 16, 18, 19, 22, 24, 28, 42, 78]:
+	for size in [14, 15, 16, 18, 19, 20, 22, 24, 28, 38, 42, 78]:
 		probe.add_theme_font_size_override("font_size", size)
 		probe.text = WEB_GLYPH_WARMUP
 		probe.get_minimum_size()

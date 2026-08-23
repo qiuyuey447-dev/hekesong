@@ -24,11 +24,35 @@ func set_walk_bounds(rect: Rect2) -> void:
 	_walk_bounds = rect
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		velocity = Vector2.ZERO
+		if TouchControls.has_method("reset_stick"):
+			TouchControls.reset_stick()
+
+
 func _get_move_input() -> Vector2:
-	var keyboard := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	if keyboard.length_squared() > 0.0025:
+	## 只认「此刻还按着」的方向键。Input 动作在焦点被聊天框抢走时会卡住，人会自己走。
+	var keyboard := Vector2(
+		float(int(_move_key_down("move_right")) - int(_move_key_down("move_left"))),
+		float(int(_move_key_down("move_down")) - int(_move_key_down("move_up")))
+	)
+	if keyboard.length_squared() > 0.0:
 		return keyboard
 	return TouchControls.get_move_vector()
+
+
+func _move_key_down(action: StringName) -> bool:
+	for event in InputMap.action_get_events(action):
+		if not event is InputEventKey:
+			continue
+		var key := event as InputEventKey
+		var physical := key.physical_keycode
+		if physical != KEY_NONE and Input.is_physical_key_pressed(physical):
+			return true
+		if key.keycode != KEY_NONE and Input.is_key_pressed(key.keycode):
+			return true
+	return false
 
 
 func _ready() -> void:

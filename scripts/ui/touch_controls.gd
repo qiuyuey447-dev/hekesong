@@ -45,7 +45,14 @@ func _on_viewport_resized() -> void:
 func get_move_vector() -> Vector2:
 	if not _stick_active:
 		return Vector2.ZERO
+	if _pointer_id == 1000 and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_reset_joystick()
+		return Vector2.ZERO
 	return move_vector
+
+
+func reset_stick() -> void:
+	_reset_joystick()
 
 
 func _should_show() -> bool:
@@ -168,8 +175,13 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		_handle_screen_drag(event as InputEventScreenDrag)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		## 桌面鼠标点田是互动，不当摇杆。只有网页窄屏把触摸冒充成鼠标时才走这套。
+		if not OS.has_feature("web"):
+			return
 		_handle_mouse_button(event as InputEventMouseButton)
 	elif event is InputEventMouseMotion:
+		if not OS.has_feature("web"):
+			return
 		_handle_mouse_motion(event as InputEventMouseMotion)
 
 

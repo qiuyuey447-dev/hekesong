@@ -51,7 +51,7 @@ func _draw() -> void:
 	if not _hint_visible:
 		return
 	var text := "这是小狸的本子" if kind == Kind.COMPANION else "这是你的本子"
-	var font := ThemeDB.fallback_font
+	var font := _hint_font()
 	var size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE)
 	var pos := Vector2(-size.x * 0.5, BOOK_OFFSET.y - 28.0)
 	var outline := Color(0.1, 0.08, 0.06, 1.0)
@@ -61,6 +61,14 @@ func _draw() -> void:
 	]:
 		draw_string(font, pos + d, text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE, outline)
 	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE, Color(1.0, 0.96, 0.78))
+
+
+func _hint_font() -> Font:
+	if UIFontTheme != null:
+		var themed: Font = UIFontTheme.get_font()
+		if themed != null:
+			return themed
+	return ThemeDB.fallback_font
 
 
 func activate() -> void:
