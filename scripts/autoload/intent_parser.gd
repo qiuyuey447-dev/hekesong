@@ -1174,6 +1174,7 @@ func _score_market(normalized: String, lower: String) -> Dictionary:
 	var keywords := {
 		"卖掉": 12, "卖光": 12, "出售": 11, "都卖": 11, "全部卖": 12,
 		"卖萝卜": 11, "帮我卖": 11, "替我卖": 11, "代卖": 10,
+		"卖啊": 12, "卖吧": 12, "赶紧卖": 12, "去卖": 11, "快去卖": 12,
 		"大盘": 8, "看大盘": 8,
 	}
 	var scored := _score_with_terms(normalized, keywords)

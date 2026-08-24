@@ -118,6 +118,7 @@ func _run_ten_day_tests() -> void:
 	_test_stranger_blocks_name_and_promise()
 	_test_persona10_bugfix_batch()
 	_test_nine_bug_retest_and_daily_chat()
+	_test_sleep_not_stuck_all_days()
 	_test_time_pause_depth()
 	_test_advance_day_blocked_without_name()
 	_test_companion_offer_affirmative()
@@ -1891,6 +1892,102 @@ func _test_nine_bug_retest_and_daily_chat() -> void:
 	var d8_invite := StoryBeatDirector.try_invite()
 	_assert(str(d8_invite.get("beat_id", "")).ends_with("_N15"), "D8 night can still invite notebook")
 
+	# D9 夜里仍可开口前夜，信纸有页，看完才能睡
+	GameState.reset_for_new_game()
+	_ensure_player_named()
+	GameState.mark_w2_keep_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_HAPPY)
+	GameState.game_day = 9
+	GameState.time_of_day = GameState.TIME_NIGHT
+	StoryBeatDirector.refresh_daily_schedule()
+	_assert(StoryBeatDirector.get_today_beat_id().ends_with("_N20c"), "D9 calendar is N20c")
+	_assert(StoryBeatDirector.has_blocking_today_beat(), "D9 night still blocks on unseen N20c")
+	_assert(not StoryBeatDirector.has_pending_night_beat(), "D9 N20c is not a hollow night beat")
+	var d9_invite := StoryBeatDirector.try_invite()
+	_assert(str(d9_invite.get("beat_id", "")).ends_with("_N20c"), "D9 night can still invite 前夜")
+	var d9_beat := StoryBeatDirector.take_displayable_beat(StoryBeatDirector.build_beat(StoryBeatDirector.get_today_beat_id()))
+	_assert(not d9_beat.is_empty() and (d9_beat.get("steps", []) as Array).size() > 0, "D9 night letter still has pages")
+	_assert(GameState.can_advance_day(), "D9 is not a finale lock")
+	StoryBeatDirector.complete_beat(str(d9_beat.get("id", "")))
+	_assert(not StoryBeatDirector.has_blocking_today_beat(), "finishing D9 letter unblocks sleep")
+	# 夜里走完会 awaiting_sleep，overlay 提示因 N20c 未出现。看完信纸后应仍能手动睡
+	# （UI 不得因 awaiting_sleep && !prompt 把篮子睡觉吞掉）。
+	GameState._awaiting_sleep = true
+	_assert(GameState.can_manual_sleep(), "D9 after letter can still sleep while awaiting")
+	_assert(GameState.can_advance_day(), "D9 after letter can still advance while awaiting")
+
+
+func _test_sleep_not_stuck_all_days() -> void:
+	## 第 1–10 天夜里：没看完主线时信纸必须还能翻开；看完后 awaiting_sleep 仍能睡。
+	for day in range(1, 10):
+		for affection in _sleep_probe_affections_for_day(day):
+			_arm_keep_night(day, affection)
+			var label := "D%d aff=%d" % [day, affection]
+			var beat_id := StoryBeatDirector.get_today_beat_id()
+			var night_id := StoryBeatDirector.get_pending_night_beat_id()
+			var blocking := StoryBeatDirector.has_blocking_today_beat()
+			var hollow := StoryBeatDirector.has_unseen_weekend_night_beat()
+			if blocking:
+				_assert(beat_id != "", "%s blocking beat has id" % label)
+				var pages := StoryBeatDirector.take_displayable_beat(StoryBeatDirector.build_beat(beat_id))
+				_assert(
+					not pages.is_empty() and (pages.get("steps", []) as Array).size() > 0,
+					"%s night letter has pages so sleep can force-open" % label
+				)
+				StoryBeatDirector.complete_beat(beat_id)
+			elif night_id != "":
+				_assert(
+					StoryBeatDirector.can_trigger_night_beat_at_hollow(),
+					"%s night hollow beat is reachable at night" % label
+				)
+			_assert(not StoryBeatDirector.has_blocking_today_beat(), "%s complete/absent unblocks spine" % label)
+			if hollow:
+				_assert(
+					StoryBeatDirector.has_pending_night_beat() or StoryBeatDirector.is_beat_seen(night_id),
+					"%s hollow night is either pending or seen" % label
+				)
+			GameState._awaiting_sleep = true
+			_assert(GameState.can_manual_sleep(), "%s can sleep after letter" % label)
+			_assert(GameState.can_advance_day(), "%s can advance after letter" % label)
+	_arm_keep_night(10, 40)
+	_assert(StoryBeatDirector.get_today_beat_id() == "", "D10 has no calendar beat")
+	_assert(not StoryBeatDirector.has_blocking_today_beat(), "D10 does not block on calendar")
+	_assert(GameState.should_show_awakening() or GameState.must_finish_awakening_today(), "D10 sleep opens awakening")
+	_assert(not GameState.can_advance_day(), "D10 cannot skip awakening by sleeping")
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.mark_w2_expel_choice()
+	GameState.lock_story_route(StoryRouteData.ROUTE_BAD_EARLY)
+	GameState.game_day = 6
+	GameState.time_of_day = GameState.TIME_NIGHT
+	GameState._awaiting_sleep = true
+	StoryBeatDirector.refresh_daily_schedule()
+	_assert(StoryBeatDirector.get_today_beat_id() == "BE_N07", "expel D6 is BE_N07")
+	var expel := StoryBeatDirector.take_displayable_beat(StoryBeatDirector.build_beat("BE_N07"))
+	_assert(not expel.is_empty(), "expel D6 letter has pages")
+	_assert(not GameState.can_advance_day(), "expel D6 cannot sleep past short ending")
+
+
+func _sleep_probe_affections_for_day(day: int) -> Array[int]:
+	if day in [7, 8, 9]:
+		return [0, 40, 80]
+	return [40]
+
+
+func _arm_keep_night(day: int, affection: int) -> void:
+	GameState.reset_for_new_game()
+	GameState.set_player_display_name("阿松")
+	GameState.affection = affection
+	if day >= 5:
+		GameState.mark_w2_keep_choice()
+	if day >= 6:
+		GameState.lock_story_route(StoryRouteData.ROUTE_HAPPY)
+	GameState.game_day = day
+	GameState.time_of_day = GameState.TIME_NIGHT
+	GameState._awaiting_sleep = true
+	StoryBeatDirector.refresh_story_route()
+	StoryBeatDirector.refresh_daily_schedule()
+
 
 func _test_time_pause_depth() -> void:
 	GameState.reset_for_new_game()
@@ -3094,6 +3191,25 @@ func _test_chore_instruction_closure() -> void:
 	_assert(ChorePreprocessor.looks_like_player_correction("你为啥没卖萝卜"), "correction why-not-sell")
 	var corr := ChoreOrchestrator.handle_player_message("你为啥没卖萝卜")
 	_assert(bool(corr.get("handled", false)) and bool(corr.get("skip_llm", false)), "correction skips LLM")
+
+	# C3b 「要我帮你卖吗」+「卖啊」必须真下单，不能丢给闲聊
+	TaskSystem.cancel_task()
+	CompanionAgent.cancel_current_job()
+	PendingOfferStore.clear()
+	PendingOfferStore.arm_from_companion_line("还没卖呢。要我现在帮你卖吗？")
+	_assert(PendingOfferStore.get_type() == PendingOfferStore.OfferType.MARKET, "sell offer armed")
+	_assert(PendingOfferStore.is_confirmable_player("卖啊"), "卖啊 confirms sell offer")
+	_assert(ChorePreprocessor.looks_like_sell_all_command("卖啊"), "卖啊 is sell command")
+	GameState.add_item("turnip", 3)
+	var sell_confirm := ChoreOrchestrator.handle_player_message("卖啊")
+	_assert(bool(sell_confirm.get("handled", false)) and bool(sell_confirm.get("skip_llm", false)), "卖啊 skips LLM")
+	_assert(bool(sell_confirm.get("executed", false)), "卖啊 sells turnips")
+	_assert(GameState.get_item_count("turnip") == 0, "basket empty after 卖啊")
+	PendingOfferStore.clear()
+	GameState.add_item("turnip", 2)
+	var sell_hurry := ChoreOrchestrator.handle_player_message("你赶紧卖了")
+	_assert(bool(sell_hurry.get("handled", false)), "赶紧卖 handled")
+	_assert(GameState.get_item_count("turnip") == 0, "basket empty after 赶紧卖")
 
 	# C4 Say-Do validator
 	var implied := SayDoValidator.implied_steps_from_reply("好，我这就去浇。")

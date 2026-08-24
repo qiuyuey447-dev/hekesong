@@ -6,11 +6,13 @@ enum Kind { COMPANION, PLAYER }
 const INTERACT_RANGE := 72.0
 const BOOK_FRAME := Vector2(46, 32)
 const BOOK_OFFSET := Vector2(0, -14)
-const HINT_FONT_SIZE := 15
+const HINT_FONT_SIZE := 16
+const HINT_SIZE := Vector2(200, 28)
 
 @export var kind: Kind = Kind.COMPANION
 
 var _hover: InteractHover
+var _hint: Label
 var _hint_visible: bool = false
 var _near_check_age := 0.0
 const NEAR_CHECK_SEC := 0.08
@@ -20,6 +22,7 @@ func _ready() -> void:
 	add_to_group("interactable")
 	add_to_group("notebook_interact")
 	_build_collision()
+	_build_hint()
 	_hover = InteractHover.attach(
 		self,
 		BOOK_FRAME,
@@ -42,33 +45,30 @@ func _process(delta: float) -> void:
 	var show_hint := _is_player_near() and not _is_story_blocking()
 	if _hover != null:
 		_hover.set_focused(show_hint)
-	if show_hint != _hint_visible:
-		_hint_visible = show_hint
-		queue_redraw()
-
-
-func _draw() -> void:
-	if not _hint_visible:
+	if show_hint == _hint_visible:
 		return
-	var text := "这是小狸的本子" if kind == Kind.COMPANION else "这是你的本子"
-	var font := _hint_font()
-	var size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE)
-	var pos := Vector2(-size.x * 0.5, BOOK_OFFSET.y - 28.0)
-	var outline := Color(0.1, 0.08, 0.06, 1.0)
-	for d in [
-		Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1),
-		Vector2(0, -2), Vector2(0, 2), Vector2(-2, 0), Vector2(2, 0),
-	]:
-		draw_string(font, pos + d, text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE, outline)
-	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_FONT_SIZE, Color(1.0, 0.96, 0.78))
+	_hint_visible = show_hint
+	if _hint != null:
+		_hint.visible = show_hint
 
 
-func _hint_font() -> Font:
+func _build_hint() -> void:
+	_hint = Label.new()
+	_hint.name = "NotebookHint"
+	_hint.text = "这是小狸的本子" if kind == Kind.COMPANION else "这是你的本子"
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hint.add_theme_font_size_override("font_size", HINT_FONT_SIZE)
+	_hint.add_theme_color_override("font_color", Color(1.0, 0.96, 0.78))
+	_hint.add_theme_color_override("font_outline_color", Color(0.1, 0.08, 0.06))
+	_hint.add_theme_constant_override("outline_size", 5)
 	if UIFontTheme != null:
-		var themed: Font = UIFontTheme.get_font()
-		if themed != null:
-			return themed
-	return ThemeDB.fallback_font
+		UIFontTheme.apply_control(_hint)
+	_hint.size = HINT_SIZE
+	_hint.position = Vector2(-HINT_SIZE.x * 0.5, BOOK_OFFSET.y - 36.0)
+	_hint.visible = false
+	add_child(_hint)
 
 
 func activate() -> void:

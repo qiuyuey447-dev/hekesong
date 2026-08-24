@@ -830,6 +830,17 @@ func _on_sleep_prompt_requested() -> void:
 	_day_cycle_overlay.show_sleep_prompt()
 
 
+func _maybe_retry_sleep_prompt() -> void:
+	## 夜里到点时若被前夜信纸挡住，提示不会出现。看完信纸后再试一次。
+	if not GameState.is_awaiting_sleep():
+		return
+	if _sleep_flow_active:
+		return
+	if is_story_overlay_open():
+		return
+	_on_sleep_prompt_requested()
+
+
 func _enter_sleep_prompt_mode() -> void:
 	_chat_input.editable = false
 	_chat_send.disabled = true
@@ -856,8 +867,9 @@ func _on_sleep_now_pressed() -> void:
 func _start_sleep_flow() -> void:
 	if _sleep_flow_active or _day_cycle_overlay.is_busy():
 		return
-	if GameState.is_awaiting_sleep() and not _day_cycle_overlay.is_prompt_visible():
-		return
+	## 夜里走完会把 awaiting_sleep 拉起来，但当日主线没看完时 overlay 提示不会出现。
+	## 篮子「立马睡觉」必须走进 _can_begin_sleep：要么强开信纸，要么真的睡。
+	## 不要在这里因「等睡觉但没弹窗」直接 return，否则第九天点睡觉完全没反应。
 	if not _can_begin_sleep(true):
 		return
 	_finish_proactive_approach()
@@ -1257,6 +1269,9 @@ func _ensure_pending_invite_delivered() -> void:
 		return
 	if _invite_proactive_dispatched:
 		return
+	## D5 搭话不要插进「要我帮你卖吗」这种农事确认。
+	if _companion_line_is_live_farm_offer(_last_companion_chat_line()):
+		return
 	_deliver_pending_proactive_speech()
 
 
@@ -1540,6 +1555,7 @@ func _on_story_beat_finished(beat_id: String) -> void:
 	CompanionDirector.schedule_consider(0.9)
 	call_deferred("_maybe_trigger_persona_shift")
 	call_deferred("_maybe_resume_pending_eviction")
+	call_deferred("_maybe_retry_sleep_prompt")
 
 
 func _maybe_show_d5_notebook_trust_hint() -> void:
@@ -3992,6 +4008,7 @@ func _companion_line_is_live_farm_offer(text: String) -> bool:
 		or ShopDelegate.looks_like_plant_offer(line)
 		or ShopDelegate.looks_like_water_offer(line)
 		or ShopDelegate.looks_like_harvest_offer(line)
+		or ShopDelegate.looks_like_market_offer(line)
 		or ShopDelegate.looks_like_seed_quantity_prompt(line)
 	)
 

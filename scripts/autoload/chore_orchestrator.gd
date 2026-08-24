@@ -15,6 +15,7 @@ const OFFER_STEP_MAP := {
 	PendingOfferStore.OfferType.HARVEST: "harvest_all",
 	PendingOfferStore.OfferType.PLANT: "plant_all",
 	PendingOfferStore.OfferType.SHOP: "shop_buy_seeds",
+	PendingOfferStore.OfferType.MARKET: "sell_turnips",
 }
 
 

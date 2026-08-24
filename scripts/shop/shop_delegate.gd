@@ -300,6 +300,26 @@ static func looks_like_harvest_commitment(text: String) -> bool:
 	return false
 
 
+static func looks_like_market_offer(text: String) -> bool:
+	## 小狸在征求：要不要代卖筐里的萝卜。
+	var normalized := text.strip_edges()
+	if normalized.is_empty() or not ("卖" in normalized):
+		return false
+	if looks_like_shop_offer(normalized) or looks_like_plant_offer(normalized) or looks_like_water_offer(normalized):
+		return false
+	if not _looks_like_offer_question(normalized):
+		return false
+	return (
+		"帮你卖" in normalized
+		or "帮我卖" in normalized
+		or "去卖" in normalized
+		or "卖掉" in normalized
+		or "出售" in normalized
+		or ("要我" in normalized and "卖" in normalized)
+		or "现在帮你卖" in normalized
+	)
+
+
 static func looks_like_market_commitment(text: String) -> bool:
 	var normalized := text.strip_edges()
 	if normalized.is_empty():

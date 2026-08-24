@@ -37,11 +37,15 @@ func arm_from_companion_line(text: String) -> void:
 	var has_water := ShopDelegate.looks_like_water_offer(normalized)
 	if not has_water:
 		has_water = ShopDelegate.looks_like_water_commitment(normalized)
-	var has_harvest := (
+	var has_market := (
 		not has_shop and not has_plant and not has_water
+		and ShopDelegate.looks_like_market_offer(normalized)
+	)
+	var has_harvest := (
+		not has_shop and not has_plant and not has_water and not has_market
 		and ShopDelegate.looks_like_harvest_offer(normalized)
 	)
-	if not (has_shop or has_plant or has_water or has_harvest):
+	if not (has_shop or has_plant or has_water or has_market or has_harvest):
 		clear()
 		return
 	if has_shop:
@@ -50,6 +54,8 @@ func arm_from_companion_line(text: String) -> void:
 		_type = OfferType.PLANT
 	elif has_water:
 		_type = OfferType.WATER
+	elif has_market:
+		_type = OfferType.MARKET
 	else:
 		_type = OfferType.HARVEST
 	_source_line = normalized
@@ -91,6 +97,10 @@ func infer_from_recent_companion_verbs(lines: Array) -> bool:
 		_type = OfferType.PLANT
 		_source_line = line
 		return true
+	if "卖" in line:
+		_type = OfferType.MARKET
+		_source_line = line
+		return true
 	if "收" in line or "摘" in line:
 		_type = OfferType.HARVEST
 		_source_line = line
@@ -104,7 +114,16 @@ func is_confirmable_player(text: String) -> bool:
 		return false
 	if ShopDelegate.is_negative_reply(trimmed):
 		return has_any()
+	if _looks_like_sell_go(trimmed):
+		return _type == OfferType.MARKET or _type == OfferType.NONE
 	return ShopDelegate.is_affirmative_reply(trimmed) or _looks_like_direct_go(trimmed)
+
+
+func _looks_like_sell_go(text: String) -> bool:
+	var compact := text.strip_edges().replace(" ", "").replace("　", "")
+	if compact in ["卖", "卖啊", "卖呀", "卖吧", "去卖", "卖掉", "帮我卖"]:
+		return true
+	return "赶紧卖" in compact or "快去卖" in compact
 
 
 func _looks_like_direct_go(text: String) -> bool:

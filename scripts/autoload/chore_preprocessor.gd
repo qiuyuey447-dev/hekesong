@@ -116,6 +116,10 @@ func looks_like_sell_all_command(text: String) -> bool:
 		return false
 	if looks_like_sell_completion_statement(text):
 		return false
+	if compact in ["卖", "卖啊", "卖呀", "卖吧", "去卖", "卖掉", "帮我卖", "替我卖"]:
+		return true
+	if "赶紧卖" in compact or "快去卖" in compact:
+		return true
 	if _compact_has_any(compact, ["全卖", "都卖", "全部卖", "统统卖", "卖光", "卖完"]):
 		return not looks_like_sell_completion_statement(text)
 	if _compact_has_any(compact, ["全", "都", "所有", "统统", "全部"]) and compact.contains("卖"):
@@ -144,6 +148,7 @@ func looks_like_bare_farm_command(text: String) -> bool:
 		"种", "去种", "去种上",
 		"收", "去收", "去收萝卜",
 		"买种子", "去买种子",
+		"卖", "卖啊", "卖呀", "卖吧", "去卖", "卖掉",
 	]
 
 

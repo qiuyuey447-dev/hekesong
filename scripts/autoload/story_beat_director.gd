@@ -290,8 +290,8 @@ func _invite_time_ok(beat_id: String) -> bool:
 	if _is_night_beat(beat_id):
 		return tod in [GameState.TIME_EVENING, GameState.TIME_NIGHT]
 	if tod == GameState.TIME_NIGHT:
-		## D8 树洞本子：夜里仍须能开口，否则读完/漏看都睡不着。
-		return beat_id.ends_with("_N15")
+		## D8 树洞本子、D9 前夜：夜里仍须能开口，否则读完/漏看都睡不着。
+		return beat_id.ends_with("_N15") or beat_id.ends_with("_N20c")
 	## D3 约定：傍晚才开口。
 	if beat_id == "P_N11" or beat_id == "BE_N11":
 		return tod == GameState.TIME_EVENING
