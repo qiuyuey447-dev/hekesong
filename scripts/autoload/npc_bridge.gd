@@ -13,9 +13,6 @@ const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "sto
 ## 冷启动 / 久未打开后，首个请求常撞上窗口唤醒或网络未就绪；失败后自动再试一次。
 const API_RETRY_MAX := 1
 const API_RETRY_DELAY_SEC := 0.75
-## 久未开游戏时，第一个请求常撞上窗口唤醒/网络冷启动，失败一次后自动重试。
-const API_RETRY_MAX := 1
-const API_RETRY_DELAY_SEC := 0.75
 
 var _persona: Dictionary = {}
 var _config: Dictionary = {}
