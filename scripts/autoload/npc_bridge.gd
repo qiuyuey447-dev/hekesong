@@ -10,6 +10,12 @@ const CONFIG_USER_PATH := "user://npc_config.json"
 const PERSONA_PATH := "res://config/xiaoli_persona.json"
 const LLM_FAILURE_REPLY := "……我刚才没听清，你再说一遍好吗？"
 const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "story_beat", "story_step_render"]
+## 冷启动 / 久未打开后，首个请求常撞上窗口唤醒或网络未就绪；失败后自动再试一次。
+const API_RETRY_MAX := 1
+const API_RETRY_DELAY_SEC := 0.75
+## 久未开游戏时，第一个请求常撞上窗口唤醒/网络冷启动，失败一次后自动重试。
+const API_RETRY_MAX := 1
+const API_RETRY_DELAY_SEC := 0.75
 
 var _persona: Dictionary = {}
 var _config: Dictionary = {}
@@ -160,6 +166,15 @@ func _pump_api_queue() -> void:
 		pending_entry.erase("http_node")
 		var event_name := str(pending_entry.get("event", ""))
 		var start_extra: Dictionary = pending_entry.get("extra", {})
+		var start_retries := int(pending_entry.get("retry_count", 0))
+		if is_api_enabled() and start_retries < API_RETRY_MAX:
+			pending_entry["retry_count"] = start_retries + 1
+			push_warning(
+				"NpcBridge: HTTP 启动失败 (%d)，%.2fs 后重试 (%d/%d) request=%d event=%s"
+				% [err, API_RETRY_DELAY_SEC, start_retries + 1, API_RETRY_MAX, request_id, event_name]
+			)
+			_schedule_api_retry(request_id)
+			return
 		if is_api_enabled():
 			_emit_llm_failure(request_id, event_name, "HTTP 请求启动失败: %d" % err, start_extra)
 		else:
@@ -530,6 +545,34 @@ func _rule_chat_digest_fallback(chat_log: Array) -> String:
 	]
 
 
+func _is_retriable_http_failure(result: int, response_code: int) -> bool:
+	if result != HTTPRequest.RESULT_SUCCESS:
+		return true
+	if response_code == 0 or response_code == 408 or response_code == 429:
+		return true
+	if response_code >= 500 and response_code <= 599:
+		return true
+	return false
+
+
+func _schedule_api_retry(request_id: int) -> void:
+	## 保持同一 request_id，短延迟后再入队（应对久未启动后的首包失败）。
+	_retry_api_after_delay(request_id)
+
+
+func _retry_api_after_delay(request_id: int) -> void:
+	await get_tree().create_timer(API_RETRY_DELAY_SEC).timeout
+	if not _pending.has(request_id):
+		call_deferred("_pump_api_queue")
+		return
+	for item in _api_queue:
+		if int(item.get("request_id", -1)) == request_id:
+			call_deferred("_pump_api_queue")
+			return
+	_api_queue.push_front({"request_id": request_id})
+	call_deferred("_pump_api_queue")
+
+
 func _on_http_completed(
 	request_id: int,
 	http: HTTPRequest,
@@ -553,13 +596,24 @@ func _on_http_completed(
 	var pending_entry: Dictionary = _pending[request_id]
 	var event: String = pending_entry.get("event", "")
 	var extra: Dictionary = pending_entry.get("extra", {})
-	_pending.erase(request_id)
+	pending_entry.erase("http_node")
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
 		var err_msg := "API 响应异常 (code=%d, result=%d)" % [response_code, result]
+		var retries := int(pending_entry.get("retry_count", 0))
+		if _is_retriable_http_failure(result, response_code) and retries < API_RETRY_MAX:
+			pending_entry["retry_count"] = retries + 1
+			push_warning(
+				"NpcBridge: %s，%.2fs 后重试 (%d/%d) request=%d event=%s"
+				% [err_msg, API_RETRY_DELAY_SEC, retries + 1, API_RETRY_MAX, request_id, event]
+			)
+			_schedule_api_retry(request_id)
+			return
 		_emit_llm_failure(request_id, event, err_msg, extra)
 		call_deferred("_pump_api_queue")
 		return
+
+	_pending.erase(request_id)
 
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
 	var player_message := str(extra.get("player_message", ""))
