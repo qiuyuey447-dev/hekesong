@@ -10,9 +10,10 @@ const CONFIG_USER_PATH := "user://npc_config.json"
 const PERSONA_PATH := "res://config/xiaoli_persona.json"
 const LLM_FAILURE_REPLY := "……我刚才没听清，你再说一遍好吗？"
 const SILENT_FAILURE_EVENTS := ["day_journal_summarize", "companion_react", "story_beat", "story_step_render"]
-## 冷启动 / 久未打开后，首个请求常撞上窗口唤醒或网络未就绪；失败后自动再试一次。
-const API_RETRY_MAX := 1
-const API_RETRY_DELAY_SEC := 0.75
+## 冷启动 / 久未打开后，首个请求常撞上窗口唤醒或网络未就绪；失败后自动再试。
+## 实测云托管从 0 实例拉起需 6~9 秒：重试延迟 3 秒、最多 2 次，覆盖冷启动窗口。
+const API_RETRY_MAX := 2
+const API_RETRY_DELAY_SEC := 3.0
 
 var _persona: Dictionary = {}
 var _config: Dictionary = {}
@@ -32,6 +33,30 @@ var last_rejected_reply := ""
 func _ready() -> void:
 	_load_persona()
 	_load_config()
+	_warmup_api()
+
+
+## 启动预热：游戏打开约 1 秒后，对后端发一个轻量 GET。
+## 目的是提前把缩容到 0 的云托管实例拉起（冷启动约 6~9 秒），
+## 把等待藏进游戏加载/开场里，玩家真正开始聊天时服务已是热的。
+## 响应内容不关心（404/405 都算成功，实例醒了就行）。
+func _warmup_api() -> void:
+	await get_tree().create_timer(1.0).timeout
+	if not is_api_enabled():
+		return
+	var url := str(_config.get("api_url", "")).strip_edges()
+	if url == "":
+		return
+	var http := HTTPRequest.new()
+	http.timeout = 15.0
+	add_child(http)
+	http.request_completed.connect(
+		func(_result: int, _code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+			if is_instance_valid(http):
+				http.queue_free()
+		, CONNECT_ONE_SHOT
+	)
+	http.request(url)
 
 
 func is_api_enabled() -> bool:
